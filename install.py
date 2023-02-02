@@ -26,6 +26,9 @@ export PATH=""" + str(python_path) + """:$PATH
 # Set install path.
 export IFP_INSTALL_PATH=""" + str(CWD) + """
 
+# Set LD_LIBRARY_PATH.
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH
+
 # Execute ifp.py.
 python3 $IFP_INSTALL_PATH/""" + str(python_script) + """ $@
 """)

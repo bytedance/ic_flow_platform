@@ -1035,19 +1035,20 @@ class MainWindow2(QMainWindow):
                 self.setup_model.setItem(row, 0, item)
 
                 value = ''
-
                 if category in self.detailed_setting.keys():
                     if key in self.detailed_setting[category].keys():
-                        value = self.detailed_setting[category][key]
-                        item = QStandardItem(value)
-                        item.setBackground(QBrush(QColor(100, 149, 237)))
+                        if not self.detailed_setting[category][key] == {}:
+                            value = self.detailed_setting[category][key]
+                            item = QStandardItem(value)
+                            item.setBackground(QBrush(QColor(100, 149, 237)))
 
                 if value == '':
                     if category in self.default_setting.keys():
                         if key in self.default_setting[category].keys():
-                            value = self.default_setting[category][key]
-                            item = QStandardItem(value)
-                            item.setBackground(QBrush(QColor(255, 255, 255)))
+                            if not self.default_setting[category][key] == {}:
+                                value = self.default_setting[category][key]
+                                item = QStandardItem(value)
+                                item.setBackground(QBrush(QColor(255, 255, 255)))
 
                 if value == '':
                     item = QStandardItem(value)

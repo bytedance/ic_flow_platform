@@ -341,12 +341,11 @@ class IfpRun(IfpCommon):
                     if (pre_task_obj.get('Status') == 'RUN PASS') or self.ignore_fail:
                         self.run_one_task(block, version, flow, vendor, branch, task)
 
-                    if (pre_task_obj.get('Status') in ['RUN FAILED', 'Killed', 'Killing', 'Cancelled']) and (not self.ignore_fail):
+                    if (pre_task_obj.get('Status') in ['RUN FAIL', 'Killed', 'Killing', 'Cancelled']) and (not self.ignore_fail):
                         self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Cancelled')
                         self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Cancelled'
                 else:
                     self.run_one_task(block, version, flow, vendor, branch, task)
-
         elif run_type == 'parallel':
             thread_list = []
 

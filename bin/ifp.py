@@ -32,7 +32,7 @@ import config
 os.environ['PYTHONUNBUFFERED'] = '1'
 CWD = os.getcwd()
 USER = getpass.getuser()
-IFP_VERSION = 'V1.0 (2023.2.1)'
+IFP_VERSION = 'V1.0 (2023.2.7)'
 
 
 #### Process input arguments (start) ####
@@ -417,7 +417,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     def load_status_file(self, status_file=''):
         if not status_file:
-            (status_file, file_type) = QFileDialog.getOpenFileName(self, 'Load status file', '.', 'YAML (*.yaml)')
+            (status_file, file_type) = QFileDialog.getOpenFileName(self, 'Load status file', '.', '*')
 
         if status_file:
             self.update_message_text('Load status with file "' + str(status_file) + '".')
@@ -440,7 +440,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     def load_config_file(self, config_file=''):
         if not config_file:
-            (config_file, file_type) = QFileDialog.getOpenFileName(self, 'Load config file', '.', 'YAML (*.yaml)')
+            (config_file, file_type) = QFileDialog.getOpenFileName(self, 'Load config file', '.', '*')
 
         if config_file:
             self.update_message_text('Load config file "' + str(config_file) + '".')

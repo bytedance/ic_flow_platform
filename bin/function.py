@@ -7,13 +7,15 @@
 ################################
 import os
 import sys
-import threading
+import time
 import datetime
+import threading
 from PyQt5.QtCore import QThread, pyqtSignal
 from collections import defaultdict
 
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 import common
+import common_lsf
 
 
 def set_command_env(block='', version='', flow='', vendor='', branch='', task=''):
@@ -267,14 +269,14 @@ class IfpRun(IfpCommon):
             else:
                 common.print_error('*Error*: Run path "' + str(run_action['PATH']) + '" is missing.')
 
-            job_id = None
+            jobid = None
 
             if run_method == 'local':
                 if self.xterm_mode:
                     command = 'xterm -e ' + str(command)
 
                 process = common.spawn_process(command)
-                job_id = 'l:{}'.format(process.pid)
+                jobid = 'l:{}'.format(process.pid)
             else:
                 command = str(run_method) + ' "' + str(command) + '"'
 
@@ -283,27 +285,38 @@ class IfpRun(IfpCommon):
 
                 process = common.spawn_process(command)
                 stdout = process.stdout.readline()
-                job_id = 'b:{}'.format(common.get_jobid(stdout))
+                jobid = 'b:{}'.format(common.get_jobid(stdout))
 
-            self.set_one_jobid_signal.emit(block, version, flow, vendor, branch, task, 'Job', str(job_id))
+            self.set_one_jobid_signal.emit(block, version, flow, vendor, branch, task, 'Job', str(jobid))
             stdout, stderr = process.communicate()
             return_code = process.returncode
 
             finish_time = datetime.datetime.now()
             last_status = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].get('Status', None)
 
-            if return_code == 0:
-                result = 'RUN PASS'
-            else:
-                result = 'RUN FAIL'
+            if last_status == 'Killing':
+                if str(jobid).startswith('b'):
+                    jobid = str(jobid)[2:]
 
-                self.print_output(block, version, flow, vendor, branch, task, stdout + stderr)
+                while True:
+                    time.sleep(3)
+                    bjobs_dic = common_lsf.get_bjobs_info('bjobs ' + str(jobid))
 
-            if last_status == 'Killed':
-                result = last_status
+                    if ('STAT' in bjobs_dic.keys()) and bjobs_dic['STAT'] and (bjobs_dic['STAT'][0] == 'EXIT'):
+                        result = 'Killed'
+                        self.msg_signal.emit('*Info*: job killed for {} {} {} {} {} {}\n'.format(block, version, flow, vendor, branch, task))
+                        break
+            elif last_status == 'Killed':
+                result = 'Killed'
                 self.msg_signal.emit('*Info*: job killed for {} {} {} {} {} {}\n'.format(block, version, flow, vendor, branch, task))
             else:
-                self.msg_signal.emit('*Info*: job done for {} {} {} {} {} {}\n'.format(block, version, flow, vendor, branch, task))
+                if return_code == 0:
+                    result = 'RUN PASS'
+                else:
+                    result = 'RUN FAIL'
+
+                    self.print_output(block, version, flow, vendor, branch, task, stdout + stderr)
+                    self.msg_signal.emit('*Info*: job done for {} {} {} {} {} {}\n'.format(block, version, flow, vendor, branch, task))
         else:
             finish_time = datetime.datetime.now()
             result = 'RUN undefined'
@@ -401,12 +414,10 @@ class IfpKill(IfpCommon):
 
         if str(jobid).startswith('b'):
             jobid = str(jobid)[2:]
-            kill_bjob = 'bkill {}'.format(jobid)
-            (return_code, stdout, stderr) = common.run_command(kill_bjob)
+            (return_code, stdout, stderr) = common.run_command('bkill ' + str(jobid))
 
-            if not return_code:
-                self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Killed'
-                self.finish_one_signal.emit(block, version, flow, vendor, branch, task, 'Killed')
+            if return_code:
+                self.msg_signal.emit('Failed on killing job "' + str(jobid) + '"')
         elif str(jobid).startswith('l'):
             jobid = str(jobid)[2:]
             kill_process = 'kill -9 {}'.format(jobid)

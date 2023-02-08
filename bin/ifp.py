@@ -32,7 +32,7 @@ import config
 os.environ['PYTHONUNBUFFERED'] = '1'
 CWD = os.getcwd()
 USER = getpass.getuser()
-IFP_VERSION = 'V1.0 (2023.2.7)'
+IFP_VERSION = 'V1.0 (2023.2.8)'
 
 
 #### Process input arguments (start) ####

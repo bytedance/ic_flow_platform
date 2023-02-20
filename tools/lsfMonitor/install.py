@@ -38,6 +38,10 @@ def gen_shell_tools():
 
     for tool_name in tool_list:
         tool = str(CWD) + '/' + str(tool_name)
+        ld_library_path_setting = ''
+
+        if 'LD_LIBRARY_PATH' in os.environ:
+            ld_library_path_setting = 'export LD_LIBRARY_PATH=' + str(os.environ['LD_LIBRARY_PATH'])
 
         print('')
         print('>>> Generate script "' + str(tool) + '".')
@@ -53,7 +57,7 @@ export PATH=""" + str(PYTHON_PATH) + """:$PATH
 export LSFMONITOR_INSTALL_PATH=""" + str(CWD) + """
 
 # Set LD_LIBRARY_PATH.
-export LD_LIBRARY_PATH=$LSFMONITOR_INSTALL_PATH/lib:""" + str(os.environ['LD_LIBRARY_PATH']) + """
+""" + str(ld_library_path_setting) + """
 
 # Execute """ + str(tool_name) + """.py.
 python3 $LSFMONITOR_INSTALL_PATH/""" + str(tool_name) + '.py $@')

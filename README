@@ -1,4 +1,4 @@
-Version 1.0 (2023.2.8)
+Version 1.0 (2023.2.17)
 
 
 0. What is IFP?
@@ -10,7 +10,7 @@ flow platform, mainly used for IC process specification
 
 1. Python dependency
 ========
-Need python3.8, Anaconda3-2021.05-Linux-x86_64.sh is better.
+Need python3.8.8, Anaconda3-2021.05-Linux-x86_64.sh is better.
 Install python library dependency with command
 
     pip install -r requirements.txt
@@ -36,3 +36,6 @@ Execute below command under install directory.
 Step 1, Come into flow directory.
 Step 2, Create and edit IFP config file.
 Step 3, Run "ifp" with GUI mode.
+
+
+More details please see "docs/IFP_user_manual.pdf".

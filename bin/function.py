@@ -61,7 +61,7 @@ class IfpCommon(QThread):
             for line in str(output, 'utf-8').split('\n'):
                 if line:
                     self.debug_print(line)
-        except:
+        except Exception:
             pass
 
         self.debug_print('----------------')
@@ -151,9 +151,10 @@ class IfpRun(IfpCommon):
     set_one_jobid_signal = pyqtSignal(str, str, str, str, str, str, str, str)
     set_run_time_signal = pyqtSignal(str, str, str, str, str, str, str, str)
 
-    def __init__(self, task_list, config_dic, debug=False, ignore_fail=False, xterm_mode=False):
+    def __init__(self, task_list, config_dic, action='RUN', debug=False, ignore_fail=False, xterm_mode=False):
         super().__init__(task_list, config_dic, debug)
 
+        self.action = action
         self.ignore_fail = ignore_fail
         self.xterm_mode = xterm_mode
         self.block_version_to_run = list({(x.Block, x.Version): 1 for x in task_list}.keys())
@@ -197,25 +198,29 @@ class IfpRun(IfpCommon):
                     pre_flow_tasks = list(filter(lambda x: x.Flow == pre_flow, tasks))
                     pre_flows_bundle_tasks.extend(pre_flow_tasks)
 
-                if list(filter(lambda x: x.Status == 'Cancelled' or x.Status == 'Killed', pre_flows_bundle_tasks)):
+                # Cancel next task if pre task is "Cancelled" or "Killed".
+                if list(filter(lambda x: x.Status == 'Cancelled' or x.Status == 'Killed', pre_flows_bundle_tasks)) and not self.ignore_fail:
                     for flow in flow_bundle.split('|'):
                         flow_tasks = list(filter(lambda x: x.Flow == flow, tasks))
 
                         for t in flow_tasks:
                             self.start_one_signal.emit(t.Block, t.Version, t.Flow, t.Vendor, t.Branch, t.Task, 'Cancelled')
-                else:
-                    flow_process = []
 
-                    for flow in flow_bundle.split('|'):
-                        flow_tasks = list(filter(lambda x: x.Flow == flow, tasks))
+                    continue
 
-                        if flow_tasks:
-                            p = threading.Thread(target=self.run_flow, args=(flow_tasks,))
-                            p.start()
-                            flow_process.append(p)
+                # Run all tasks.
+                flow_process = []
 
-                    for p in flow_process:
-                        p.join()
+                for flow in flow_bundle.split('|'):
+                    flow_tasks = list(filter(lambda x: x.Flow == flow, tasks))
+
+                    if flow_tasks:
+                        p = threading.Thread(target=self.run_flow, args=(flow_tasks,))
+                        p.start()
+                        flow_process.append(p)
+
+                for p in flow_process:
+                    p.join()
 
     def run_flow(self, tasks):
         groups = []
@@ -243,7 +248,7 @@ class IfpRun(IfpCommon):
         set_command_env(block, version, flow, vendor, branch, task)
 
         # Run run_command under branch directory.
-        run_action = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task]['ACTION'].get('RUN', None)
+        run_action = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task]['ACTION'].get(self.action, None)
         result = ''
         start_time = datetime.datetime.now()
 
@@ -261,7 +266,7 @@ class IfpRun(IfpCommon):
                                                                                                    vendor,
                                                                                                    branch,
                                                                                                    task))
-
+            # Set command
             command = run_action['COMMAND']
 
             if ('PATH' in run_action) and (run_action['PATH']) and (os.path.exists(run_action['PATH'])):
@@ -269,20 +274,23 @@ class IfpRun(IfpCommon):
             else:
                 common.print_error('*Error*: Run path "' + str(run_action['PATH']) + '" is missing.')
 
-            jobid = None
-
             if run_method == 'local':
                 if self.xterm_mode:
                     command = 'xterm -e ' + str(command)
-
-                process = common.spawn_process(command)
-                jobid = 'l:{}'.format(process.pid)
             else:
                 command = str(run_method) + ' "' + str(command) + '"'
 
                 if self.xterm_mode:
                     command = 'xterm -e ' + str(command)
+                    run_method = 'local'
 
+            # Run command
+            jobid = None
+
+            if run_method == 'local':
+                process = common.spawn_process(command)
+                jobid = 'l:{}'.format(process.pid)
+            else:
                 process = common.spawn_process(command)
                 stdout = process.stdout.readline()
                 jobid = 'b:{}'.format(common.get_jobid(stdout))
@@ -311,15 +319,15 @@ class IfpRun(IfpCommon):
                 self.msg_signal.emit('*Info*: job killed for {} {} {} {} {} {}\n'.format(block, version, flow, vendor, branch, task))
             else:
                 if return_code == 0:
-                    result = 'RUN PASS'
+                    result = str(self.action) + ' PASS'
                 else:
-                    result = 'RUN FAIL'
+                    result = str(self.action) + ' FAIL'
 
                     self.print_output(block, version, flow, vendor, branch, task, stdout + stderr)
                     self.msg_signal.emit('*Info*: job done for {} {} {} {} {} {}\n'.format(block, version, flow, vendor, branch, task))
         else:
             finish_time = datetime.datetime.now()
-            result = 'RUN undefined'
+            result = str(self.action) + ' undefined'
 
         runtime = str(finish_time - start_time).split('.')[0]
         self.set_run_time_signal.emit(block, version, flow, vendor, branch, task, 'Runtime', runtime)
@@ -351,10 +359,10 @@ class IfpRun(IfpCommon):
                     pre_block, pre_version, pre_flow, pre_vendor, pre_branch, pre_task = tasks[i-1]
                     pre_task_obj = self.config_dic['BLOCK'][pre_block][pre_version][pre_flow][pre_vendor][pre_branch][pre_task]
 
-                    if (pre_task_obj.get('Status') == 'RUN PASS') or self.ignore_fail:
+                    if (pre_task_obj.get('Status') == str(self.action) + ' PASS') or self.ignore_fail:
                         self.run_one_task(block, version, flow, vendor, branch, task)
 
-                    if (pre_task_obj.get('Status') in ['RUN FAIL', 'Killed', 'Killing', 'Cancelled']) and (not self.ignore_fail):
+                    if (pre_task_obj.get('Status') in [str(self.action) + ' FAIL', 'Killed', 'Killing', 'Cancelled']) and (not self.ignore_fail):
                         self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Cancelled')
                         self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Cancelled'
                 else:
@@ -378,7 +386,10 @@ class IfpRun(IfpCommon):
             self.set_run_time_signal.emit(task.Block, task.Version, task.Flow, task.Vendor, task.Branch, task.Task, 'Runtime', None)
 
     def run(self):
-        self.msg_signal.emit('>>> Running tasks ...')
+        if self.action == 'RUN':
+            self.msg_signal.emit('>>> Running tasks ...')
+        elif self.action == 'POST_RUN':
+            self.msg_signal.emit('>>> Post_Running tasks ...')
 
         self.set_all_tasks_status_queued()
         self.run_block_version()
@@ -621,68 +632,6 @@ class IfpSummaryView(IfpCommon):
 
         for thread in thread_list:
             thread.join()
-
-
-class IfpPostRun(IfpCommon):
-    """
-    Some task may have post-run requirement, this class will execute specified command after run.
-    """
-    start_one_signal = pyqtSignal(str, str, str, str, str, str, str)
-    finish_one_signal = pyqtSignal(str, str, str, str, str, str, str)
-    finish_signal = pyqtSignal()
-    msg_signal = pyqtSignal(str)
-
-    def __init__(self, task_list, config_dic, debug=False):
-        super().__init__(task_list, config_dic, debug)
-
-    def post_run_one_task(self, block, version, flow, vendor, branch, task):
-        # check_command can read and use these information.
-        set_command_env(block, version, flow, vendor, branch, task)
-
-        # Run check_command under branch directory.
-        postrun_action = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task]['ACTION'].get('POST_RUN', None)
-
-        if postrun_action and postrun_action.get('COMMAND'):
-            # Tell GUI the task check start.
-            self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'PostRunning')
-
-            command = postrun_action.get('COMMAND')
-
-            if ('PATH' in postrun_action) and (postrun_action['PATH']) and (os.path.exists(postrun_action['PATH'])):
-                command = 'cd ' + str(postrun_action['PATH']) + '; ' + str(command)
-            else:
-                common.print_error('*Error*: Post_run path "' + str(postrun_action['PATH']) + '" is missing.')
-
-            (return_code, stdout, stderr) = common.run_command(command)
-
-            if return_code == 0:
-                result = 'POSTRUN PASS'
-            else:
-                result = 'POSTRUN FAIL'
-
-                self.print_output(block, version, flow, vendor, branch, task, stdout + stderr)
-        else:
-            result = 'POSTRUN undefined'
-
-        # Tell GUI the check post_run result.
-        self.finish_one_signal.emit(block, version, flow, vendor, branch, task, result)
-
-    def run(self):
-        self.msg_signal.emit('>>> PostRunning tasks...')
-
-        thread_list = []
-
-        for task in self.task_list:
-            thread = threading.Thread(target=self.post_run_one_task, args=(task.Block, task.Version, task.Flow, task.Vendor, task.Branch, task.Task))
-            thread_list.append(thread)
-            thread.start()
-
-        for thread in thread_list:
-            thread.join()
-
-        self.msg_signal.emit('>>> PostRun Done')
-        # Tell GUI check done.
-        self.finish_signal.emit()
 
 
 class IfpRelease(IfpCommon):

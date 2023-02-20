@@ -12,8 +12,6 @@ import yaml
 import pickle
 import copy
 from string import Template
-from threading import Lock
-from PyQt5.QtCore import pyqtSignal
 
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 import common
@@ -81,19 +79,22 @@ class Config:
             with open(config_file, 'r') as fh:
                 config_dic = yaml.load(fh, Loader=yaml.FullLoader)
 
-            if config_dic and (kind == 'user'):
-                if ('PROJECT' not in config_dic) or (not config_dic['PROJECT']):
-                    common.print_error('*Error*: failed to get PROJECT name from file {}.'.format(config_file))
-                    sys.exit(1)
+            if not config_dic:
+                config_dic = {}
+            else:
+                if kind == 'user':
+                    if ('PROJECT' not in config_dic) or (not config_dic['PROJECT']):
+                        common.print_error('*Error*: failed to get PROJECT name from file {}.'.format(config_file))
+                        sys.exit(1)
 
-                if ('VAR' not in config_dic) or (not config_dic['VAR']):
-                    config_dic['VAR'] = {}
+                    if ('VAR' not in config_dic) or (not config_dic['VAR']):
+                        config_dic['VAR'] = {}
 
-                if ('BLOCK' not in config_dic) or (not config_dic['BLOCK']):
-                    common.print_error('*Error*: failed to get BLOCK setting from file {}.'.format(config_file))
-                    sys.exit(1)
+                    if ('BLOCK' not in config_dic) or (not config_dic['BLOCK']):
+                        common.print_error('*Error*: failed to get BLOCK setting from file {}.'.format(config_file))
+                        sys.exit(1)
 
-        return(config_dic)
+        return (config_dic)
 
     def expand_var(self, setting_str, **kwargs):
         """
@@ -112,7 +113,7 @@ class Config:
                 except Exception as warning:
                     common.print_warning('*Warning*: Failed on expanding variable for "' + str(setting_str) + '" : ' + str(warning))
 
-        return(setting_str)
+        return (setting_str)
 
     def get_config_obj(self, config_file):
         # self.PROJECT saves project information from user config file.
@@ -241,7 +242,7 @@ class Config:
                                                                 for action in task_obj.ACTION.keys():
                                                                     # Set default action.
                                                                     if action not in task_obj.ACTION:
-                                                                        task_boj.ACTION.setdefault(action, {})
+                                                                        task_obj.ACTION.setdefault(action, {})
 
                                                                     # Set default 'PATH' to CWD for all task actions.
                                                                     if ('PATH' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['PATH']):
@@ -364,12 +365,6 @@ class Config:
 
         return task_obj
 
-    def dump_task_info(self):
-        info_list = self.main_table_info_list
-
-        with open('ifp.session', 'wb') as fh:
-            pickle.dump(self.__item_list, fh)
-
     def restore_task_info(self, session_file):
         with open(session_file, 'rb') as fh:
             restored_item_list = pickle.load(fh)
@@ -477,7 +472,7 @@ class IfpItem:
     def get(self, key, default=None):
         try:
             return self.__getitem__(key)
-        except:
+        except Exception:
             return default
 
     def __setitem__(self, key, val):
@@ -590,13 +585,13 @@ class Task(Common):
     def get(self, key, default=None):
         try:
             return self.__getitem__(key)
-        except:
+        except Exception:
             return default
 
     def __getitem__(self, key):
         try:
             return self.__dict__[key]
-        except:
+        except Exception:
             raise KeyError(key)
 
     def __setitem__(self, key, val):
@@ -637,7 +632,7 @@ def get_parentheses_setting(setting_str):
                     val = False
 
                 setting[key] = val
-        except:
+        except Exception:
             common.print_error('*Error*: wrong setting as {}'.format(setting_str))
             sys.exit(1)
 

@@ -48,7 +48,7 @@ def read_args():
             print('*Error*: Failed on removing old report "' + str(args.report) + '": ' + str(error))
             sys.exit(1)
 
-    return(args.config_file, args.report)
+    return (args.config_file, args.report)
 
 
 class GenChecklistSummary():
@@ -84,7 +84,7 @@ class GenChecklistSummary():
                                     task_checklist_dic[flow][vendor][block][str(version)+'_'+str(branch)].setdefault(task, collections.OrderedDict())
                                     task_checklist_dic[flow][vendor][block][str(version)+'_'+str(branch)][task] = task_checklist_result_dic
 
-        return(task_checklist_dic)
+        return (task_checklist_dic)
 
     def get_task_checklist_result(self, task_path):
         task_checklist_result_dic = collections.OrderedDict()
@@ -104,8 +104,8 @@ class GenChecklistSummary():
             else:
                 with open(file_check_report, 'r') as FCR:
                     for line in FCR.readlines():
-                        if re.match('^\s*(\w+?)\s*:\s*(.+?)\s*(\(details please see (.+?)\))?\s*$', line):
-                            my_match = re.match('^\s*(\w+?)\s*:\s*(.+?)\s*(\(details please see (.+?)\))?\s*$', line)
+                        if re.match(r'^\s*(\w+?)\s*:\s*(.+?)\s*(\(details please see (.+?)\))?\s*$', line):
+                            my_match = re.match(r'^\s*(\w+?)\s*:\s*(.+?)\s*(\(details please see (.+?)\))?\s*$', line)
                             result = my_match.group(1)
                             description = my_match.group(2)
                             review_file = my_match.group(4)
@@ -113,7 +113,7 @@ class GenChecklistSummary():
                             task_checklist_result_dic[description]['result'] = result
                             task_checklist_result_dic[description]['review_file'] = review_file
 
-        return(task_checklist_result_dic)
+        return (task_checklist_result_dic)
 
     def write_excel(self, task_checklist_dic):
         workbook = xlwt.Workbook(encoding='utf-8')
@@ -276,7 +276,7 @@ class GenChecklistSummary():
                         for description in task_checklist_dic[block][version][task].keys():
                             task_checklist_description_dic[task].append(description)
 
-        return(block_version_dic, task_list, task_checklist_description_dic)
+        return (block_version_dic, task_list, task_checklist_description_dic)
 
     def gen_checklist_summary(self):
         task_checklist_dic = self.get_task_checklist_dic()

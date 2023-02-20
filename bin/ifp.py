@@ -3,6 +3,7 @@
 import os
 import re
 import sys
+import stat
 import shutil
 import argparse
 import datetime
@@ -32,10 +33,20 @@ import config
 os.environ['PYTHONUNBUFFERED'] = '1'
 CWD = os.getcwd()
 USER = getpass.getuser()
-IFP_VERSION = 'V1.0 (2023.2.8)'
+IFP_VERSION = 'V1.0 (2023.2.17)'
+
+# Solve some unexpected warning message.
+if 'XDG_RUNTIME_DIR' not in os.environ:
+    user = getpass.getuser()
+    os.environ['XDG_RUNTIME_DIR'] = '/tmp/runtime-' + str(user)
+
+    if not os.path.exists(os.environ['XDG_RUNTIME_DIR']):
+        os.makedirs(os.environ['XDG_RUNTIME_DIR'])
+
+    os.chmod(os.environ['XDG_RUNTIME_DIR'], stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
 
 
-#### Process input arguments (start) ####
+# Process input arguments (start) #
 def readArgs():
     """
     Read in arguments.
@@ -89,7 +100,7 @@ def readArgs():
     if args.run and (not args.check):
         args.check = True
 
-    return(args.config_file, args.build, args.run, args.check, args.summary, args.post_run, args.release, args.debug)
+    return (args.config_file, args.build, args.run, args.check, args.summary, args.post_run, args.release, args.debug)
 
 
 def gen_config_file(config_file):
@@ -107,9 +118,7 @@ def gen_config_file(config_file):
         sys.exit(1)
 
 
-#####################
-#### GUI (start) ####
-#####################
+# GUI (start) #
 class MainWindow(QMainWindow):
     def __init__(self, config_file, build, run, check, summary, post_run, release, debug):
         super().__init__()
@@ -145,7 +154,7 @@ class MainWindow(QMainWindow):
         # Execute specified functions after GUI started.
         QTimer.singleShot(1000, self.execute_func)
 
-    #### GUI (start) ####
+    # GUI (start) #
     def gen_gui(self):
         # Gen meanbar and toolbar.
         self.gen_menubar()
@@ -177,7 +186,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/logo/ifp.png'))
         common_pyqt5.move_gui_to_window_center(self)
 
-    ## menubar (start) ##
+    # menubar (start) #
     def gen_menubar(self):
         menubar = self.menuBar()
 
@@ -322,9 +331,9 @@ class MainWindow(QMainWindow):
         QMessageBox.about(self, 'IC flow Platform', """                                                       Version """ + str(IFP_VERSION) + """
 
 Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
-    ## menubar (end) ##
+    # menubar (end) #
 
-    ## toolbar (start) ##
+    # toolbar (start) #
     def gen_toolbar(self):
         # Run all steps
         run_all_steps_action = QAction('Run All Steps', self)
@@ -467,7 +476,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             with open(config_file, 'w', encoding='utf-8') as SF:
                 yaml.dump(config_setting[0], SF, indent=4, sort_keys=False)
 
+            self.save_status_file('./.ifp.status.yaml')
             self.load_config_file(config_file)
+            self.load_status_file('./.ifp.status.yaml')
             self.user_config.config_path_edit.setText(config_file)
     # Process status/config files (end) #
 
@@ -520,7 +531,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             if main_table_info['Flow'] not in flow_list:
                 flow_list.append(main_table_info['Flow'])
 
-        return(flow_list)
+        return (flow_list)
 
     def update_flow_select_status(self, flow, flow_select_status):
         if flow_select_status:
@@ -549,7 +560,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             if main_table_info['Task'] not in task_list:
                 task_list.append(main_table_info['Task'])
 
-        return(task_list)
+        return (task_list)
 
     def update_task_select_status(self, task, task_select_status):
         if task_select_status:
@@ -592,9 +603,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         build_obj.finish_signal.connect(lambda: run_obj.start())
         run_obj.finish_signal.connect(lambda: check_obj.start())
         check_obj.finish_signal.connect(lambda: sum_obj.start())
-    ## toolbar (end) ##
+    # toolbar (end) #
 
-    ## env_tab (start) ##
+    # env_tab (start) #
     def gen_env_tab(self):
         # self.env_frame
         self.env_frame = QFrame(self.env_tab)
@@ -675,7 +686,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if os.path.exists(env_file):
             command = 'source ' + str(env_file) + '; env'
             (return_code, stdout, stderr) = common.run_command(command)
-            env_compile = re.compile('^(\S+?)=(.+)$')
+            env_compile = re.compile(r'^(\S+?)=(.+)$')
 
             for line in stdout.decode('utf-8').split('\n'):
                 if env_compile.match(line):
@@ -688,10 +699,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         else:
             QMessageBox.warning(self, 'Env configuration warning', 'Not find any environment configuration file "' + str(env_file) + '".')
 
-        return(env_dic)
-    ## env_tab (end) ##
+        return (env_dic)
+    # env_tab (end) #
 
-    ## config_tab (start) ##
+    # config_tab (start) #
     def gen_config_tab(self):
         config_widget = self.user_config.init_ui()
 
@@ -701,9 +712,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
         self.config_tab.setLayout(config_tab_grid)
         self.user_config.load()
-    ## config_tab (end) ##
+    # config_tab (end) #
 
-    ## main_tab (start) ##
+    # main_tab (start) #
     def gen_main_tab(self):
         # self.sidebar_tree
         self.sidebar_tree = QTreeWidget(self.main_tab)
@@ -817,7 +828,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         item.setCheckState(0, status)
         item.setIcon(0, QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/blue/block.png'))
 
-        return(item)
+        return (item)
 
     def get_all_blocks(self):
         block_list = []
@@ -826,7 +837,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             if main_table_info['Block'] not in block_list:
                 block_list.append(main_table_info['Block'])
 
-        return(block_list)
+        return (block_list)
     # sidebar_tree (end) #
 
     # status_table (start) #
@@ -890,7 +901,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             else:
                 status_dic['Pend'] += 1
 
-        return(status_dic)
+        return (status_dic)
     # status_table (end) #
 
     # main_frame (start) #
@@ -1227,10 +1238,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.message_text.insertPlainText('[' + str(current_time) + ']    ' + str(message) + '\n')
         common_pyqt5.set_text_cursor_position(self.message_text, 'end')
     # message_frame (end) #
-    ## main_tab (end) ##
-    #### GUI (end) ####
+    # main_tab (end) #
+    # GUI (end) #
 
-    #### GUI function (start) ####
+    # GUI function (start) #
     def execute_func(self):
         """
         Execute specified functions after GUI started.
@@ -1308,7 +1319,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             ifp_obj = function.IfpBuild(task_dic_list, self.config_dic, debug=self.debug)
             self.ic_build = ifp_obj
         elif action_name == 'Run':
-            ifp_obj = function.IfpRun(task_dic_list, self.config_dic, debug=self.debug, ignore_fail=self.ignore_fail, xterm_mode=self.xterm_mode)
+            ifp_obj = function.IfpRun(task_dic_list, self.config_dic, action='RUN', debug=self.debug, ignore_fail=self.ignore_fail, xterm_mode=self.xterm_mode)
             self.ic_run = ifp_obj
         elif action_name == 'Kill':
             ifp_obj = function.IfpKill(task_dic_list, self.config_dic, debug=self.debug)
@@ -1320,7 +1331,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             ifp_obj = function.IfpSummary(task_dic_list, self.config_dic, debug=self.debug)
             self.ic_sum = ifp_obj
         elif action_name == 'Post Run':
-            ifp_obj = function.IfpPostRun(task_dic_list, self.config_dic, debug=self.debug)
+            ifp_obj = function.IfpRun(task_dic_list, self.config_dic, action='POST_RUN', debug=self.debug, ignore_fail=self.ignore_fail, xterm_mode=self.xterm_mode)
             self.ic_postrun = ifp_obj
         elif action_name == 'Release':
             ifp_obj = function.IfpRelease(task_dic_list, self.config_dic, debug=self.debug)
@@ -1337,12 +1348,14 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             ifp_obj.start_one_signal.connect(self.update_task_status)
             ifp_obj.msg_signal.connect(self.update_message_text)
 
-            if action_name == 'Run':
+            if (action_name == 'Run') or (action_name == 'Post Run'):
                 ifp_obj.set_one_jobid_signal.connect(self.update_main_table_item)
                 ifp_obj.set_run_time_signal.connect(self.update_main_table_item)
-                ifp_obj.finish_signal.connect(self.send_result_to_user)
 
             ifp_obj.finish_one_signal.connect(self.update_task_status)
+
+        # Send result to user if send_result is specified.
+        ifp_obj.finish_signal.connect(self.send_result_to_user)
 
         if run:
             ifp_obj.start()
@@ -1378,7 +1391,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
             RR.write('Total ' + str(status_dic['Total']) + ' tasks, ' + str(status_dic['Passed']) + ' pass.\n')
 
-        return(result_report)
+        return (result_report)
 
 
 class MultipleSelectWindow(QDialog):
@@ -1416,14 +1429,10 @@ class MultipleSelectWindow(QDialog):
         for (item, item_checkbox) in self.checkbox_dic.items():
             item_status = item_checkbox.isChecked()
             self.item_select_status_signal.emit(item, item_status)
-###################
-#### GUI (end) ####
-###################
+# GUI (end) #
 
 
-################
 # Main Process #
-################
 def main():
     (config_file, build, run, check, summary, post_run, release, debug) = readArgs()
 

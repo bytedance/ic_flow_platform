@@ -24,8 +24,8 @@ def get_command_dict(command):
             i += 1
 
             # Some speciall preprocess.
-            if re.search('lsload', command):
-                line = re.sub('\*', ' ', line)
+            if re.search(r'lsload', command):
+                line = re.sub(r'\*', ' ', line)
 
             if i == 0:
                 key_list = line.split()
@@ -49,7 +49,7 @@ def get_command_dict(command):
 
                     my_dic[key].append(value)
 
-    return(my_dic)
+    return (my_dic)
 
 
 def get_bjobs_info(command='bjobs -u all -w'):
@@ -61,7 +61,7 @@ def get_bjobs_info(command='bjobs -u all -w'):
     ====
     """
     bjobs_dic = get_command_dict(command)
-    return(bjobs_dic)
+    return (bjobs_dic)
 
 
 def get_bqueues_info(command='bqueues -w'):
@@ -73,7 +73,7 @@ def get_bqueues_info(command='bqueues -w'):
     ====
     """
     bqueues_dic = get_command_dict(command)
-    return(bqueues_dic)
+    return (bqueues_dic)
 
 
 def get_bhosts_info(command='bhosts -w'):
@@ -85,7 +85,7 @@ def get_bhosts_info(command='bhosts -w'):
     ====
     """
     bhosts_dic = get_command_dict(command)
-    return(bhosts_dic)
+    return (bhosts_dic)
 
 
 def get_bhosts_load_info(command='bhosts -l'):
@@ -112,40 +112,40 @@ def get_bhosts_load_info(command='bhosts -l'):
     for line in str(stdout, 'utf-8').split('\n'):
         line = line.strip()
 
-        if re.match('^\s*HOST\s+(.+?)\s*$', line):
-            my_match = re.match('^\s*HOST\s+(.+?)\s*$', line)
+        if re.match(r'^\s*HOST\s+(.+?)\s*$', line):
+            my_match = re.match(r'^\s*HOST\s+(.+?)\s*$', line)
             hostname = my_match.group(1)
             bhosts_load_dic.setdefault(hostname, {})
             load_info_mark = False
-        elif re.match('^\s*CURRENT LOAD USED FOR SCHEDULING:\s*$', line):
+        elif re.match(r'^\s*CURRENT LOAD USED FOR SCHEDULING:\s*$', line):
             load_info_mark = True
         elif load_info_mark:
-            if re.match('^\s*$', line):
+            if re.match(r'^\s*$', line):
                 load_info_mark = False
-            elif re.match('^\s*Total\s+(.+?)\s*$', line):
+            elif re.match(r'^\s*Total\s+(.+?)\s*$', line):
                 bhosts_load_dic[hostname].setdefault('Total', {})
 
-                my_match = re.match('^\s*Total\s+(.+?)\s*$', line)
+                my_match = re.match(r'^\s*Total\s+(.+?)\s*$', line)
                 total_load_string = my_match.group(1)
                 total_load_list = total_load_string.split()
 
                 for (i, head_name) in enumerate(head_list):
-                    load = re.sub('\*', '', total_load_list[i])
+                    load = re.sub(r'\*', '', total_load_list[i])
                     bhosts_load_dic[hostname]['Total'].setdefault(head_name, load)
-            elif re.match('^\s*Reserved\s+(.+?)\s*$', line):
+            elif re.match(r'^\s*Reserved\s+(.+?)\s*$', line):
                 bhosts_load_dic[hostname].setdefault('Reserved', {})
 
-                my_match = re.match('^\s*Reserved\s+(.+?)\s*$', line)
+                my_match = re.match(r'^\s*Reserved\s+(.+?)\s*$', line)
                 reserved_load_string = my_match.group(1)
                 reserved_load_list = reserved_load_string.split()
 
                 for (i, head_name) in enumerate(head_list):
-                    load = re.sub('\*', '', reserved_load_list[i])
+                    load = re.sub(r'\*', '', reserved_load_list[i])
                     bhosts_load_dic[hostname]['Reserved'].setdefault(head_name, load)
             else:
                 head_list = line.split()
 
-    return(bhosts_load_dic)
+    return (bhosts_load_dic)
 
 
 def get_lshosts_info(command='lshosts -w'):
@@ -157,7 +157,7 @@ def get_lshosts_info(command='lshosts -w'):
     ====
     """
     lshosts_dic = get_command_dict(command)
-    return(lshosts_dic)
+    return (lshosts_dic)
 
 
 def get_lsload_info(command='lsload -w'):
@@ -170,7 +170,7 @@ def get_lsload_info(command='lsload -w'):
     """
     lsload_dic = get_command_dict(command)
 
-    return(lsload_dic)
+    return (lsload_dic)
 
 
 def get_busers_info(command='busers all'):
@@ -182,7 +182,7 @@ def get_busers_info(command='busers all'):
     ====
     """
     busers_dic = get_command_dict(command)
-    return(busers_dic)
+    return (busers_dic)
 
 
 def get_tool_name():
@@ -195,13 +195,13 @@ def get_tool_name():
     for line in str(stdout, 'utf-8').split('\n'):
         line = line.strip()
 
-        if re.search('LSF', line):
-            return('lsf')
-        elif re.search('Open_lava', line) or re.search('openlava', line):
-            return('openlava')
+        if re.search(r'LSF', line):
+            return ('lsf')
+        elif re.search(r'Open_lava', line) or re.search(r'openlava', line):
+            return ('openlava')
 
     print('*Warning*: Not sure current cluster is LSF or Openlava.')
-    return('')
+    return ('')
 
 
 def get_bjobs_uf_info(command='bjobs -u all -UF'):
@@ -216,7 +216,7 @@ def get_bjobs_uf_info(command='bjobs -u all -UF'):
     elif tool == 'openlava':
         my_dic = get_openlava_bjobs_uf_info(command)
 
-    return(my_dic)
+    return (my_dic)
 
 
 def get_lsf_bjobs_uf_info(command):
@@ -243,33 +243,33 @@ def get_lsf_bjobs_uf_info(command):
     ====
     """
     job_compile_dic = {
-                       'job_compile': re.compile('.*Job <([0-9]+(\[[0-9]+\])?)>.*'),
-                       'job_name_compile': re.compile('.*Job Name <([^>]+)>.*'),
-                       'user_compile': re.compile('.*User <([^>]+)>.*'),
-                       'project_compile': re.compile('.*Project <([^>]+)>.*'),
-                       'status_compile': re.compile('.*Status <([A-Z]+)>*'),
-                       'queue_compile': re.compile('.*Queue <([^>]+)>.*'),
-                       'command_compile': re.compile('.*Command <(.+?\S)>.*$'),
-                       'submitted_from_compile': re.compile('.*Submitted from host <([^>]+)>.*'),
-                       'submitted_time_compile': re.compile('(.*): Submitted from host.*'),
-                       'cwd_compile': re.compile('.*CWD <([^>]+)>.*'),
-                       'processors_requested_compile': re.compile('.* (\d+) Task\(s\).*'),
-                       'requested_resources_compile': re.compile('.*Requested Resources <(.+)>;.*'),
-                       'span_hosts_compile': re.compile('.*Requested Resources <.*span\[hosts=([1-9][0-9]*).*>.*'),
-                       'rusage_mem_compile': re.compile('.*Requested Resources <.*rusage\[mem=([1-9][0-9]*).*>.*'),
-                       'started_on_compile': re.compile('(.*): (\[\d+\] )?[sS]tarted \d+ Task\(s\) on Host\(s\) (.+?), Allocated (\d+) Slot\(s\) on Host\(s\).*'),
-                       'finished_time_compile': re.compile('(.*): (Done successfully|Exited with exit code|Exited by LSF signal|Completed <exit>).*'),
-                       'exit_code_compile': re.compile('.*Exited with exit code (\d+)\..*'),
-                       'lsf_signal_compile': re.compile('.*Exited by LSF signal (\S+?)\..*'),
-                       'term_owner_compile': re.compile('.*TERM_OWNER: (.+?\.).*'),
-                       'cpu_time_compile': re.compile('.*The CPU time used is (\d+(\.\d+)?) seconds.*'),
-                       'mem_compile': re.compile('.*MEM:\s*(\d+(\.\d+)?)\s*([KMGT]bytes).*'),
-                       'swap_compile': re.compile('.*SWAP:\s*(\d+(\.\d+)?)\s*([KMGT]bytes).*'),
-                       'run_limit_compile': re.compile('\s*RUNLIMIT\s*'),
-                       'pids_compile': re.compile('PIDs:\s+(.+?);'),
-                       'max_mem_compile': re.compile('\s*MAX MEM: (\d+(\.\d+)?) ([KMGT]bytes);\s*AVG MEM: (\d+(\.\d+)?) ([KMGT]bytes)\s*'),
-                       'pending_reasons_compile': re.compile('\s*PENDING REASONS:\s*'),
-                       'empty_line_compile': re.compile('^\s*$'),
+                       'job_compile': re.compile(r'.*Job <([0-9]+(\[[0-9]+\])?)>.*'),
+                       'job_name_compile': re.compile(r'.*Job Name <([^>]+)>.*'),
+                       'user_compile': re.compile(r'.*User <([^>]+)>.*'),
+                       'project_compile': re.compile(r'.*Project <([^>]+)>.*'),
+                       'status_compile': re.compile(r'.*Status <([A-Z]+)>*'),
+                       'queue_compile': re.compile(r'.*Queue <([^>]+)>.*'),
+                       'command_compile': re.compile(r'.*Command <(.+?\S)>.*$'),
+                       'submitted_from_compile': re.compile(r'.*Submitted from host <([^>]+)>.*'),
+                       'submitted_time_compile': re.compile(r'(.*): Submitted from host.*'),
+                       'cwd_compile': re.compile(r'.*CWD <([^>]+)>.*'),
+                       'processors_requested_compile': re.compile(r'.* (\d+) Task\(s\).*'),
+                       'requested_resources_compile': re.compile(r'.*Requested Resources <(.+)>;.*'),
+                       'span_hosts_compile': re.compile(r'.*Requested Resources <.*span\[hosts=([1-9][0-9]*).*>.*'),
+                       'rusage_mem_compile': re.compile(r'.*Requested Resources <.*rusage\[mem=([1-9][0-9]*).*>.*'),
+                       'started_on_compile': re.compile(r'(.*): (\[\d+\] )?[sS]tarted \d+ Task\(s\) on Host\(s\) (.+?), Allocated (\d+) Slot\(s\) on Host\(s\).*'),
+                       'finished_time_compile': re.compile(r'(.*): (Done successfully|Exited with exit code|Exited by LSF signal|Completed <exit>).*'),
+                       'exit_code_compile': re.compile(r'.*Exited with exit code (\d+)\..*'),
+                       'lsf_signal_compile': re.compile(r'.*Exited by LSF signal (\S+?)\..*'),
+                       'term_owner_compile': re.compile(r'.*TERM_OWNER: (.+?\.).*'),
+                       'cpu_time_compile': re.compile(r'.*The CPU time used is (\d+(\.\d+)?) seconds.*'),
+                       'mem_compile': re.compile(r'.*MEM:\s*(\d+(\.\d+)?)\s*([KMGT]bytes).*'),
+                       'swap_compile': re.compile(r'.*SWAP:\s*(\d+(\.\d+)?)\s*([KMGT]bytes).*'),
+                       'run_limit_compile': re.compile(r'\s*RUNLIMIT\s*'),
+                       'pids_compile': re.compile(r'PIDs:\s+(.+?);'),
+                       'max_mem_compile': re.compile(r'\s*MAX MEM: (\d+(\.\d+)?) ([KMGT]bytes);\s*AVG MEM: (\d+(\.\d+)?) ([KMGT]bytes)\s*'),
+                       'pending_reasons_compile': re.compile(r'\s*PENDING REASONS:\s*'),
+                       'empty_line_compile': re.compile(r'^\s*$'),
                       }
 
     my_dic = collections.OrderedDict()
@@ -282,7 +282,7 @@ def get_lsf_bjobs_uf_info(command):
     for line in stdout.decode('utf-8', 'ignore').split('\n'):
         line = line.strip()
 
-        if re.match('Job <' + str(job) + '> is not found', line):
+        if re.match(r'Job <' + str(job) + '> is not found', line):
             continue
         else:
             if job_compile_dic['job_compile'].match(line):
@@ -335,8 +335,8 @@ def get_lsf_bjobs_uf_info(command):
                         pending_mark = False
                 else:
                     if run_limit_mark:
-                        my_dic[job]['run_limit'] = re.sub('min', '', line)
-                        my_dic[job]['run_limit'] = re.sub('\s', '', my_dic[job]['run_limit'])
+                        my_dic[job]['run_limit'] = re.sub(r'min', '', line)
+                        my_dic[job]['run_limit'] = re.sub(r'\s', '', my_dic[job]['run_limit'])
                         continue
 
                     if pending_mark:
@@ -401,9 +401,9 @@ def get_lsf_bjobs_uf_info(command):
                         my_match = job_compile_dic['started_on_compile'].match(line)
                         my_dic[job]['started_time'] = my_match.group(1)
                         started_host = my_match.group(3)
-                        started_host = re.sub('<', '', started_host)
-                        started_host = re.sub('>', '', started_host)
-                        started_host = re.sub('\d+\*', '', started_host)
+                        started_host = re.sub(r'<', '', started_host)
+                        started_host = re.sub(r'>', '', started_host)
+                        started_host = re.sub(r'\d+\*', '', started_host)
                         my_dic[job]['started_on'] = started_host
                         continue
 
@@ -487,7 +487,7 @@ def get_lsf_bjobs_uf_info(command):
                     if job_compile_dic['pending_reasons_compile'].match(line):
                         pending_mark = True
 
-    return(my_dic)
+    return (my_dic)
 
 
 def get_openlava_bjobs_uf_info(command):
@@ -510,28 +510,28 @@ def get_openlava_bjobs_uf_info(command):
     ====
     """
     job_compile_dic = {
-                       'job_compile': re.compile('.*Job <([0-9]+(\[[0-9]+\])?)>.*'),
-                       'job_name_compile': re.compile('.*Job Name <([^>]+)>.*'),
-                       'user_compile': re.compile('.*User <([^>]+)>.*'),
-                       'project_compile': re.compile('.*Project <([^>]+)>.*'),
-                       'status_compile': re.compile('.*Status <([A-Z]+)>*'),
-                       'queue_compile': re.compile('.*Queue <([^>]+)>.*'),
-                       'command_compile': re.compile('.*Command <(.+?\S)>\s*$'),
-                       'submitted_from_compile': re.compile('.*Submitted from host <([^>]+)>.*'),
-                       'submitted_time_compile': re.compile('(.*): Submitted from host.*'),
-                       'cwd_compile': re.compile('.*CWD <([^>]+)>.*'),
-                       'processors_requested_compile': re.compile('.* ([1-9][0-9]*) Processors Requested.*'),
-                       'requested_resources_compile': re.compile('.*Requested Resources <(.+)>;.*'),
-                       'span_hosts_compile': re.compile('.*Requested Resources <.*span\[hosts=([1-9][0-9]*).*>.*'),
-                       'rusage_mem_compile': re.compile('.*Requested Resources <.*rusage\[mem=([1-9][0-9]*).*>.*'),
-                       'started_on_compile': re.compile('.*[sS]tarted on ([0-9]+ Hosts/Processors )?([^;,]+).*'),
-                       'started_time_compile': re.compile('(.*): (\[\d+\])?\s*[sS]tarted on.*'),
-                       'finished_time_compile': re.compile('(.*): (Done successfully|Exited with).*'),
-                       'exit_code_compile': re.compile('.*Exited with exit code (\d+)\..*'),
-                       'lsf_signal_compile': re.compile('.*Exited by LSF signal (\S+?)\..*'),
-                       'term_owner_compile': re.compile('.*TERM_OWNER: (.+?\.).*'),
-                       'cpu_time_compile': re.compile('.*The CPU time used is ([1-9][0-9]*) seconds.*'),
-                       'mem_compile': re.compile('.*MEM: ([1-9][0-9]*) Mbytes.*'),
+                       'job_compile': re.compile(r'.*Job <([0-9]+(\[[0-9]+\])?)>.*'),
+                       'job_name_compile': re.compile(r'.*Job Name <([^>]+)>.*'),
+                       'user_compile': re.compile(r'.*User <([^>]+)>.*'),
+                       'project_compile': re.compile(r'.*Project <([^>]+)>.*'),
+                       'status_compile': re.compile(r'.*Status <([A-Z]+)>*'),
+                       'queue_compile': re.compile(r'.*Queue <([^>]+)>.*'),
+                       'command_compile': re.compile(r'.*Command <(.+?\S)>\s*$'),
+                       'submitted_from_compile': re.compile(r'.*Submitted from host <([^>]+)>.*'),
+                       'submitted_time_compile': re.compile(r'(.*): Submitted from host.*'),
+                       'cwd_compile': re.compile(r'.*CWD <([^>]+)>.*'),
+                       'processors_requested_compile': re.compile(r'.* ([1-9][0-9]*) Processors Requested.*'),
+                       'requested_resources_compile': re.compile(r'.*Requested Resources <(.+)>;.*'),
+                       'span_hosts_compile': re.compile(r'.*Requested Resources <.*span\[hosts=([1-9][0-9]*).*>.*'),
+                       'rusage_mem_compile': re.compile(r'.*Requested Resources <.*rusage\[mem=([1-9][0-9]*).*>.*'),
+                       'started_on_compile': re.compile(r'.*[sS]tarted on ([0-9]+ Hosts/Processors )?([^;,]+).*'),
+                       'started_time_compile': re.compile(r'(.*): (\[\d+\])?\s*[sS]tarted on.*'),
+                       'finished_time_compile': re.compile(r'(.*): (Done successfully|Exited with).*'),
+                       'exit_code_compile': re.compile(r'.*Exited with exit code (\d+)\..*'),
+                       'lsf_signal_compile': re.compile(r'.*Exited by LSF signal (\S+?)\..*'),
+                       'term_owner_compile': re.compile(r'.*TERM_OWNER: (.+?\.).*'),
+                       'cpu_time_compile': re.compile(r'.*The CPU time used is ([1-9][0-9]*) seconds.*'),
+                       'mem_compile': re.compile(r'.*MEM: ([1-9][0-9]*) Mbytes.*'),
                       }
 
     my_dic = collections.OrderedDict()
@@ -542,7 +542,7 @@ def get_openlava_bjobs_uf_info(command):
     for line in str(stdout, 'utf-8').split('\n'):
         line = line.strip()
 
-        if re.match('Job <' + str(job) + '> is not found', line):
+        if re.match(r'Job <' + str(job) + '> is not found', line):
             continue
         else:
             if job_compile_dic['job_compile'].match(line):
@@ -642,8 +642,8 @@ def get_openlava_bjobs_uf_info(command):
                 if job_compile_dic['started_on_compile'].match(line):
                     my_match = job_compile_dic['started_on_compile'].match(line)
                     started_host = my_match.group(2)
-                    started_host = re.sub('<', '', started_host)
-                    started_host = re.sub('>', '', started_host)
+                    started_host = re.sub(r'<', '', started_host)
+                    started_host = re.sub(r'>', '', started_host)
                     my_dic[job]['started_on'] = started_host
 
                 if job_compile_dic['started_time_compile'].match(line):
@@ -674,7 +674,7 @@ def get_openlava_bjobs_uf_info(command):
                     my_match = job_compile_dic['mem_compile'].match(line)
                     my_dic[job]['mem'] = my_match.group(1)
 
-    return(my_dic)
+    return (my_dic)
 
 
 def get_host_list():
@@ -683,7 +683,7 @@ def get_host_list():
     """
     bhosts_dic = get_bhosts_info()
     host_list = bhosts_dic['HOST_NAME']
-    return(host_list)
+    return (host_list)
 
 
 def get_queue_list():
@@ -692,7 +692,7 @@ def get_queue_list():
     """
     bqueues_dic = get_bqueues_info()
     queue_list = bqueues_dic['QUEUE_NAME']
-    return(queue_list)
+    return (queue_list)
 
 
 def get_host_group_members(host_group_name):
@@ -711,13 +711,13 @@ def get_host_group_members(host_group_name):
     for line in str(stdout, 'utf-8').split('\n'):
         line = line.strip()
 
-        if re.search('No such user/host group', line):
+        if re.search(r'No such user/host group', line):
             break
-        elif re.match('^' + str(host_group_name) + ' .*$', line):
+        elif re.match(r'^' + str(host_group_name) + ' .*$', line):
             my_list = line.split()
             host_list = my_list[1:]
 
-    return(host_list)
+    return (host_list)
 
 
 def get_user_group_members(user_group_name):
@@ -736,11 +736,11 @@ def get_user_group_members(user_group_name):
     for line in str(stdout, 'utf-8').split('\n'):
         line = line.strip()
 
-        if re.match('^' + str(user_group_name) + ' .*$', line):
+        if re.match(r'^' + str(user_group_name) + ' .*$', line):
             my_list = line.split()
             user_list = my_list[1:]
 
-    return(user_list)
+    return (user_list)
 
 
 def get_queue_host_info():
@@ -748,8 +748,8 @@ def get_queue_host_info():
     Get hosts on (specified) queues.
     """
     queue_host_dic = {}
-    queue_compile = re.compile('^QUEUE:\s*(\S+)\s*$')
-    hosts_compile = re.compile('^HOSTS:\s*(.*?)\s*$')
+    queue_compile = re.compile(r'^QUEUE:\s*(\S+)\s*$')
+    hosts_compile = re.compile(r'^HOSTS:\s*(.*?)\s*$')
     queue = ''
 
     command = 'bqueues -l'
@@ -775,14 +775,14 @@ def get_queue_host_info():
                 hosts_list = hosts_string.split()
 
                 for hosts in hosts_list:
-                    if re.match('.+/', hosts):
-                        host_group_name = re.sub('/$', '', hosts)
+                    if re.match(r'.+/', hosts):
+                        host_group_name = re.sub(r'/$', '', hosts)
                         host_list = get_host_group_members(host_group_name)
 
                         if len(host_list) > 0:
                             queue_host_dic[queue].extend(host_list)
-                    elif re.match('^(.+)\+\d+$', hosts):
-                        my_match = re.match('^(.+)\+\d+$', hosts)
+                    elif re.match(r'^(.+)\+\d+$', hosts):
+                        my_match = re.match(r'^(.+)\+\d+$', hosts)
                         host_group_name = my_match.group(1)
                         host_list = get_host_group_members(host_group_name)
 
@@ -793,7 +793,7 @@ def get_queue_host_info():
                     else:
                         queue_host_dic[queue].append(hosts)
 
-    return(queue_host_dic)
+    return (queue_host_dic)
 
 
 def get_host_queue_info():
@@ -814,4 +814,4 @@ def get_host_queue_info():
             else:
                 host_queue_dic[host] = [queue, ]
 
-    return(host_queue_dic)
+    return (host_queue_dic)

@@ -46,7 +46,7 @@ def readArgs():
         print('*Error*: ' + str(args.outdir) + ': No such output directory, please create it first.')
         sys.exit(1)
 
-    return(args.input, args.flow, args.vendor, args.outdir)
+    return (args.input, args.flow, args.vendor, args.outdir)
 
 
 class GenScripts():
@@ -69,7 +69,7 @@ class GenScripts():
         title_list = []
 
         for title in SHEET.row_values(0):
-            if re.match('^\s*$', title):
+            if re.match(r'^\s*$', title):
                 break
             else:
                 title_list.append(title)
@@ -78,14 +78,14 @@ class GenScripts():
             line_num = int(i) + 1
             row_list = SHEET.row_values(i)
 
-            if re.match('^\s*#.*$', row_list[0]):
+            if re.match(r'^\s*#.*$', row_list[0]):
                 print('*Warning*: line ' + str(line_num) + ', ignore task "' + str(row_list[0]) + '".')
                 continue
             else:
                 # Get current task(s).
                 tasks = row_list[0]
 
-                if not re.match('^\s*$', tasks):
+                if not re.match(r'^\s*$', tasks):
                     task_list = tasks.split('/')
 
                     for task in task_list:
@@ -158,7 +158,7 @@ class GenScripts():
                 file_list[i] = "'" + str(file_list[i]) + "'"
 
         if output_type == 'file':
-            return(file_list[0])
+            return (file_list[0])
         elif output_type == 'file_list':
             files = ''
 
@@ -168,7 +168,7 @@ class GenScripts():
                 else:
                     files = str(files) + ', ' + str(file)
 
-            return(files)
+            return (files)
 
     def process_message_setting(self, message_string):
         """
@@ -176,14 +176,14 @@ class GenScripts():
         """
         message_list = []
 
-        if not re.match('^\s*$', message_string):
+        if not re.match(r'^\s*$', message_string):
             message_string_list = message_string.split(',')
 
             for item in message_string_list:
                 item = item.strip()
                 message_list.append(item)
 
-        return(message_list)
+        return (message_list)
 
     def write_task_script(self, task):
         """
@@ -221,7 +221,7 @@ def read_args():
 
     args = parser.parse_args()
 
-    return(args.block, args.task, args.corner)
+    return (args.block, args.task, args.corner)
 """)
 
             FL.write("""
@@ -298,6 +298,7 @@ def main():
     (input, flow, vendor, outdir) = readArgs()
     myGenQualityScript = GenScripts(input, flow, vendor, outdir)
     myGenQualityScript.gen_scripts()
+
 
 if __name__ == '__main__':
     main()

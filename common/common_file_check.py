@@ -55,7 +55,7 @@ class FileCheck():
                 print('*Error*: Failed on removing old log file "' + str(log_file) + '": ' + str(error))
                 sys.exit(1)
 
-        return(log_file)
+        return (log_file)
 
     def write_report(self, description, log_file, result):
         """
@@ -104,7 +104,7 @@ class FileCheck():
         self.write_report(description, log_file, result)
         self.save_result(description, file_list, result)
 
-        return(result)
+        return (result)
 
     def search_message(self, line, message_list, waive_message_list=[]):
         """
@@ -114,11 +114,11 @@ class FileCheck():
             if re.search(message, line):
                 for waive_message in waive_message_list:
                     if re.search(waive_message, line):
-                        return(False, '')
+                        return (False, '')
 
-                return(True, message)
+                return (True, message)
 
-        return(False, '')
+        return (False, '')
 
     def check_message(self, check_type, description, file_list, message_list, waive_message_list=[]):
         """
@@ -188,19 +188,19 @@ class FileCheck():
         self.write_report(description, log_file, result)
         self.save_result(description, file_list, result, message_list, waive_message_list)
 
-        return(result)
+        return (result)
 
     def check_error_message(self, description, file_list, error_message_list, waive_message_list=[]):
         result = self.check_message('error', description, file_list, error_message_list, waive_message_list)
-        return(result)
+        return (result)
 
     def check_warning_message(self, description, file_list, warning_message_list, waive_message_list=[]):
         result = self.check_message('warning', description, file_list, warning_message_list, waive_message_list)
-        return(result)
+        return (result)
 
     def check_expected_message(self, description, file_list, expected_message_list, waive_message_list=[]):
         result = self.check_message('expected', description, file_list, expected_message_list, waive_message_list)
-        return(result)
+        return (result)
 
     def review_file(self, description, file_list):
         """
@@ -229,4 +229,4 @@ class FileCheck():
         self.write_report(description, log_file, result)
         self.save_result(description, file_list, result)
 
-        return(result)
+        return (result)

@@ -27,7 +27,7 @@ def run_command(command, shell=True):
     (stdout, stderr) = SP.communicate()
     return_code = SP.returncode
 
-    return(return_code, stdout, stderr)
+    return (return_code, stdout, stderr)
 
 
 def spawn_process(command, shell=True):
@@ -35,7 +35,7 @@ def spawn_process(command, shell=True):
     Return the underlying Popen obj
     """
     SP = subprocess.Popen(command, shell=shell, executable=os.environ['SHELL'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    return SP
+    return (SP)
 
 
 def get_jobid(stdout):
@@ -50,7 +50,7 @@ def get_jobid(stdout):
             my_match = re.match(r'^Job\s+\<(\d+)\>\s+is\s+submitted\s+to\s+queue.*$', line)
             jobid = my_match.group(1)
 
-    return jobid
+    return (jobid)
 
 
 class ThreadRun(QThread):

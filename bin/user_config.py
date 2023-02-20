@@ -51,7 +51,7 @@ def parsing_blank_setting():
                                  'COMMAND': 'Example : ${IFP_INSTALL_PATH}/function/summary/collect_syn_qor.py',
                                  'VIEWER': 'Example : /bin/soffice',
                                  'REPORT_FILE': 'Example : fv_qor.xlsx'},
-                     'POST RUN': {'PATH': 'Example : tbd',
+                     'POST_RUN': {'PATH': 'Example : tbd',
                                   'COMMAND': 'Example : tbd',
                                   'RUN_METHOD': 'Example : tbd'},
                      'RELEASE': {'PATH': 'Example : tbd',
@@ -1617,7 +1617,7 @@ class DefaultConfig(QMainWindow):
             try:
                 with open(yaml_file, 'w', encoding='utf-8') as f:
                     yaml.dump(dict(final_setting), f, indent=4, sort_keys=False)
-            except:
+            except Exception:
                 QMessageBox.warning(self, "Warning", "Cant save setting to %s" % yaml_file, QMessageBox.Ok)
             else:
                 QMessageBox.warning(self, "Done", "Successfully save setting to %s" % yaml_file, QMessageBox.Ok)

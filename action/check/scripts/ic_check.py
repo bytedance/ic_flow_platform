@@ -49,7 +49,7 @@ def read_args():
         print('*Error*: "' + str(args.dir) + '": No such directory.')
         sys.exit(1)
 
-    return(args.dir, args.flow, args.vendor, args.block, args.task, args.corner)
+    return (args.dir, args.flow, args.vendor, args.block, args.task, args.corner)
 
 
 def write_result_file(result, check_report):
@@ -91,7 +91,7 @@ def check_result(check_dir, flow, vendor, block, task, corner):
 
     if not os.patt.exists(check_script):
         print('*Error*: check script "' + str(check_script) + '" is missing.')
-        return(1)
+        return (1)
     else:
         print('Come into ' + str(check_dir))
 
@@ -137,17 +137,17 @@ def check_result(check_dir, flow, vendor, block, task, corner):
                 print('Check pass')
                 print('Check report : ' + str(check_report))
                 write_result_file('PASS', check_report)
-                return(0)
+                return (0)
             else:
                 print('Check fail')
                 print('*Error*: Check report "' + str(check_report) + '" is missing.')
                 write_result_file('FAIL', check_report)
-                return(1)
+                return (1)
         else:
             print('Check fail')
             print('Check report : ' + str(check_report))
             write_result_file('FAIL', check_report)
-            return(1)
+            return (1)
 
 
 ################
@@ -156,6 +156,7 @@ def check_result(check_dir, flow, vendor, block, task, corner):
 def main():
     (check_dir, flow, vendor, block, task, corner) = read_args()
     check_result(check_dir, flow, vendor, block, task, corner)
+
 
 if __name__ == '__main__':
     main()

@@ -53,7 +53,7 @@ def read_args():
             print('*Error*: ' + str(args.input) + ': No such file.')
             sys.exit(1)
 
-    return(args.input)
+    return (args.input)
 
 
 def parse_checklist_report(checklist_report):
@@ -70,8 +70,8 @@ def parse_checklist_report(checklist_report):
 
     with open(checklist_report, 'r') as CR:
         for line in CR.readlines():
-            if re.match('^\s*PASSED\s*:\s*(.+?)\s*$', line):
-                my_match = re.match('^\s*PASSED\s*:\s*(.+?)\s*$', line)
+            if re.match(r'^\s*PASSED\s*:\s*(.+?)\s*$', line):
+                my_match = re.match(r'^\s*PASSED\s*:\s*(.+?)\s*$', line)
                 description = my_match.group(1)
 
                 item_dic = {'result': 'PASSED',
@@ -79,8 +79,8 @@ def parse_checklist_report(checklist_report):
                             'log_file': ''}
 
                 checklist_dic_list.append(item_dic)
-            elif re.match('^\s*(.+?)\s*:\s*(.+?)\s+\(details please see (.*)\)\s*$', line):
-                my_match = re.match('^\s*(.+?)\s*:\s*(.+?)\s+\(details please see (.*)\)\s*$', line)
+            elif re.match(r'^\s*(.+?)\s*:\s*(.+?)\s+\(details please see (.*)\)\s*$', line):
+                my_match = re.match(r'^\s*(.+?)\s*:\s*(.+?)\s+\(details please see (.*)\)\s*$', line)
                 result = my_match.group(1)
                 description = my_match.group(2)
                 log_file = my_match.group(3)
@@ -91,7 +91,7 @@ def parse_checklist_report(checklist_report):
 
                 checklist_dic_list.append(item_dic)
 
-    return(checklist_dic_list)
+    return (checklist_dic_list)
 
 
 class MainWindow(QMainWindow):
@@ -175,7 +175,7 @@ class MainWindow(QMainWindow):
         widget_grid.addWidget(view_button, 0, 0)
         widget.setLayout(widget_grid)
 
-        return(widget)
+        return (widget)
 
     def open_log_file(self, log_file):
         command = '/usr/bin/xterm -T ' + str(log_file) + ' -e "/usr/bin/vim ' + str(log_file) + '"'
@@ -199,6 +199,7 @@ def main():
     mw = MainWindow(checklist_report)
     mw.show()
     sys.exit(app.exec_())
+
 
 if __name__ == '__main__':
     main()

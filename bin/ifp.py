@@ -1354,8 +1354,8 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
             ifp_obj.finish_one_signal.connect(self.update_task_status)
 
-        # Send result to user if send_result is specified.
-        ifp_obj.finish_signal.connect(self.send_result_to_user)
+            # Send result to user if send_result is specified.
+            ifp_obj.finish_signal.connect(self.send_result_to_user)
 
         if run:
             ifp_obj.start()

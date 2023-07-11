@@ -1,4 +1,0 @@
-matplotlib==3.3.4
-PyQt5==5.10.1
-pexpect==4.6.0
-setuptools==39.2.0

@@ -1,0 +1,31 @@
+Below is the usage of bsample.
+====
+usage: bsample.py [-h] [-j] [-q] [-H] [-l] [-u] [-U]
+
+optional arguments:
+  -h, --help         show this help message and exit
+  -j, --job          Sample running job info with command "bjobs -u all -r -UF".
+  -q, --queue        Sample queue info with command "bqueues".
+  -H, --host         Sample host info with command "bhosts".
+  -l, --load         Sample host load (ut/tmp/swp/mem) info with command "lsload".
+  -u, --user         Sample user info with command "busers".
+  -U, --utilization  Sample utilization (slot/cpu/mem) info with command "lsload/bhosts/lshosts".
+====
+
+It is used to sample LSF data for job/queue/host/load/user/utilization.
+The sampling jobs will be started with multi-thread if you specify more than one.
+
+
+Suggest to start sampling job with crontab, below is an example.
+====
+# Sampling job/queue/load information for lsfMonitor
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:<BSUB_PATH>
+LSF_SERVERDIR=***
+LSF_LIBDIR=***
+LSF_BINDIR=***
+LSF_ENVDIR=***
+*/5 * * * * <LSFMONITOR_INSTALL_PATH>/monitor/bin/bsample -j
+*/5 * * * * <LSFMONITOR_INSTALL_PATH>/monitor/bin/bsample -q
+*/5 * * * * <LSFMONITOR_INSTALL_PATH>/monitor/bin/bsample -l
+0 * * * * <LSFMONITOR_INSTALL_PATH>/monitor/bin/bsample -U
+====

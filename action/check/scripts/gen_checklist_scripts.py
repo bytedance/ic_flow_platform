@@ -199,9 +199,8 @@ import os
 import sys
 import argparse
 
-sys.path.append('/ic/software/cad_tools/common')
+sys.path.append('""" + str(os.environ['IFP_INSTALL_PATH']) + """/common')
 import common
-sys.path.append('/ic/software/cad_tools/flows/ic_flow_platform/common')
 import common_file_check
 
 os.environ['PYTHONUNBUFFERED'] = '1'
@@ -248,7 +247,7 @@ def file_check(block, task, corner):
                 FL.write('\n')
 
             FL.write("""    if my_file_check.final_return_code == 0:
-        common.print_expect(str(task) + ' check pass')
+        print(str(task) + ' check pass')
     else:
         common.print_error(str(task) + ' check fail')
 

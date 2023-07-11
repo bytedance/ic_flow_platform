@@ -82,12 +82,12 @@ def check_result(check_dir, flow, vendor, block, task, corner):
     Write the result file "PASS" or "FAIL" to mark the result.
     """
     if (flow == 'syn') or (flow == 'fv'):
-        check_script = '/ic/software/cad_tools/flows/ic_flow_platform/function/check/' + str(flow) + '/' + str(vendor) + '/' + str(task) + '.py'
+        check_script = str(os.environ['IFP_INSTALL_PATH']) + '/function/check/' + str(flow) + '/' + str(vendor) + '/' + str(task) + '.py'
     elif flow == 'sta':
         if task == 'pnr':
-            check_script = '/ic/software/cad_tools/flows/ic_flow_platform/function/check/' + str(flow) + '/' + 'postSTA.py'
+            check_script = str(os.environ['IFP_INSTALL_PATH']) + '/function/check/' + str(flow) + '/' + 'postSTA.py'
         else:
-            check_script = '/ic/software/cad_tools/flows/ic_flow_platform/function/check/' + str(flow) + '/' + 'preSTA.py'
+            check_script = str(os.environ['IFP_INSTALL_PATH']) + '/function/check/' + str(flow) + '/' + 'preSTA.py'
 
     if not os.patt.exists(check_script):
         print('*Error*: check script "' + str(check_script) + '" is missing.')

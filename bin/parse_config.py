@@ -91,8 +91,7 @@ class Config:
                         config_dic['VAR'] = {}
 
                     if ('BLOCK' not in config_dic) or (not config_dic['BLOCK']):
-                        common.print_error('*Error*: failed to get BLOCK setting from file {}.'.format(config_file))
-                        sys.exit(1)
+                        config_dic['BLOCK'] = {}
 
         return (config_dic)
 

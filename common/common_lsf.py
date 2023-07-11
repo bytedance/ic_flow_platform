@@ -49,7 +49,7 @@ def get_command_dict(command):
 
                     my_dic[key].append(value)
 
-    return (my_dic)
+    return my_dic
 
 
 def get_bjobs_info(command='bjobs -u all -w'):
@@ -61,7 +61,7 @@ def get_bjobs_info(command='bjobs -u all -w'):
     ====
     """
     bjobs_dic = get_command_dict(command)
-    return (bjobs_dic)
+    return bjobs_dic
 
 
 def get_bqueues_info(command='bqueues -w'):
@@ -73,7 +73,7 @@ def get_bqueues_info(command='bqueues -w'):
     ====
     """
     bqueues_dic = get_command_dict(command)
-    return (bqueues_dic)
+    return bqueues_dic
 
 
 def get_bhosts_info(command='bhosts -w'):
@@ -85,7 +85,7 @@ def get_bhosts_info(command='bhosts -w'):
     ====
     """
     bhosts_dic = get_command_dict(command)
-    return (bhosts_dic)
+    return bhosts_dic
 
 
 def get_bhosts_load_info(command='bhosts -l'):
@@ -145,7 +145,7 @@ def get_bhosts_load_info(command='bhosts -l'):
             else:
                 head_list = line.split()
 
-    return (bhosts_load_dic)
+    return bhosts_load_dic
 
 
 def get_lshosts_info(command='lshosts -w'):
@@ -157,20 +157,20 @@ def get_lshosts_info(command='lshosts -w'):
     ====
     """
     lshosts_dic = get_command_dict(command)
-    return (lshosts_dic)
+    return lshosts_dic
 
 
 def get_lsload_info(command='lsload -w'):
     """
     Get lsload info with command 'lsload'.
     ====
-    ST_NAME               status  r15s   r1m  r15m   ut    pg    ls    it   tmp    swp   mem
+    HOST_NAME               status  r15s   r1m  r15m   ut    pg    ls    it   tmp    swp   mem
     cmp01                 ok      0.7    0.3  0.2    5%    0.0   1     0    7391_m  1.9_g  931_m
     ====
     """
     lsload_dic = get_command_dict(command)
 
-    return (lsload_dic)
+    return lsload_dic
 
 
 def get_busers_info(command='busers all'):
@@ -182,7 +182,7 @@ def get_busers_info(command='busers all'):
     ====
     """
     busers_dic = get_command_dict(command)
-    return (busers_dic)
+    return busers_dic
 
 
 def get_tool_name():
@@ -196,12 +196,12 @@ def get_tool_name():
         line = line.strip()
 
         if re.search(r'LSF', line):
-            return ('lsf')
+            return 'lsf'
         elif re.search(r'Open_lava', line) or re.search(r'openlava', line):
-            return ('openlava')
+            return 'openlava'
 
     print('*Warning*: Not sure current cluster is LSF or Openlava.')
-    return ('')
+    return ''
 
 
 def get_bjobs_uf_info(command='bjobs -u all -UF'):
@@ -216,7 +216,7 @@ def get_bjobs_uf_info(command='bjobs -u all -UF'):
     elif tool == 'openlava':
         my_dic = get_openlava_bjobs_uf_info(command)
 
-    return (my_dic)
+    return my_dic
 
 
 def get_lsf_bjobs_uf_info(command):
@@ -411,7 +411,7 @@ def get_lsf_bjobs_uf_info(command):
                         my_match = job_compile_dic['cpu_time_compile'].match(line)
                         my_dic[job]['cpu_time'] = my_match.group(1)
 
-                    if job_compile_dic['mem_compile'].match(line):
+                    if job_compile_dic['mem_compile'].match(line) and (not my_dic[job]['mem']):
                         my_match = job_compile_dic['mem_compile'].match(line)
                         my_dic[job]['mem'] = my_match.group(1)
                         unit = my_match.group(3)
@@ -487,7 +487,7 @@ def get_lsf_bjobs_uf_info(command):
                     if job_compile_dic['pending_reasons_compile'].match(line):
                         pending_mark = True
 
-    return (my_dic)
+    return my_dic
 
 
 def get_openlava_bjobs_uf_info(command):
@@ -674,7 +674,7 @@ def get_openlava_bjobs_uf_info(command):
                     my_match = job_compile_dic['mem_compile'].match(line)
                     my_dic[job]['mem'] = my_match.group(1)
 
-    return (my_dic)
+    return my_dic
 
 
 def get_host_list():
@@ -683,7 +683,7 @@ def get_host_list():
     """
     bhosts_dic = get_bhosts_info()
     host_list = bhosts_dic['HOST_NAME']
-    return (host_list)
+    return host_list
 
 
 def get_queue_list():
@@ -692,7 +692,7 @@ def get_queue_list():
     """
     bqueues_dic = get_bqueues_info()
     queue_list = bqueues_dic['QUEUE_NAME']
-    return (queue_list)
+    return queue_list
 
 
 def get_host_group_members(host_group_name):
@@ -717,7 +717,7 @@ def get_host_group_members(host_group_name):
             my_list = line.split()
             host_list = my_list[1:]
 
-    return (host_list)
+    return host_list
 
 
 def get_user_group_members(user_group_name):
@@ -740,7 +740,7 @@ def get_user_group_members(user_group_name):
             my_list = line.split()
             user_list = my_list[1:]
 
-    return (user_list)
+    return user_list
 
 
 def get_queue_host_info():
@@ -793,7 +793,7 @@ def get_queue_host_info():
                     else:
                         queue_host_dic[queue].append(hosts)
 
-    return (queue_host_dic)
+    return queue_host_dic
 
 
 def get_host_queue_info():
@@ -814,4 +814,24 @@ def get_host_queue_info():
             else:
                 host_queue_dic[host] = [queue, ]
 
-    return (host_queue_dic)
+    return host_queue_dic
+
+
+def get_lsf_unit_for_limits():
+    """
+    Get LSF LSF_UNIT_FOR_LIMITS setting, it could be KB/MB/GB/TB.
+    """
+    lsf_unit_for_limits = 'MB'
+    command = 'badmin showconf mbd all'
+
+    (return_code, stdout, stderr) = common.run_command(command)
+
+    for line in str(stdout, 'utf-8').split('\n'):
+        line = line.strip()
+
+        if re.match(r'^\s*LSF_UNIT_FOR_LIMITS\s*=\s*(\S+)\s*$', line):
+            my_match = re.match(r'^\s*LSF_UNIT_FOR_LIMITS\s*=\s*(\S+)\s*$', line)
+            lsf_unit_for_limits = my_match.group(1)
+            break
+
+    return lsf_unit_for_limits

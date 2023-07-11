@@ -33,7 +33,7 @@ import config
 os.environ['PYTHONUNBUFFERED'] = '1'
 CWD = os.getcwd()
 USER = getpass.getuser()
-IFP_VERSION = 'V1.0 (2023.2.17)'
+IFP_VERSION = 'V1.1'
 
 # Solve some unexpected warning message.
 if 'XDG_RUNTIME_DIR' not in os.environ:
@@ -133,7 +133,6 @@ class MainWindow(QMainWindow):
         self.debug = debug
 
         self.ignore_fail = False
-        self.xterm_mode = False
         self.send_result = False
 
         self.config_obj = parse_config.Config(self.config_file)
@@ -142,7 +141,7 @@ class MainWindow(QMainWindow):
 
         self.default_config_file = str(os.environ['IFP_INSTALL_PATH']) + '/config/default.yaml'
         self.user_config = UserConfig(self.config_file, self.default_config_file)
-        self.user_config.save_flag.connect(self.save_config_file)
+        self.user_config.save_flag.connect(lambda: self.save_config_file(save_mode='keep'))
 
         # Generate the GUI.
         self.gen_gui()
@@ -175,8 +174,8 @@ class MainWindow(QMainWindow):
         self.top_tab.setCurrentWidget(self.main_tab)
 
         self.gen_env_tab()
-        self.gen_config_tab()
         self.gen_main_tab()
+        self.gen_config_tab()
 
         # Set GUI size, title and icon.
         self.gui_width = 1200
@@ -184,7 +183,7 @@ class MainWindow(QMainWindow):
         self.resize(self.gui_width, self.gui_height)
         self.setWindowTitle('IC FLow Platform')
         self.setWindowIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/logo/ifp.png'))
-        common_pyqt5.move_gui_to_window_center(self)
+        common_pyqt5.center_window(self)
 
     # menubar (start) #
     def gen_menubar(self):
@@ -199,6 +198,10 @@ class MainWindow(QMainWindow):
         load_status_file_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/add_file.png'))
         load_status_file_action.triggered.connect(self.load_status_file)
 
+        save_config_file_action = QAction('Save Config File', self)
+        save_config_file_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/red/save_file.png'))
+        save_config_file_action.triggered.connect(lambda: self.save_config_file(save_mode='save_as_other_file'))
+
         load_config_file_action = QAction('Load Config File', self)
         load_config_file_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/add_file.png'))
         load_config_file_action.triggered.connect(self.load_config_file)
@@ -211,6 +214,7 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu('File')
         file_menu.addAction(save_status_file_action)
         file_menu.addAction(load_status_file_action)
+        file_menu.addAction(save_config_file_action)
         file_menu.addAction(load_config_file_action)
         file_menu.addAction(exit_action)
 
@@ -241,9 +245,6 @@ class MainWindow(QMainWindow):
         ignore_fail_action = QAction('Ignore Fail', self, checkable=True)
         ignore_fail_action.triggered.connect(self.setup_ignore_fail)
 
-        xterm_mode_action = QAction('Xterm Mode', self, checkable=True)
-        xterm_mode_action.triggered.connect(self.start_xterm_mode)
-
         send_result_action = QAction('Send Result', self, checkable=True)
         send_result_action.triggered.connect(self.setup_send_result)
 
@@ -251,7 +252,6 @@ class MainWindow(QMainWindow):
         setup_menu.addAction(select_flows_action)
         setup_menu.addAction(select_steps_action)
         setup_menu.addAction(ignore_fail_action)
-        setup_menu.addAction(xterm_mode_action)
         setup_menu.addAction(send_result_action)
 
         # Contral
@@ -469,17 +469,27 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.user_config.config_path_edit.setText(self.config_file)
             self.user_config.load()
 
-    def save_config_file(self, config_setting):
-        (config_file, file_type) = QFileDialog.getSaveFileName(self, 'Save config file', config_setting[1], 'Config Files (*.yaml)')
+    """
+    1. save_mode=keep : user can not define new ifp.cfg.yaml
+    2. save_mode=<others> : filedialog for user to define new ifp.cfg.yaml
+    """
+
+    def save_config_file(self, save_mode='keep'):
+        config_file = self.user_config.config_path_edit.text()
+
+        if not save_mode == 'keep':
+            (config_file, file_type) = QFileDialog.getSaveFileName(self, 'Save config file', config_file, 'Config Files (*.yaml)')
+            self.user_config.parsing_final_setting()
 
         if config_file:
             with open(config_file, 'w', encoding='utf-8') as SF:
-                yaml.dump(config_setting[0], SF, indent=4, sort_keys=False)
+                yaml.dump(dict(self.user_config.final_setting), SF, indent=4, sort_keys=False)
 
             self.save_status_file('./.ifp.status.yaml')
             self.load_config_file(config_file)
             self.load_status_file('./.ifp.status.yaml')
             self.user_config.config_path_edit.setText(config_file)
+
     # Process status/config files (end) #
 
     def zoom_in(self):
@@ -580,12 +590,6 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.ignore_fail = True
         else:
             self.ignore_fail = False
-
-    def start_xterm_mode(self, state):
-        if state:
-            self.xterm_mode = True
-        else:
-            self.xterm_mode = False
 
     def setup_send_result(self, state):
         if state:
@@ -1236,7 +1240,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     def update_message_text(self, message):
         current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.message_text.insertPlainText('[' + str(current_time) + ']    ' + str(message) + '\n')
-        common_pyqt5.set_text_cursor_position(self.message_text, 'end')
+        common_pyqt5.text_edit_visible_position(self.message_text, 'End')
     # message_frame (end) #
     # main_tab (end) #
     # GUI (end) #
@@ -1264,53 +1268,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if self.release:
             self.execute_action('Release')
 
-    def filter_task(self, main_table_info_list, query):
-        """
-        return item complying the query schema
-        query should be staff like 'Block=="blockname" and Flow=="flowname"'
-        """
-        result = []
-
-        for main_table_info in main_table_info_list:
-            context = copy.deepcopy(main_table_info.as_dict())
-
-            if eval(query, context):
-                result.append(main_table_info)
-
-        return result
-
-    def prep_tasks(self, main_table_info_list, kind):
-        """
-        kinds refers to Action names
-        """
-        selected_tasks = list(filter(lambda x: x.get('Selected'), main_table_info_list))
-
-        if len(selected_tasks) == 0:
-            QMessageBox.warning(self, 'Nothing to {}'.format(kind), '*Info*: No task is selected, nothing to be {}'.format(kind))
-            return []
-
-        if kind in ['Run', 'Build']:
-            tasks_to_build_or_run = self.filter_task(selected_tasks, 'Status!="Running" and Status!="Killing"')
-
-            if not tasks_to_build_or_run:
-                QMessageBox.warning(self, 'Nothing to {}'.format(kind), '*Info*: Selected tasks are either running or killing, nothing to be {}'.format(kind))
-
-            return tasks_to_build_or_run
-        elif kind == 'Kill':
-            running_tasks = self.filter_task(selected_tasks, 'Status=="Running"')
-
-            if not running_tasks:
-                QMessageBox.warning(self, 'Nothing to {}'.format(kind), '*Info*: No running tasks are found, nothing to be {}'.format(kind))
-
-            return running_tasks
-        elif kind in ['Check', 'Summary', 'Post Run', 'Release']:
-            return selected_tasks
-
-        return []
-
     def execute_action(self, action_name, task_dic_list=[], run=True):
         if not task_dic_list:
-            task_dic_list = self.prep_tasks(self.main_table_info_list, action_name)
+            task_dic_list = list(filter(lambda x: x.get('Selected'), self.main_table_info_list))
 
         if not task_dic_list:
             return
@@ -1319,7 +1279,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             ifp_obj = function.IfpBuild(task_dic_list, self.config_dic, debug=self.debug)
             self.ic_build = ifp_obj
         elif action_name == 'Run':
-            ifp_obj = function.IfpRun(task_dic_list, self.config_dic, action='RUN', debug=self.debug, ignore_fail=self.ignore_fail, xterm_mode=self.xterm_mode)
+            ifp_obj = function.IfpRun(task_dic_list, self.config_dic, action='RUN', debug=self.debug, ignore_fail=self.ignore_fail)
             self.ic_run = ifp_obj
         elif action_name == 'Kill':
             ifp_obj = function.IfpKill(task_dic_list, self.config_dic, debug=self.debug)
@@ -1331,7 +1291,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             ifp_obj = function.IfpSummary(task_dic_list, self.config_dic, debug=self.debug)
             self.ic_sum = ifp_obj
         elif action_name == 'Post Run':
-            ifp_obj = function.IfpRun(task_dic_list, self.config_dic, action='POST_RUN', debug=self.debug, ignore_fail=self.ignore_fail, xterm_mode=self.xterm_mode)
+            ifp_obj = function.IfpRun(task_dic_list, self.config_dic, action='POST_RUN', debug=self.debug, ignore_fail=self.ignore_fail)
             self.ic_postrun = ifp_obj
         elif action_name == 'Release':
             ifp_obj = function.IfpRelease(task_dic_list, self.config_dic, debug=self.debug)
@@ -1423,7 +1383,7 @@ class MultipleSelectWindow(QDialog):
         # Set GUI size and title.
         self.resize(180, 40*len(item_list))
         self.setWindowTitle(title)
-        common_pyqt5.move_gui_to_window_center(self)
+        common_pyqt5.center_window(self)
 
     def update_main_gui(self):
         for (item, item_checkbox) in self.checkbox_dic.items():

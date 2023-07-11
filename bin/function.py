@@ -10,13 +10,20 @@ import sys
 import time
 import datetime
 import threading
+import re
 from PyQt5.QtCore import QThread, pyqtSignal
 from collections import defaultdict
 
+# Import common python files.
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 import common
 import common_lsf
 
+# Import config settings.
+sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/config')
+import config
+
+JOB_STATUS = ['Killed', 'Killing', 'Cancelled', 'RUN FAIL']
 
 def set_command_env(block='', version='', flow='', vendor='', branch='', task=''):
     if block:
@@ -126,10 +133,18 @@ class IfpBuild(IfpCommon):
 
         thread_list = []
 
+        build_warning = False
+
         for item in self.task_list:
-            thread = threading.Thread(target=self.build_one_task, args=(item,))
-            thread.start()
-            thread_list.append(thread)
+            if item.Status in ['Running', 'Killing']:
+                build_warning = True
+            else:
+                thread = threading.Thread(target=self.build_one_task, args=(item,))
+                thread.start()
+                thread_list.append(thread)
+
+        if build_warning:
+            self.msg_signal.emit('*Build Warning*: Partially selected tasks are either running or killing, which will not be Builded')
 
         # Wait for thread done.
         for thread in thread_list:
@@ -138,7 +153,6 @@ class IfpBuild(IfpCommon):
         # Tell GUI build done.
         self.msg_signal.emit('Build Done.')
         self.finish_signal.emit()
-
 
 class IfpRun(IfpCommon):
     """
@@ -151,12 +165,11 @@ class IfpRun(IfpCommon):
     set_one_jobid_signal = pyqtSignal(str, str, str, str, str, str, str, str)
     set_run_time_signal = pyqtSignal(str, str, str, str, str, str, str, str)
 
-    def __init__(self, task_list, config_dic, action='RUN', debug=False, ignore_fail=False, xterm_mode=False):
+    def __init__(self, task_list, config_dic, action='RUN', debug=False, ignore_fail=False):
         super().__init__(task_list, config_dic, debug)
 
         self.action = action
         self.ignore_fail = ignore_fail
-        self.xterm_mode = xterm_mode
         self.block_version_to_run = list({(x.Block, x.Version): 1 for x in task_list}.keys())
         self.task_groups = self.group_tasks()
 
@@ -199,7 +212,7 @@ class IfpRun(IfpCommon):
                     pre_flows_bundle_tasks.extend(pre_flow_tasks)
 
                 # Cancel next task if pre task is "Cancelled" or "Killed".
-                if list(filter(lambda x: x.Status == 'Cancelled' or x.Status == 'Killed', pre_flows_bundle_tasks)) and not self.ignore_fail:
+                if list(filter(lambda x: x.Status in str(JOB_STATUS), pre_flows_bundle_tasks)) and not self.ignore_fail:
                     for flow in flow_bundle.split('|'):
                         flow_tasks = list(filter(lambda x: x.Flow == flow, tasks))
 
@@ -256,7 +269,7 @@ class IfpRun(IfpCommon):
             # Tell GUI the task run start.
             self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Running')
 
-            run_method = run_action.get('RUN_METHOD', 'local')
+            run_method = run_action.get('RUN_METHOD', '')
             self.msg_signal.emit('*Info*: running {} "{}" under {} for {} {} {} {} {} {}\n'.format(run_method,
                                                                                                    run_action['PATH'],
                                                                                                    run_action['COMMAND'],
@@ -274,26 +287,24 @@ class IfpRun(IfpCommon):
             else:
                 common.print_error('*Error*: Run path "' + str(run_action['PATH']) + '" is missing.')
 
-            if run_method == 'local':
-                if self.xterm_mode:
-                    command = 'xterm -e ' + str(command)
-            else:
-                command = str(run_method) + ' "' + str(command) + '"'
-
-                if self.xterm_mode:
-                    command = 'xterm -e ' + str(command)
-                    run_method = 'local'
+            # if run_method without -I option
+            if re.match(r'^\s*bsub\s+', run_method) or re.match(r'^\s*bsub$', run_method) or re.match(r'\s+bsub\s+', run_method) or re.match(r'\s+bsub$', run_method):
+                if not re.search('-I', run_method):
+                    run_method = run_method + ' -I '
 
             # Run command
             jobid = None
 
-            if run_method == 'local':
-                process = common.spawn_process(command)
-                jobid = 'l:{}'.format(process.pid)
-            else:
+            if run_method != '':
+                command = str(run_method) + ' "' + str(command) + '"'
+
+            if re.search(r'^\s*bsub', run_method):
                 process = common.spawn_process(command)
                 stdout = process.stdout.readline()
                 jobid = 'b:{}'.format(common.get_jobid(stdout))
+            else:
+                process = common.spawn_process(command)
+                jobid = 'l:{}'.format(process.pid)
 
             self.set_one_jobid_signal.emit(block, version, flow, vendor, branch, task, 'Job', str(jobid))
             stdout, stderr = process.communicate()
@@ -356,17 +367,24 @@ class IfpRun(IfpCommon):
                 block, version, flow, vendor, branch, task = t
 
                 if i > 0:
-                    pre_block, pre_version, pre_flow, pre_vendor, pre_branch, pre_task = tasks[i-1]
+                    pre_block, pre_version, pre_flow, pre_vendor, pre_branch, pre_task = tasks[i - 1]
                     pre_task_obj = self.config_dic['BLOCK'][pre_block][pre_version][pre_flow][pre_vendor][pre_branch][pre_task]
 
                     if (pre_task_obj.get('Status') == str(self.action) + ' PASS') or self.ignore_fail:
                         self.run_one_task(block, version, flow, vendor, branch, task)
 
-                    if (pre_task_obj.get('Status') in [str(self.action) + ' FAIL', 'Killed', 'Killing', 'Cancelled']) and (not self.ignore_fail):
+                    if (pre_task_obj.get('Status') in str(JOB_STATUS)) and (not self.ignore_fail):
                         self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Cancelled')
                         self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Cancelled'
                 else:
-                    self.run_one_task(block, version, flow, vendor, branch, task)
+                    current_task_obj = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task]
+
+                    if current_task_obj.get('Status') in ['Running', 'Killing']:
+                        while current_task_obj.get('Status') in ['Running', 'Killing']:
+                            time.sleep(5)
+                    else:
+                        self.run_one_task(block, version, flow, vendor, branch, task)
+
         elif run_type == 'parallel':
             thread_list = []
 
@@ -381,9 +399,10 @@ class IfpRun(IfpCommon):
 
     def set_all_tasks_status_queued(self):
         for task in self.task_list:
-            task.Status = 'Queued'
-            self.start_one_signal.emit(task.Block, task.Version, task.Flow, task.Vendor, task.Branch, task.Task, 'Queued')
-            self.set_run_time_signal.emit(task.Block, task.Version, task.Flow, task.Vendor, task.Branch, task.Task, 'Runtime', None)
+            if task.Status not in ['Running', 'Killing']:
+                task.Status = 'Queued'
+                self.start_one_signal.emit(task.Block, task.Version, task.Flow, task.Vendor, task.Branch, task.Task, 'Queued')
+                self.set_run_time_signal.emit(task.Block, task.Version, task.Flow, task.Vendor, task.Branch, task.Task, 'Runtime', None)
 
     def run(self):
         if self.action == 'RUN':
@@ -418,25 +437,27 @@ class IfpKill(IfpCommon):
         branch = item.Branch
         task = item.Task
         jobid = item.Job
+        status = item.Status
 
-        self.msg_signal.emit('Killing {} {} {} {} {} {}'.format(block, version, flow, vendor, branch, task))
-        self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Killing'
-        self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Killing')
+        if status == 'Running':
+            self.msg_signal.emit('Killing {} {} {} {} {} {}'.format(block, version, flow, vendor, branch, task))
+            self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Killing'
+            self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Killing')
 
-        if str(jobid).startswith('b'):
-            jobid = str(jobid)[2:]
-            (return_code, stdout, stderr) = common.run_command('bkill ' + str(jobid))
+            if str(jobid).startswith('b'):
+                jobid = str(jobid)[2:]
+                (return_code, stdout, stderr) = common.run_command('bkill ' + str(jobid))
 
-            if return_code:
-                self.msg_signal.emit('Failed on killing job "' + str(jobid) + '"')
-        elif str(jobid).startswith('l'):
-            jobid = str(jobid)[2:]
-            kill_process = 'kill -9 {}'.format(jobid)
-            (return_code, stdout, stderr) = common.run_command(kill_process)
+                if return_code:
+                    self.msg_signal.emit('Failed on killing job "' + str(jobid) + '"')
+            elif str(jobid).startswith('l'):
+                jobid = str(jobid)[2:]
+                kill_process = 'kill -9 {}'.format(jobid)
+                (return_code, stdout, stderr) = common.run_command(kill_process)
 
-            if not return_code:
-                self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Killed'
-                self.finish_one_signal.emit(block, version, flow, vendor, branch, task, 'Killed')
+                if not return_code:
+                    self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Killed'
+                    self.finish_one_signal.emit(block, version, flow, vendor, branch, task, 'Killed')
 
     def run(self):
         for item in self.task_list:

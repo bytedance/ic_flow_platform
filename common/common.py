@@ -61,13 +61,6 @@ class ThreadRun(QThread):
         super().__init__()
 
     def run(self, command_list):
-        thread_list = []
-
         for command in command_list:
             thread = threading.Thread(target=run_command, args=(command,))
             thread.start()
-            thread_list.append(thread)
-
-        # Wait for thread done.
-        for thread in thread_list:
-            thread.join()

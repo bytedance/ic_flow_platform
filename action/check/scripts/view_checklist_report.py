@@ -105,7 +105,7 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         self.gen_main_tab()
         self.resize(685, 350)
-        common_pyqt5.move_gui_to_window_center(self)
+        common_pyqt5.center_window(self)
         self.setWindowTitle(self.checklist_report)
 
     def gen_main_tab(self):
@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
         return (widget)
 
     def open_log_file(self, log_file):
-        command = '/usr/bin/xterm -T ' + str(log_file) + ' -e "/usr/bin/vim ' + str(log_file) + '"'
+        command = '/bin/xterm -T ' + str(log_file) + ' -e "/usr/bin/vim ' + str(log_file) + '"'
         (returnCode, stdout, stderr) = common.run_command(command)
 
         if returnCode != 0:

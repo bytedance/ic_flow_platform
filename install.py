@@ -68,11 +68,10 @@ def gen_config_file():
     else:
         try:
             with open(config_file, 'w') as CF:
-                CF.write('''
-# Only default_yaml_administrators can edit default.yaml on ifp GUI directory.
+                CF.write('''# Only default_yaml_administrators can edit default.yaml on ifp GUI directory.
 default_yaml_administrators = ""
 
-# send result command
+# send result command.
 send_result_command = ""
 ''')
 

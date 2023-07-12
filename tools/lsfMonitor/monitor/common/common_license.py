@@ -110,11 +110,11 @@ class GetLicenseInfo():
                 for job in as_completed(job_list):
                     for tuple_line in job.result():
                         if isinstance(tuple_line, bytes):
-                            stdout_list.extend(str(tuple_line, 'utf-8').split('\n'))
+                            stdout_list.extend(str(tuple_line, 'unicode_escape').split('\n'))
         else:
             lmstat_command = self.get_lmstat_command()
             (return_code, stdout, stderr) = common.run_command(lmstat_command)
-            stdout_list = str(stdout, 'utf-8').split('\n')
+            stdout_list = str(stdout, 'unicode_escape').split('\n')
 
         # Parse lmstat output message.
         license_dic = self.init_license_dic()
@@ -281,8 +281,8 @@ class FilterLicenseDic():
     Filter license_dic with server/vendor/feature/submit_host/execute_host/user/show_mode specification.
     Get a new license_dic.
     """
-    def __init__(self):
-        pass
+    def __init__(self, fuzzy_mode=True):
+        self.fuzzy_mode = fuzzy_mode
 
     def filter_by_server(self, license_dic, server_list):
         """
@@ -317,7 +317,6 @@ class FilterLicenseDic():
         """
         Filter license_dic with specified feature(s).
         """
-        # Get filtered_feature_list from exact_feature_list/fuzzy_feature_list.
         exact_feature_list = []
         fuzzy_feature_list = []
         filtered_feature_list = []
@@ -329,10 +328,11 @@ class FilterLicenseDic():
                         if feature not in exact_feature_list:
                             exact_feature_list.append(feature)
 
-                    for specified_feature in feature_list:
-                        if re.search(re.escape(specified_feature.lower()), feature.lower()):
-                            if feature not in fuzzy_feature_list:
-                                fuzzy_feature_list.append(feature)
+                    if self.fuzzy_mode:
+                        for specified_feature in feature_list:
+                            if re.search(re.escape(specified_feature.lower()), feature.lower()):
+                                if feature not in fuzzy_feature_list:
+                                    fuzzy_feature_list.append(feature)
 
         if exact_feature_list:
             filtered_feature_list = exact_feature_list
@@ -362,31 +362,56 @@ class FilterLicenseDic():
 
         return new_license_dic
 
-    def filter_by_feature_usage_attribute(self, license_dic, feature_usage_attribute, feature_usage_attribute_list):
+    def filter_by_feature_usage_attribute(self, license_dic, feature_usage_attribute, feature_usage_attribute_value_list):
         """
         Filter license_dic with specified feature_usage_attribute (user/execute_host/submit_host/version/license_server/start_time/license_num).
         """
-        new_license_dic = {}
+        exact_feature_usage_attribute_value_list = []
+        fuzzy_feature_usage_attribute_value_list = []
+        filtered_feature_usage_attribute_value_list = []
 
         for license_server in license_dic.keys():
             for vendor_daemon in license_dic[license_server]['vendor_daemon'].keys():
                 for feature in license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'].keys():
                     for (i, usage_dic) in enumerate(license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use_info']):
-                        if (usage_dic[feature_usage_attribute] in feature_usage_attribute_list) or ('ALL' in feature_usage_attribute_list):
-                            new_license_dic.setdefault(license_server, {'license_files': license_dic[license_server]['license_files'],
-                                                                        'license_server_status': license_dic[license_server]['license_server_status'],
-                                                                        'license_server_version': license_dic[license_server]['license_server_version'],
-                                                                        'vendor_daemon': {}})
-                            new_license_dic[license_server]['vendor_daemon'].setdefault(vendor_daemon, {'vendor_daemon_status': license_dic[license_server]['vendor_daemon'][vendor_daemon]['vendor_daemon_status'],
-                                                                                                        'vendor_daemon_version': license_dic[license_server]['vendor_daemon'][vendor_daemon]['vendor_daemon_version'],
-                                                                                                        'feature': {},
-                                                                                                        'expires': license_dic[license_server]['vendor_daemon'][vendor_daemon]['expires']})
-                            new_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'].setdefault(feature, {'issued': license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['issued'],
-                                                                                                                            'in_use': license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use'],
-                                                                                                                            'in_use_info_string': [],
-                                                                                                                            'in_use_info': []})
-                            new_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use_info_string'].append(license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use_info_string'][i])
-                            new_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use_info'].append(usage_dic)
+                        if (usage_dic[feature_usage_attribute] in feature_usage_attribute_value_list) or ('ALL' in feature_usage_attribute_value_list):
+                            if usage_dic[feature_usage_attribute] not in exact_feature_usage_attribute_value_list:
+                                exact_feature_usage_attribute_value_list.append(usage_dic[feature_usage_attribute])
+
+                        if self.fuzzy_mode:
+                            for feature_usage_attribute_value in feature_usage_attribute_value_list:
+                                if re.search(re.escape(feature_usage_attribute_value.lower()), usage_dic[feature_usage_attribute].lower()):
+                                    if usage_dic[feature_usage_attribute] not in exact_feature_usage_attribute_value_list:
+                                        fuzzy_feature_usage_attribute_value_list.append(usage_dic[feature_usage_attribute])
+
+        if exact_feature_usage_attribute_value_list:
+            filtered_feature_usage_attribute_value_list = exact_feature_usage_attribute_value_list
+        elif fuzzy_feature_usage_attribute_value_list:
+            filtered_feature_usage_attribute_value_list = fuzzy_feature_usage_attribute_value_list
+
+        # Filter by usage attribute.
+        new_license_dic = {}
+
+        if filtered_feature_usage_attribute_value_list:
+            for license_server in license_dic.keys():
+                for vendor_daemon in license_dic[license_server]['vendor_daemon'].keys():
+                    for feature in license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'].keys():
+                        for (i, usage_dic) in enumerate(license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use_info']):
+                            if (usage_dic[feature_usage_attribute] in filtered_feature_usage_attribute_value_list) or ('ALL' in filtered_feature_usage_attribute_value_list):
+                                new_license_dic.setdefault(license_server, {'license_files': license_dic[license_server]['license_files'],
+                                                                            'license_server_status': license_dic[license_server]['license_server_status'],
+                                                                            'license_server_version': license_dic[license_server]['license_server_version'],
+                                                                            'vendor_daemon': {}})
+                                new_license_dic[license_server]['vendor_daemon'].setdefault(vendor_daemon, {'vendor_daemon_status': license_dic[license_server]['vendor_daemon'][vendor_daemon]['vendor_daemon_status'],
+                                                                                                            'vendor_daemon_version': license_dic[license_server]['vendor_daemon'][vendor_daemon]['vendor_daemon_version'],
+                                                                                                            'feature': {},
+                                                                                                            'expires': license_dic[license_server]['vendor_daemon'][vendor_daemon]['expires']})
+                                new_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'].setdefault(feature, {'issued': license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['issued'],
+                                                                                                                                'in_use': license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use'],
+                                                                                                                                'in_use_info_string': [],
+                                                                                                                                'in_use_info': []})
+                                new_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use_info_string'].append(license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use_info_string'][i])
+                                new_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use_info'].append(usage_dic)
 
         return new_license_dic
 

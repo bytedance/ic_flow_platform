@@ -46,24 +46,6 @@ class GetLicenseInfo():
 
         return lmstat_command
 
-    def init_license_dic(self):
-        """
-        Initial license_dic.
-        """
-        license_dic = {}
-
-        if 'LM_LICENSE_FILE' in os.environ:
-            lm_license_file_list = os.environ['LM_LICENSE_FILE'].split(':')
-
-            for lm_license_file in lm_license_file_list:
-                if lm_license_file:
-                    license_dic[lm_license_file] = {'license_files': '',
-                                                    'license_server_status': 'UNKNOWN',
-                                                    'license_server_version': '',
-                                                    'vendor_daemon': {}}
-
-        return license_dic
-
     def get_license_info(self):
         """
         Get EDA liecnse feature usage and expires information on license_dic.
@@ -117,7 +99,7 @@ class GetLicenseInfo():
             stdout_list = str(stdout, 'unicode_escape').split('\n')
 
         # Parse lmstat output message.
-        license_dic = self.init_license_dic()
+        license_dic = {}
         license_server = ''
         vendor_daemon = ''
         feature = ''

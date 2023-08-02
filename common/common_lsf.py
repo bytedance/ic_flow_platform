@@ -169,7 +169,6 @@ def get_lsload_info(command='lsload -w'):
     ====
     """
     lsload_dic = get_command_dict(command)
-
     return lsload_dic
 
 

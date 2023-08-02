@@ -23,7 +23,7 @@ import common_lsf
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/config')
 import config
 
-JOB_STATUS = ['Killed', 'Killing', 'Cancelled', 'RUN FAIL']
+UNEXPECTED_JOB_STATUS = ['Killed', 'Killing', 'Cancelled', 'RUN FAIL']
 
 def set_command_env(block='', version='', flow='', vendor='', branch='', task=''):
     if block:
@@ -59,19 +59,19 @@ class IfpCommon(QThread):
         if self.debug:
             print(message)
 
-    def print_output(self, block, version, flow, vendor, branch, task, output):
+    def print_output(self, block, version, flow, vendor, branch, task, result, output):
         self.debug_print('')
-        self.debug_print('Block(' + str(block) + ')  Version(' + str(version) + ')  Flow(' + str(flow) + ')  Vendor(' + str(vendor) + ')  Branch(' + str(branch) + ')  Task(' + str(task) + ')')
-        self.debug_print('----------------')
+        self.debug_print('[DEBUG] Block(' + str(block) + ')  Version(' + str(version) + ')  Flow(' + str(flow) + ')  Vendor(' + str(vendor) + ')  Branch(' + str(branch) + ')  Task(' + str(task) + ')  :  ' + str(result))
+        self.debug_print('[DEBUG] ----------------')
 
         try:
             for line in str(output, 'utf-8').split('\n'):
                 if line:
-                    self.debug_print(line)
+                    self.debug_print('[DEBUG] ' + str(line))
         except Exception:
             pass
 
-        self.debug_print('----------------')
+        self.debug_print('[DEBUG] ----------------')
         self.debug_print('')
 
 
@@ -121,7 +121,7 @@ class IfpBuild(IfpCommon):
                 self.msg_signal.emit('Build failed as: {}'.format(stderr.decode('utf-8')))
                 result = 'BUILD FAIL'
 
-                self.print_output(block, version, flow, vendor, branch, task, stdout + stderr)
+            self.print_output(block, version, flow, vendor, branch, task, result, stdout + stderr)
         else:
             result = 'BUILD undefined'
 
@@ -212,7 +212,7 @@ class IfpRun(IfpCommon):
                     pre_flows_bundle_tasks.extend(pre_flow_tasks)
 
                 # Cancel next task if pre task is "Cancelled" or "Killed".
-                if list(filter(lambda x: x.Status in str(JOB_STATUS), pre_flows_bundle_tasks)) and not self.ignore_fail:
+                if list(filter(lambda x: x.Status in str(UNEXPECTED_JOB_STATUS), pre_flows_bundle_tasks)) and not self.ignore_fail:
                     for flow in flow_bundle.split('|'):
                         flow_tasks = list(filter(lambda x: x.Flow == flow, tasks))
 
@@ -334,8 +334,8 @@ class IfpRun(IfpCommon):
                 else:
                     result = str(self.action) + ' FAIL'
 
-                    self.print_output(block, version, flow, vendor, branch, task, stdout + stderr)
-                    self.msg_signal.emit('*Info*: job done for {} {} {} {} {} {}\n'.format(block, version, flow, vendor, branch, task))
+                self.print_output(block, version, flow, vendor, branch, task, result, stdout + stderr)
+                self.msg_signal.emit('*Info*: job done for {} {} {} {} {} {}\n'.format(block, version, flow, vendor, branch, task))
         else:
             finish_time = datetime.datetime.now()
             result = str(self.action) + ' undefined'
@@ -373,7 +373,7 @@ class IfpRun(IfpCommon):
                     if (pre_task_obj.get('Status') == str(self.action) + ' PASS') or self.ignore_fail:
                         self.run_one_task(block, version, flow, vendor, branch, task)
 
-                    if (pre_task_obj.get('Status') in str(JOB_STATUS)) and (not self.ignore_fail):
+                    if (pre_task_obj.get('Status') in str(UNEXPECTED_JOB_STATUS)) and (not self.ignore_fail):
                         self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Cancelled')
                         self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Cancelled'
                 else:
@@ -502,7 +502,7 @@ class IfpCheck(IfpCommon):
             else:
                 result = 'FAILED'
 
-                self.print_output(block, version, flow, vendor, branch, task, stdout + stderr)
+            self.print_output(block, version, flow, vendor, branch, task, result, stdout + stderr)
         else:
             result = 'CHECK undefined'
 
@@ -595,7 +595,7 @@ class IfpSummary(IfpCommon):
             else:
                 result = 'SUM FAIL'
 
-                self.print_output(block, version, flow, vendor, branch, task, stdout + stderr)
+            self.print_output(block, version, flow, vendor, branch, task, result, stdout + stderr)
         else:
             result = 'SUMMARY undefined'
 
@@ -692,7 +692,7 @@ class IfpRelease(IfpCommon):
             else:
                 result = 'RELEASE FAIL'
 
-                self.print_output(block, version, flow, vendor, branch, task, stdout + stderr)
+            self.print_output(block, version, flow, vendor, branch, task, result, stdout + stderr)
         else:
             result = 'RELEASE undefined'
 

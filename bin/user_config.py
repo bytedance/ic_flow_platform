@@ -2368,32 +2368,33 @@ class DefaultConfig(QMainWindow):
         if os.path.exists(yaml_file):
             default_dic = yaml.safe_load(open(yaml_file, 'r'))
 
-            if 'VAR' in default_dic:
-                task_dic['VAR'] = copy.deepcopy(default_dic['VAR'])
+            if default_dic:
+                if 'VAR' in default_dic:
+                    task_dic['VAR'] = copy.deepcopy(default_dic['VAR'])
 
-            if 'TASK' in default_dic:
-                for key in default_dic['TASK'].keys():
-                    combs.append(key)
-                    flow = key.split(':')[0]
-                    vendor = key.split(':')[1]
-                    task = key.split(':')[2]
-                    task_dic['TASK'].setdefault(flow, {})
-                    task_dic['TASK'][flow].setdefault(vendor, {})
-                    task_dic['TASK'][flow][vendor].setdefault(task, {})
+                if 'TASK' in default_dic:
+                    for key in default_dic['TASK'].keys():
+                        combs.append(key)
+                        flow = key.split(':')[0]
+                        vendor = key.split(':')[1]
+                        task = key.split(':')[2]
+                        task_dic['TASK'].setdefault(flow, {})
+                        task_dic['TASK'][flow].setdefault(vendor, {})
+                        task_dic['TASK'][flow][vendor].setdefault(task, {})
 
-                    if flow not in flows:
-                        flows.append(flow)
+                        if flow not in flows:
+                            flows.append(flow)
 
-                    if vendor not in vendors:
-                        vendors.append(vendor)
+                        if vendor not in vendors:
+                            vendors.append(vendor)
 
-                    if task not in tasks:
-                        tasks.append(task)
+                        if task not in tasks:
+                            tasks.append(task)
 
-                    for category in default_dic['TASK'][key].keys():
-                        task_dic['TASK'][flow][vendor][task].setdefault(category, {})
-                        for item in default_dic['TASK'][key][category].keys():
-                            task_dic['TASK'][flow][vendor][task][category][item] = default_dic['TASK'][key][category][item]
+                        for category in default_dic['TASK'][key].keys():
+                            task_dic['TASK'][flow][vendor][task].setdefault(category, {})
+                            for item in default_dic['TASK'][key][category].keys():
+                                task_dic['TASK'][flow][vendor][task][category][item] = default_dic['TASK'][key][category][item]
 
         return [task_dic, combs, flows, vendors, tasks]
 

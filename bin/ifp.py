@@ -971,7 +971,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                                 (return_code, stdout, stderr) = common.run_command('ps -p {}'.format(pid))
 
                                 if not return_code:
-                                    process_info = 'local process info:\n{}'.format(stdout.decode('utf-9'))
+                                    process_info = 'local process info:\n{}'.format(stdout.decode('utf-8'))
                                     self.update_message_text(process_info)
                                 else:
                                     self.update_message_text('Failed to get local process {} info'.format(pid))

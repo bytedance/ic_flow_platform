@@ -1033,7 +1033,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     def pop_xterm(self, item):
         task = self.config_dic['BLOCK'][item.Block][item.Version][item.Flow][item.Vendor][item.Branch][item.Task]
-        command = 'xterm -e "cd ' + str(task.PATH) + '; ' + str(os.environ['SHELL']) + '"'
+        command = str(config.xterm_command) + ' "cd ' + str(task.PATH) + '; exec ' + str(os.environ['SHELL']) + '"'
         thread_run = common.ThreadRun()
         thread_run.run([command, ])
 

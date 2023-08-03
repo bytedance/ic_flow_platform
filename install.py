@@ -71,6 +71,9 @@ def gen_config_file():
                 CF.write('''# Only default_yaml_administrators can edit default.yaml on ifp GUI directory.
 default_yaml_administrators = ""
 
+# xterm command.
+xterm_command = "xterm -e"
+
 # send result command.
 send_result_command = ""
 ''')

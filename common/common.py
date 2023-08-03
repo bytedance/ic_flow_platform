@@ -45,8 +45,8 @@ def get_jobid(stdout):
     jobid = ''
 
     for line in stdout.split('\n'):
-        if re.match(r'^Job\s+\<(\d+)\>\s+is\s+submitted\s+to\s+queue.*$', line):
-            my_match = re.match(r'^Job\s+\<(\d+)\>\s+is\s+submitted\s+to\s+queue.*$', line)
+        if re.match(r'^Job\s+\<(\d+)\>\s+is\s+submitted\s+to.*$', line):
+            my_match = re.match(r'^Job\s+\<(\d+)\>\s+is\s+submitted\s+to.*$', line)
             jobid = my_match.group(1)
 
     return jobid

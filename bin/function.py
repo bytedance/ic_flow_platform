@@ -300,7 +300,7 @@ class IfpRun(IfpCommon):
 
             if re.search(r'^\s*bsub', run_method):
                 process = common.spawn_process(command)
-                stdout = process.stdout.readline()
+                stdout = process.stdout.readline().decode('utf-8')
                 jobid = 'b:{}'.format(common.get_jobid(stdout))
             else:
                 process = common.spawn_process(command)

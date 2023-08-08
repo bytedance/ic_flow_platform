@@ -132,6 +132,8 @@ class MainWindow(QMainWindow):
         self.specified_feature = specified_feature
         self.disable_license = disable_license
 
+        self.lsf_unit_for_limits = common_lsf.get_lsf_unit_for_limits()
+
         # Get LSF queue/host information.
         current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -184,12 +186,15 @@ class MainWindow(QMainWindow):
         my_show_message.start()
 
         # Get self.license_dic.
-        if config.lmstat_path:
-            my_get_license_info = common_license.GetLicenseInfo(lmstat_path=config.lmstat_path, bsub_command=config.lmstat_bsub_command)
-        else:
-            my_get_license_info = common_license.GetLicenseInfo(bsub_command=config.lmstat_bsub_command)
+        if ('LM_LICENSE_FILE' in os.environ) and os.environ['LM_LICENSE_FILE']:
+            if config.lmstat_path:
+                my_get_license_info = common_license.GetLicenseInfo(lmstat_path=config.lmstat_path, bsub_command=config.lmstat_bsub_command)
+            else:
+                my_get_license_info = common_license.GetLicenseInfo(bsub_command=config.lmstat_bsub_command)
 
-        self.license_dic = my_get_license_info.get_license_info()
+            self.license_dic = my_get_license_info.get_license_info()
+        else:
+            time.sleep(0.01)
 
         # Print loading license informaiton message with GUI. (END)
         my_show_message.terminate()
@@ -668,15 +673,14 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         else:
             if self.job_tab_current_job_dic[self.job_tab_current_job]['rusage_mem'] != '':
                 rusage_mem_value = self.job_tab_current_job_dic[self.job_tab_current_job]['rusage_mem']
-                lsf_unit_for_limits = common_lsf.get_lsf_unit_for_limits()
 
-                if lsf_unit_for_limits == 'KB':
+                if self.lsf_unit_for_limits == 'KB':
                     rusage_mem_value = round(int(rusage_mem_value)/1024/1024, 1)
-                elif lsf_unit_for_limits == 'MB':
+                elif self.lsf_unit_for_limits == 'MB':
                     rusage_mem_value = round(int(rusage_mem_value)/1024, 1)
-                elif lsf_unit_for_limits == 'GB':
+                elif self.lsf_unit_for_limits == 'GB':
                     rusage_mem_value = round(float(rusage_mem_value), 1)
-                elif lsf_unit_for_limits == 'TB':
+                elif self.lsf_unit_for_limits == 'TB':
                     rusage_mem_value = round(int(rusage_mem_value)*1024, 1)
 
                 self.job_tab_rusage_mem_line.setText(str(rusage_mem_value) + ' G')
@@ -1033,15 +1037,14 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             if str(job_dic[job]['rusage_mem']) != '':
                 item = QTableWidgetItem()
                 rusage_mem_value = job_dic[job]['rusage_mem']
-                lsf_unit_for_limits = common_lsf.get_lsf_unit_for_limits()
 
-                if lsf_unit_for_limits == 'KB':
+                if self.lsf_unit_for_limits == 'KB':
                     rusage_mem_value = round(int(rusage_mem_value)/1024/1024, 1)
-                elif lsf_unit_for_limits == 'MB':
+                elif self.lsf_unit_for_limits == 'MB':
                     rusage_mem_value = round(int(rusage_mem_value)/1024, 1)
-                elif lsf_unit_for_limits == 'GB':
+                elif self.lsf_unit_for_limits == 'GB':
                     rusage_mem_value = round(float(rusage_mem_value), 1)
-                elif lsf_unit_for_limits == 'TB':
+                elif self.lsf_unit_for_limits == 'TB':
                     rusage_mem_value = round(int(rusage_mem_value)*1024, 1)
 
                 item.setData(Qt.DisplayRole, rusage_mem_value)

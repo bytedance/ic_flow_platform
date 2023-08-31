@@ -84,8 +84,10 @@ class Config:
             else:
                 if kind == 'user':
                     if ('PROJECT' not in config_dic) or (not config_dic['PROJECT']):
-                        common.print_error('*Error*: failed to get PROJECT name from file {}.'.format(config_file))
-                        sys.exit(1)
+                        config_dic['PROJECT'] = ''
+
+                    if ('GROUP' not in config_dic) or (not config_dic['GROUP']):
+                        config_dic['GROUP'] = ''
 
                     if ('VAR' not in config_dic) or (not config_dic['VAR']):
                         config_dic['VAR'] = {}
@@ -117,6 +119,7 @@ class Config:
     def get_config_obj(self, config_file):
         # self.PROJECT saves project information from user config file.
         self.PROJECT = ''
+        self.GROUP = ''
         # self.var_dic saves all VAR settings from user config file.
         self.var_dic = {'IFP_INSTALL_PATH': os.environ['IFP_INSTALL_PATH'],
                         'CWD': CWD}
@@ -125,21 +128,6 @@ class Config:
         # self.task_dic saves all task configuration information.
         self.task_dic = {}
 
-        # Parse default config file.
-        default_config_dic = {}
-        default_config_file = str(os.environ['IFP_INSTALL_PATH']) + '/config/default.' + str(self.PROJECT) + '.yaml'
-
-        if not os.path.exists(default_config_file):
-            default_config_file = str(os.environ['IFP_INSTALL_PATH']) + '/config/default.yaml'
-
-        if os.path.exists(default_config_file):
-            default_config_dic = self.parse_config_file(default_config_file, kind='default')
-
-            if ('VAR' in default_config_dic) and isinstance(default_config_dic['VAR'], dict):
-                for (key, value) in default_config_dic['VAR'].items():
-                    if isinstance(value, str):
-                        self.var_dic[key] = value
-
         # Parse user config file. (With parallel tasks)
         user_config_dic = self.parse_config_file(config_file, kind='user')
 
@@ -147,6 +135,26 @@ class Config:
             if 'PROJECT' in user_config_dic:
                 self.PROJECT = user_config_dic['PROJECT']
 
+            if 'GROUP' in user_config_dic:
+                self.GROUP = user_config_dic['GROUP']
+
+        # Parse default config file.
+        self.default_config_file = common.get_default_yaml_path(self.PROJECT, self.GROUP)
+
+        # self.var_dic saves all VAR settings from env VAR
+        self.env_dic = common.get_env_dic(project=self.PROJECT, group=self.GROUP)
+        self.var_dic.update(self.env_dic)
+
+        default_config_dic = {}
+        if os.path.exists(self.default_config_file):
+            default_config_dic = self.parse_config_file(self.default_config_file, kind='default')
+
+            if ('VAR' in default_config_dic) and isinstance(default_config_dic['VAR'], dict):
+                for (key, value) in default_config_dic['VAR'].items():
+                    if isinstance(value, str):
+                        self.var_dic[key] = value
+
+        if user_config_dic:
             if ('VAR' in user_config_dic) and isinstance(user_config_dic['VAR'], dict):
                 for (key, value) in user_config_dic['VAR'].items():
                     if isinstance(value, str):
@@ -214,7 +222,7 @@ class Config:
                                                                                             task_obj.ACTION.setdefault(action, {})
                                                                                             task_obj.ACTION[action][action_attr] = self.expand_var(default_action_dic[action_attr], **task_var_dic)
                                                                             else:
-                                                                                common.print_warning('*Warning*: invalid action "' + str(action) + '" on ' + str(default_config_file) + '.')
+                                                                                common.print_warning('*Warning*: invalid action "' + str(action) + '" on ' + str(self.default_config_file) + '.')
 
                                                             # Re-write task_obj task attribute with user configuration.
                                                             if user_task_dic and isinstance(user_task_dic, dict):
@@ -307,6 +315,7 @@ class Config:
     @property
     def config_dic(self):
         config_dic = {'PROJECT': self.PROJECT,
+                      'GROUP': self.GROUP,
                       'VAR': self.var_dic,
                       'BLOCK': {},
                       'RUN_TYPE': {},
@@ -571,7 +580,7 @@ class Task(Common):
         super().__init__(name)
         self.ACTION = {}
         self.Visible = True
-        self.Selected = True
+        self.Selected = False
         self.PATH = None
         self.Status = None
         self.Check = None

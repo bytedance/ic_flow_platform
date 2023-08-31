@@ -12,15 +12,16 @@ import time
 import yaml
 import sys
 
-from PyQt5 import QtGui
-from PyQt5.QtWidgets import QWidget, QMainWindow, QAction, QPushButton, QLabel, QHeaderView, QVBoxLayout, QHBoxLayout, QLineEdit, QTableView, QAbstractItemView, QMenu, QToolTip, QDesktopWidget, QMessageBox, QComboBox, QFileDialog, QApplication, QGridLayout
+from PyQt5.QtWidgets import QWidget, QMainWindow, QAction, QPushButton, QLabel, QHeaderView, QVBoxLayout, QHBoxLayout, QLineEdit, QTableView, QAbstractItemView, QMenu, QToolTip, QDesktopWidget, QMessageBox, QComboBox, QFileDialog, QApplication
 from PyQt5.QtGui import QBrush, QFont, QColor, QStandardItem, QStandardItemModel, QCursor, QPalette
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread
 
 os.environ['PYTHONUNBUFFERED'] = '1'
 
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/config')
+sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 from config import default_yaml_administrators
+from common_pyqt5 import Dialog, CustomDelegate
 
 
 class AutoVivification(dict):
@@ -40,15 +41,15 @@ def center(self):
 
 def parsing_blank_setting():
     run_method_example = '\n1. *Empty for local*\n2. bsub -q normal -n 8 -R "rusage[mem=80000]" -Is\n3. xterm -e bsub -q normal -n 8 -R "rusage[mem=80000]" -Is'
-    blank_setting = {'BUILD': {'PATH': {'example': '$DEFAULT_PATH'},
+    blank_setting = {'BUILD': {'PATH': {'example': '${DEFAULT_PATH}'},
                                'COMMAND': {'example': './gen_block_run_dir.pl -c ${BLOCK}.block_flow.configure'},
                                'RUN_METHOD': {'example': run_method_example}
                                },
-                     'RUN': {'PATH': {'example': '$DEFAULT_PATH'},
+                     'RUN': {'PATH': {'example': '${DEFAULT_PATH}'},
                              'COMMAND': {'example': 'make presta'},
                              'RUN_METHOD': {'example': run_method_example}
                              },
-                     'CHECK': {'PATH': {'example': '$DEFAULT_PATH/syn_dc'},
+                     'CHECK': {'PATH': {'example': '${DEFAULT_PATH}/syn_dc'},
                                'COMMAND': {'example': '${IFP_INSTALL_PATH}/function/check/syn/synopsys/syn_synopsys.syn_dc.py -b ${BLOCK}'},
                                'RUN_METHOD': {'example': run_method_example},
                                'VIEWER': {'example': '${IFP_INSTALL_PATH}/function/check/tools/view_checklist_report.py -i'},
@@ -88,8 +89,20 @@ class UserConfig(QMainWindow):
         self.top_widget.setLayout(self.top_layout)
         self.setCentralWidget(self.top_widget)
 
+        self.header_menu = QMenu()
+        self.hide_column_menu = QMenu()
+        self.hide_branches_menu = QMenu()
+        self.header_column_mapping = {'Block': 0,
+                                      'Version': 1,
+                                      'Flow': 3,
+                                      'Vendor': 4,
+                                      'Branch': 5,
+                                      'Task': 7
+                                      }
+        self.branch_row_mapping = AutoVivification()
+        self.branch_show_flag = AutoVivification()
+
         self.setup_table = DraggableTableView()
-        # self.setup_table = QTableView()
         self.setup_table.exchange_flag.connect(self.exchange_task)
         self.setup_model = QStandardItemModel(0, 6)
         self.setup_table.setModel(self.setup_model)
@@ -103,16 +116,7 @@ class UserConfig(QMainWindow):
         self.config_path_edit.setText(self.config_file)
         self.config_path_edit.setEnabled(False)
 
-        self.project_var_widget = QWidget()
-        self.project_var_layout = QHBoxLayout()
-        self.project_var_widget.setLayout(self.project_var_layout)
-        self.project_label = QLabel('Project     ')
-        self.project_edit = QLineEdit()
-        self.project_edit.setFixedWidth(250)
-        self.var_label = QLabel('Var     ')
-        self.var_edit = QLineEdit()
-        self.var_edit.setPlaceholderText('DEFAULT_PATH = ${CWD}/${BLOCK}/${BLOCK}_${VERSION}_${BRANCH};')
-
+        self.ifp_env_setting = AutoVivification()
         self.user_input = AutoVivification()
         self.detailed_setting = AutoVivification()
         self.blank_setting = parsing_blank_setting()
@@ -136,24 +140,13 @@ class UserConfig(QMainWindow):
 
         self.child = None
 
+        self.update_stage_flag = True
         self.cwd = os.getcwd()
         center(self)
 
     def init_ui(self):
         self.config_path_layout.addWidget(self.config_path_label)
         self.config_path_layout.addWidget(self.config_path_edit)
-
-        self.project_var_layout.addWidget(self.project_label)
-        self.project_var_layout.addWidget(self.project_edit)
-        self.project_var_layout.addStretch(1)
-        self.project_var_layout.addWidget(self.var_label)
-        self.project_var_layout.addWidget(self.var_edit)
-
-        self.project_var_layout.setStretch(0, 1)
-        self.project_var_layout.setStretch(1, 5)
-        self.project_var_layout.setStretch(2, 1)
-        self.project_var_layout.setStretch(3, 1)
-        self.project_var_layout.setStretch(4, 20)
 
         header = ['Block', 'Version', '', 'Flow', 'Vendor', 'Branch', '', 'Task']
 
@@ -167,15 +160,14 @@ class UserConfig(QMainWindow):
         self.setup_table.setColumnWidth(6, 1)
         self.setup_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
 
-        self.setup_table.setStyleSheet('font-family : calibri; font-size : 15px')
         self.setup_table.setShowGrid(True)
         self.setup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
 
         self.setup_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.setup_table.customContextMenuRequested.connect(self.generate_menu)
+        self.setup_table.setItemDelegate(CustomDelegate(wrap_columns=[0, 1, 4]))
 
         self.top_layout.addWidget(self.config_path_widget)
-        self.top_layout.addWidget(self.project_var_widget)
         self.top_layout.addWidget(self.setup_table)
 
         self.thread = QThread()
@@ -186,7 +178,43 @@ class UserConfig(QMainWindow):
         self.thread.start()
         return self.top_widget
 
+    def show_or_hide_column(self):
+        action = self.sender()
+
+        if action.text() not in self.header_column_mapping.keys():
+            return
+
+        if action.isChecked():
+            self.setup_table.showColumn(self.header_column_mapping[action.text()])
+
+            if action.text() == 'Task':
+                self.setup_table.showColumn(6)
+            elif action.text() == 'Flow':
+                self.setup_table.showColumn(2)
+        else:
+            self.setup_table.hideColumn(self.header_column_mapping[action.text()])
+
+            if action.text() == 'Task':
+                self.setup_table.hideColumn(6)
+            elif action.text() == 'Flow':
+                self.setup_table.hideColumn(2)
+
+        self.update_state(self.state)
+
+    def show_or_hide_branch(self):
+        action = self.sender()
+
+        if action.isChecked():
+            for row in self.branch_row_mapping[action.text()]:
+                self.setup_table.showRow(row)
+        else:
+            for row in self.branch_row_mapping[action.text()]:
+                self.setup_table.hideRow(row)
+
     def update_state(self, state):
+        if not self.update_stage_flag:
+            return
+
         self.state = state
 
         for i in range(self.setup_model.rowCount()):
@@ -216,13 +244,6 @@ class UserConfig(QMainWindow):
             self.setup_model.setItem(i, 7, item)
 
         self.setup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setup_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.setup_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.setup_table.setColumnWidth(2, 2)
-        self.setup_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self.setup_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.setup_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
-        self.setup_table.setColumnWidth(6, 1)
         self.setup_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
 
     def parsing_default_setting(self, yaml_file):
@@ -307,8 +328,10 @@ class UserConfig(QMainWindow):
 
                 if self.priority[block][block_version] == {}:
                     ordered_flow = setting['BLOCK'][block][version].keys()
+
                     for i, flow in enumerate(ordered_flow):
                         self.priority[block][block_version][flow] = i + 1
+
                     final_priority[1] = list(ordered_flow)
                 else:
 
@@ -448,6 +471,7 @@ class UserConfig(QMainWindow):
 
     def parsing_user_setting(self):
         self.user_input = AutoVivification()
+        self.branch_row_mapping = AutoVivification()
 
         for i in range(self.setup_model.rowCount()):
             block = self.setup_model.index(i, 0).data()
@@ -456,6 +480,11 @@ class UserConfig(QMainWindow):
             vendor = self.setup_model.index(i, 4).data()
             branch = self.setup_model.index(i, 5).data()
             task = self.setup_model.index(i, 7).data()
+
+            if branch not in self.branch_row_mapping.keys():
+                self.branch_row_mapping[branch] = [i]
+            else:
+                self.branch_row_mapping[branch].append(i)
 
             if not block == self.table_info[i][0] and not self.span_info[i][0] == {}:
                 self.table_info[i][0] = block
@@ -504,14 +533,7 @@ class UserConfig(QMainWindow):
 
     def parsing_final_setting(self):
         self.parsing_user_setting()
-
-        self.final_setting['PROJECT'] = self.project_edit.text()
         self.final_setting['VAR'] = {}
-
-        for item in self.var_edit.text().split(';'):
-            if len(item.split('=')) == 2:
-                self.final_setting['VAR'][item.split('=')[0].strip()] = item.split('=')[1].strip()
-
         self.final_setting['BLOCK'] = {}
 
         for block in self.user_input['BLOCK'].keys():
@@ -613,14 +635,6 @@ class UserConfig(QMainWindow):
         if self.raw_setting is None:
             return
 
-        if 'PROJECT' in self.raw_setting.keys():
-            self.project_edit.setText(self.raw_setting['PROJECT'])
-
-        if ('VAR' in self.raw_setting.keys()) and self.raw_setting['VAR']:
-            self.var_edit.setText(';'.join(['%s=%s' % (key, self.raw_setting['VAR'][key]) for key in self.raw_setting['VAR'].keys()]))
-        else:
-            self.raw_setting['VAR'] = {}
-
         self.draw_table(self.raw_setting, stage='load')
         self.parsing_user_setting()
 
@@ -629,9 +643,6 @@ class UserConfig(QMainWindow):
         self.save_flag.emit(True)
 
     def generate_menu(self, pos):
-        if self.project_edit.text() == '':
-            Dialog('WARNING', 'Please enter project name firstly', QMessageBox.Warning)
-            return
 
         menu = QMenu()
         self.current_selected_row = self.setup_table.currentIndex().row()
@@ -811,41 +822,51 @@ class UserConfig(QMainWindow):
                 for version in raw_setting['BLOCK'][block].keys():
                     if raw_setting['BLOCK'][block][version] == {}:
                         del self.user_input['BLOCK'][block][version]
+
                         if self.user_input['BLOCK'][block] == {}:
                             del self.user_input['BLOCK'][block]
                     else:
                         for flow in raw_setting['BLOCK'][block][version].keys():
                             if raw_setting['BLOCK'][block][version][flow] == {}:
                                 del self.user_input['BLOCK'][block][version][flow]
+
                                 if self.user_input['BLOCK'][block][version] == {}:
                                     del self.user_input['BLOCK'][block][version]
                                     del self.priority[block][version]
+
                                     if self.user_input['BLOCK'][block] == {}:
                                         del self.user_input['BLOCK'][block]
                             else:
                                 for vendor in raw_setting['BLOCK'][block][version][flow].keys():
                                     if raw_setting['BLOCK'][block][version][flow][vendor] == {}:
                                         del self.user_input['BLOCK'][block][version][flow][vendor]
+
                                         if self.user_input['BLOCK'][block][version][flow] == {}:
                                             del self.user_input['BLOCK'][block][version][flow]
                                             del self.priority[block][version][flow]
+
                                             if self.user_input['BLOCK'][block][version] == {}:
                                                 del self.user_input['BLOCK'][block][version]
                                                 del self.priority[block][version]
+
                                                 if self.user_input['BLOCK'][block] == {}:
                                                     del self.user_input['BLOCK'][block]
                                     else:
                                         for branch in raw_setting['BLOCK'][block][version][flow][vendor].keys():
                                             if raw_setting['BLOCK'][block][version][flow][vendor][branch] == {}:
                                                 del self.user_input['BLOCK'][block][version][flow][vendor][branch]
+
                                                 if self.user_input['BLOCK'][block][version][flow][vendor] == {}:
                                                     del self.user_input['BLOCK'][block][version][flow][vendor]
+
                                                     if self.user_input['BLOCK'][block][version][flow] == {}:
                                                         del self.user_input['BLOCK'][block][version][flow]
                                                         del self.priority[block][version][flow]
+
                                                         if self.user_input['BLOCK'][block][version] == {}:
                                                             del self.user_input['BLOCK'][block][version]
                                                             del self.priority[block][version]
+
                                                             if self.user_input['BLOCK'][block] == {}:
                                                                 del self.user_input['BLOCK'][block]
 
@@ -1107,6 +1128,7 @@ class UserConfig(QMainWindow):
         new_tasks = []
         for task in tasks:
             del self.user_input['BLOCK'][block][version][flow][vendor][branch][task]
+
             if task == raw_task:
                 new_tasks.append(new_task)
             elif task == new_task:
@@ -1142,11 +1164,6 @@ class Worker(QObject):
 
             for block in self.user_input['BLOCK'].keys():
                 for version in self.user_input['BLOCK'][block].keys():
-
-                    # if not self.mainwindow.priority[block][version] == {}:
-                    #     if not sorted(list(self.user_input['BLOCK'][block][version].keys())) == sorted(self.mainwindow.priority[block][version].keys()):
-                    #         self.mainwindow.priority[block][version] = {}
-
                     for flow in self.user_input['BLOCK'][block][version].keys():
                         for vendor in self.user_input['BLOCK'][block][version][flow].keys():
                             for branch in self.user_input['BLOCK'][block][version][flow][vendor].keys():
@@ -1301,6 +1318,7 @@ class WindowForAddItems(QMainWindow):
                 index = all_tasks.index(self.task)
                 all_tasks.insert(index + 1, task)
                 self.user_input['BLOCK'][block][version][flow][vendor][branch] = {}
+
                 for k in all_tasks:
                     self.user_input['BLOCK'][block][version][flow][vendor][branch][k] = ''
 
@@ -1371,8 +1389,10 @@ class WindowForCopyItems(QMainWindow):
         self.new_branch_edit = QLineEdit()
         self.new_branch_edit.setFixedWidth(200)
         self.new_branch_edit.textChanged.connect(self.create_new_branch)
+
         if self.item == 'task':
             self.new_branch_edit.setEnabled(False)
+
         self.new_branch_layout.addWidget(self.new_branch_label)
         self.new_branch_layout.addWidget(self.new_branch_edit)
         self.new_branch_layout.addStretch(1)
@@ -1408,6 +1428,7 @@ class WindowForCopyItems(QMainWindow):
             self.top_layout.addWidget(self.raw_table_label)
             self.top_layout.addWidget(self.raw_table)
             self.top_layout.addStretch(2)
+
         self.top_layout.addWidget(self.new_table_label)
         self.top_layout.addWidget(self.new_branch_widget)
         self.top_layout.addWidget(self.new_table)
@@ -1416,7 +1437,6 @@ class WindowForCopyItems(QMainWindow):
         if not self.item == 'branches':
             self.top_layout.setStretch(0, 1)
             self.top_layout.setStretch(1, 12)
-
             self.top_layout.setStretch(3, 1)
             self.top_layout.setStretch(4, 1)
             self.top_layout.setStretch(5, 12)
@@ -1431,9 +1451,9 @@ class WindowForCopyItems(QMainWindow):
 
     def draw_table(self, table, model, editable=False):
         model.setRowCount(0)
-
         row = 0
         versions = []
+
         if self.item == 'branches':
             blocks = list(self.selected_branches['BLOCK'].keys())
         else:
@@ -1441,6 +1461,7 @@ class WindowForCopyItems(QMainWindow):
 
         for block in blocks:
             block_start_line = row
+
             if self.item in ['block', 'branches']:
                 versions = list(self.user_input['BLOCK'][block].keys())
             elif self.item in ['version', 'flow', 'vendor', 'branch', 'task']:
@@ -1479,7 +1500,7 @@ class WindowForCopyItems(QMainWindow):
                         vendor_start_line = row
 
                         for branch in self.user_input['BLOCK'][block][version][flow][vendor].keys():
-                            if self.item in ['task'] and not branch == self.branch:
+                            if self.item in ['branch', 'task'] and not branch == self.branch:
                                 continue
 
                             if self.item == 'branches' and self.selected_branches['BLOCK'][block][version][flow][vendor][branch] is True and editable:
@@ -1495,21 +1516,25 @@ class WindowForCopyItems(QMainWindow):
                                         continue
 
                                     block_item = QStandardItem(block)
+
                                     if editable and self.item in ['version', 'flow', 'vendor', 'branch', 'task', 'branches']:
                                         block_item.setFlags(Qt.ItemIsEditable)
                                     model.setItem(row, 0, block_item)
 
                                     version_item = QStandardItem(block_version)
+
                                     if editable and self.item in ['flow', 'vendor', 'branch', 'task', 'branches']:
                                         version_item.setFlags(Qt.ItemIsEditable)
                                     model.setItem(row, 1, QStandardItem(version_item))
 
                                     flow_item = QStandardItem(flow)
+
                                     if editable and self.item in ['block', 'version', 'vendor', 'branch', 'task', 'branches']:
                                         flow_item.setFlags(Qt.ItemIsEditable)
                                     model.setItem(row, 2, flow_item)
 
                                     vendor_item = QStandardItem(vendor)
+
                                     if editable and self.item in ['task', 'branches']:
                                         vendor_item.setFlags(Qt.ItemIsEditable)
                                     model.setItem(row, 3, vendor_item)
@@ -1530,10 +1555,11 @@ class WindowForCopyItems(QMainWindow):
                                     model.setItem(row, 4, branch_item)
 
                                     task_item = QStandardItem(task)
+
                                     if editable and self.item in ['block', 'version', 'flow', 'vendor', 'branch', 'branches']:
                                         task_item.setFlags(Qt.ItemIsEditable)
-                                    model.setItem(row, 5, task_item)
 
+                                    model.setItem(row, 5, task_item)
                                     row += 1
 
                                 if row - branch_start_line > 1:
@@ -1580,6 +1606,12 @@ class WindowForCopyItems(QMainWindow):
             vendor_new = self.new_table_model.index(i, 3).data()
             branch_new = self.new_table_model.index(i, 4).data()
             task_new = self.new_table_model.index(i, 5).data()
+
+            for cell in [block_new, version_new, flow_new, vendor_new, branch_new, task_new]:
+                if re.search(r'^\s*$', cell):
+                    Dialog('Error', "Empty %s name!" % list(locals().keys())[list(locals().values()).index(cell)].replace('_new', ''), QMessageBox.Critical)
+                    return
+
             if not self.item == 'branches':
                 block = self.raw_table_model.index(i, 0).data()
                 version = self.raw_table_model.index(i, 1).data()
@@ -1799,19 +1831,17 @@ class WindowForDetailedTaskInfo(QMainWindow):
         self.button_layout.addWidget(self.cancel_button)
 
         self.top_layout.addWidget(self.widget_task_name)
-        self.top_layout.addStretch(1)
         self.top_layout.addWidget(self.label_env)
         self.top_layout.addWidget(self.env_table)
-        self.top_layout.addStretch(1)
         self.top_layout.addWidget(self.label_setup)
         self.top_layout.addWidget(self.setup_table)
         self.top_layout.addWidget(self.button_widget)
         self.top_layout.setStretch(0, 1)
-        self.top_layout.setStretch(2, 1)
-        self.top_layout.setStretch(3, 6)
-        self.top_layout.setStretch(5, 1)
-        self.top_layout.setStretch(6, 8)
-        self.resize(900, 600)
+        self.top_layout.setStretch(1, 1)
+        self.top_layout.setStretch(2, 5)
+        self.top_layout.setStretch(3, 1)
+        self.top_layout.setStretch(4, 13)
+        self.resize(800, 800)
         center(self)
 
     def draw_table(self, new_task, draw_type='new'):
@@ -1920,7 +1950,7 @@ class WindowForDetailedTaskInfo(QMainWindow):
         screen_rect = desktop.screenGeometry(screen_num)
 
         if index.data() == '' and index.column() == 1 and index.row() in self.tips.keys():
-            QToolTip.showText(QCursor.pos(), 'Example : ' + self.tips[index.row()], self.setup_table, screen_rect, 50000)
+            QToolTip.showText(QCursor.pos(), 'Example : ' + self.tips[index.row()], self.setup_table, screen_rect, 10000)
 
     def save(self):
         if not self.raw_task == self.new_task:
@@ -1937,6 +1967,8 @@ class WindowForDetailedTaskInfo(QMainWindow):
 
         setting = AutoVivification()
         category = ''
+        warning_info = ''
+        warning_num = 0
 
         for i in range(self.setup_model.rowCount()):
             item = self.setup_model.index(i, 0).data()
@@ -1950,6 +1982,23 @@ class WindowForDetailedTaskInfo(QMainWindow):
                         value = self.setup_table.indexWidget(self.setup_model.index(i, 1)).currentText()
 
                 setting[category][item] = value
+
+            if value == '':
+                if category in self.detailed_setting.keys() and category in self.default_setting[self.flow][self.vendor][self.new_task].keys():
+                    if item in self.detailed_setting[category].keys() and item in self.default_setting[self.flow][self.vendor][self.new_task][category].keys():
+                        if not self.detailed_setting[category][item] == {} and not self.default_setting[self.flow][self.vendor][self.new_task][category][item] == {}:
+                            warning_num += 1
+                            warning_info += '%s. Remove user_defined_setting <b>[%s]</b> for %s/%s, flow will replace it with default_setting <b>[%s]</b><br/>\n' % (
+                            warning_num, self.detailed_setting[category][item], category, item, self.default_setting[self.flow][self.vendor][self.new_task][category][item])
+
+        if warning_info:
+            warning_info += '<br/>If you want to keep your setting, please return and press cancel button'
+            reply = QMessageBox.question(self, "Confirm Your Changes", warning_info, QMessageBox.Yes | QMessageBox.No)
+
+            if reply == QMessageBox.Yes:
+                pass
+            elif reply == QMessageBox.No:
+                return
 
         self.message.emit([setting, self.new_task])
 
@@ -2506,19 +2555,6 @@ class DefaultConfig(QMainWindow):
                 self.update_table(0)
         else:
             pass
-
-
-class Dialog:
-    def __init__(self, title, info, icon=QMessageBox.Critical):
-        msgbox = QMessageBox()
-        msgbox.setText(info)
-        msgbox.setWindowTitle(title)
-        msgbox.setIcon(icon)
-        msgbox.setStandardButtons(QMessageBox.Ok)
-        reply = msgbox.exec()
-
-        if reply == QMessageBox.Ok:
-            return
 
 
 class QComboBox2(QComboBox):

@@ -6,11 +6,10 @@
 # Description :
 ################################
 import os
+import re
 import sys
 import time
-import datetime
 import threading
-import re
 from PyQt5.QtCore import QThread, pyqtSignal
 from collections import defaultdict
 
@@ -19,11 +18,8 @@ sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 import common
 import common_lsf
 
-# Import config settings.
-sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/config')
-import config
-
 UNEXPECTED_JOB_STATUS = ['Killed', 'Killing', 'Cancelled', 'RUN FAIL']
+
 
 def set_command_env(block='', version='', flow='', vendor='', branch='', task=''):
     if block:
@@ -108,10 +104,13 @@ class IfpBuild(IfpCommon):
 
             command = build_action['COMMAND']
 
-            if ('PATH' in build_action) and (build_action['PATH']) and (os.path.exists(build_action['PATH'])):
-                command = 'cd ' + str(build_action['PATH']) + '; ' + str(command)
+            if ('PATH' in build_action) and build_action['PATH']:
+                if os.path.exists(build_action['PATH']):
+                    command = 'cd ' + str(build_action['PATH']) + '; ' + str(command)
+                else:
+                    common.print_warning('*Warning*: Build PATH "' + str(build_action['PATH']) + '" not exists.')
             else:
-                common.print_error('*Error*: Build path "' + str(build_action['PATH']) + '" is missing.')
+                common.print_warning('*Warning*: Build PATH is not defined for task "' + str(task) + '".')
 
             (return_code, stdout, stderr) = common.run_command(command)
 
@@ -132,7 +131,6 @@ class IfpBuild(IfpCommon):
         self.msg_signal.emit('>>> Building blocks ...')
 
         thread_list = []
-
         build_warning = False
 
         for item in self.task_list:
@@ -153,6 +151,7 @@ class IfpBuild(IfpCommon):
         # Tell GUI build done.
         self.msg_signal.emit('Build Done.')
         self.finish_signal.emit()
+
 
 class IfpRun(IfpCommon):
     """
@@ -211,7 +210,7 @@ class IfpRun(IfpCommon):
                     pre_flow_tasks = list(filter(lambda x: x.Flow == pre_flow, tasks))
                     pre_flows_bundle_tasks.extend(pre_flow_tasks)
 
-                # Cancel next task if pre task is "Cancelled" or "Killed".
+                # Cancel next flow if pre flow is "Cancelled" or "Killed".
                 if list(filter(lambda x: x.Status in str(UNEXPECTED_JOB_STATUS), pre_flows_bundle_tasks)) and not self.ignore_fail:
                     for flow in flow_bundle.split('|'):
                         flow_tasks = list(filter(lambda x: x.Flow == flow, tasks))
@@ -263,13 +262,14 @@ class IfpRun(IfpCommon):
         # Run run_command under branch directory.
         run_action = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task]['ACTION'].get(self.action, None)
         result = ''
-        start_time = datetime.datetime.now()
 
-        if run_action and run_action.get('COMMAND'):
+        if (not run_action) or (not run_action.get('COMMAND')):
+            result = str(self.action) + ' undefined'
+        else:
             # Tell GUI the task run start.
-            self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Running')
-
             run_method = run_action.get('RUN_METHOD', '')
+
+            self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Running')
             self.msg_signal.emit('*Info*: running {} "{}" under {} for {} {} {} {} {} {}\n'.format(run_method,
                                                                                                    run_action['PATH'],
                                                                                                    run_action['COMMAND'],
@@ -279,38 +279,56 @@ class IfpRun(IfpCommon):
                                                                                                    vendor,
                                                                                                    branch,
                                                                                                    task))
-            # Set command
-            command = run_action['COMMAND']
-
-            if ('PATH' in run_action) and (run_action['PATH']) and (os.path.exists(run_action['PATH'])):
-                command = 'cd ' + str(run_action['PATH']) + '; ' + str(command)
-            else:
-                common.print_error('*Error*: Run path "' + str(run_action['PATH']) + '" is missing.')
 
             # if run_method without -I option
-            if re.match(r'^\s*bsub\s+', run_method) or re.match(r'^\s*bsub$', run_method) or re.match(r'\s+bsub\s+', run_method) or re.match(r'\s+bsub$', run_method):
-                if not re.search('-I', run_method):
-                    run_method = run_method + ' -I '
+            if re.search('bsub', run_method) and (not re.search('-I', run_method)):
+                run_method = run_method + ' -I '
 
-            # Run command
-            jobid = None
+            # Get command
+            command = run_action['COMMAND']
 
-            if run_method != '':
+            if (not re.search(r'^\s*$', run_method)) and (not re.search(r'^\s*local\s*$', run_method, re.I)):
                 command = str(run_method) + ' "' + str(command) + '"'
 
+            if ('PATH' in run_action) and run_action['PATH']:
+                if os.path.exists(run_action['PATH']):
+                    command = 'cd ' + str(run_action['PATH']) + '; ' + str(command)
+                else:
+                    common.print_warning('*Warning*: Run PATH "' + str(run_action['PATH']) + '" not exists.')
+            else:
+                common.print_warning('*Warning*: Run PATH is not defined for task "' + str(task) + '".')
+
+            # Run command
             if re.search(r'^\s*bsub', run_method):
                 process = common.spawn_process(command)
                 stdout = process.stdout.readline().decode('utf-8')
                 jobid = 'b:{}'.format(common.get_jobid(stdout))
+
+                self.set_one_jobid_signal.emit(block, version, flow, vendor, branch, task, 'Job', str(jobid))
+                self.set_run_time_signal.emit(block, version, flow, vendor, branch, task, 'Runtime', "pending")
+
+                while (True):
+                    current_job = jobid[2:]
+                    current_job_dic = common_lsf.get_bjobs_uf_info(command='bjobs -UF ' + str(current_job))
+
+                    if current_job_dic:
+                        job_status = current_job_dic[current_job]['status']
+
+                        if job_status == "RUN":
+                            self.set_run_time_signal.emit(block, version, flow, vendor, branch, task, 'Runtime', "00:00:00")
+                            break
+
+                    time.sleep(1)
             else:
                 process = common.spawn_process(command)
                 jobid = 'l:{}'.format(process.pid)
 
-            self.set_one_jobid_signal.emit(block, version, flow, vendor, branch, task, 'Job', str(jobid))
+                self.set_one_jobid_signal.emit(block, version, flow, vendor, branch, task, 'Job', str(jobid))
+                self.set_run_time_signal.emit(block, version, flow, vendor, branch, task, 'Runtime', "00:00:00")
+
             stdout, stderr = process.communicate()
             return_code = process.returncode
 
-            finish_time = datetime.datetime.now()
             last_status = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].get('Status', None)
 
             if last_status == 'Killing':
@@ -336,12 +354,6 @@ class IfpRun(IfpCommon):
 
                 self.print_output(block, version, flow, vendor, branch, task, result, stdout + stderr)
                 self.msg_signal.emit('*Info*: job done for {} {} {} {} {} {}\n'.format(block, version, flow, vendor, branch, task))
-        else:
-            finish_time = datetime.datetime.now()
-            result = str(self.action) + ' undefined'
-
-        runtime = str(finish_time - start_time).split('.')[0]
-        self.set_run_time_signal.emit(block, version, flow, vendor, branch, task, 'Runtime', runtime)
 
         # Tell GUI the task run finish.
         self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = result
@@ -390,9 +402,12 @@ class IfpRun(IfpCommon):
 
             for t in tasks:
                 block, version, flow, vendor, branch, task = t
-                thread = threading.Thread(target=self.run_one_task, args=(block, version, flow, vendor, branch, task))
-                thread.start()
-                thread_list.append(thread)
+                current_task_obj = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task]
+
+                if current_task_obj.get('Status') not in ['Running', 'Killing']:
+                    thread = threading.Thread(target=self.run_one_task, args=(block, version, flow, vendor, branch, task))
+                    thread.start()
+                    thread_list.append(thread)
 
             for t in thread_list:
                 t.join()
@@ -446,18 +461,13 @@ class IfpKill(IfpCommon):
 
             if str(jobid).startswith('b'):
                 jobid = str(jobid)[2:]
-                (return_code, stdout, stderr) = common.run_command('bkill ' + str(jobid))
-
-                if return_code:
-                    self.msg_signal.emit('Failed on killing job "' + str(jobid) + '"')
+                common.run_command('bkill ' + str(jobid))
             elif str(jobid).startswith('l'):
                 jobid = str(jobid)[2:]
-                kill_process = 'kill -9 {}'.format(jobid)
-                (return_code, stdout, stderr) = common.run_command(kill_process)
+                common.kill_pid_tree(jobid)
 
-                if not return_code:
-                    self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Killed'
-                    self.finish_one_signal.emit(block, version, flow, vendor, branch, task, 'Killed')
+                self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = 'Killed'
+                self.finish_one_signal.emit(block, version, flow, vendor, branch, task, 'Killed')
 
     def run(self):
         for item in self.task_list:
@@ -490,10 +500,13 @@ class IfpCheck(IfpCommon):
 
             command = check_action.get('COMMAND')
 
-            if ('PATH' in check_action) and (check_action['PATH']) and (os.path.exists(check_action['PATH'])):
-                command = 'cd ' + str(check_action['PATH']) + '; ' + str(command)
+            if ('PATH' in check_action) and check_action['PATH']:
+                if os.path.exists(check_action['PATH']):
+                    command = 'cd ' + str(check_action['PATH']) + '; ' + str(command)
+                else:
+                    common.print_warning('*Warning*: Check PATH "' + str(check_action['PATH']) + '" not exists.')
             else:
-                common.print_error('*Error*: Check path "' + str(check_action['PATH']) + '" is missing.')
+                common.print_warning('*Warning*: Check PATH is not defined for task "' + str(task) + '".')
 
             return_code, stdout, stderr = common.run_command(command)
 
@@ -539,15 +552,28 @@ class IfpCheckView(IfpCommon):
 
         # Run viewer command under task check directory.
         check_action = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task]['ACTION'].get('CHECK', None)
+        command = ''
 
         if check_action:
-            if ('PATH' in check_action) and check_action['PATH'] and (os.path.exists(check_action['PATH'])):
-                if ('REPORT_FILE' in check_action) and check_action['REPORT_FILE']:
-                    if ('VIEWER' in check_action) and check_action['VIEWER']:
-                        command = 'cd ' + str(check_action['PATH']) + '; ' + str(check_action['VIEWER']) + ' ' + str(check_action['REPORT_FILE'])
-                        common.run_command(command)
+            if ('PATH' in check_action) and check_action['PATH']:
+                if os.path.exists(check_action['PATH']):
+                    command = 'cd ' + str(check_action['PATH']) + ';'
+                else:
+                    common.print_warning('*Warning*: Check PATH "' + str(check_action['PATH']) + '" not exists.')
             else:
-                common.print_error('*Error*: Check path "' + str(check_action['PATH']) + '" is missing.')
+                common.print_warning('*Warning*: Check PATH is not defined for task "' + str(task) + '".')
+
+            if ('VIEWER' in check_action) and check_action['VIEWER']:
+                if ('REPORT_FILE' in check_action) and check_action['REPORT_FILE']:
+                    if os.path.exists(check_action['REPORT_FILE']):
+                        command = str(command) + ' ' + str(check_action['VIEWER']) + ' ' + str(check_action['REPORT_FILE'])
+                        common.run_command(command)
+                    else:
+                        common.print_error('*Error*: Check REPORT_FILE "' + str(check_action['REPORT_FILE']) + '" not exists.')
+                else:
+                    common.print_error('*Error*: Check REPORT_FILE is not defined for task "' + str(task) + '".')
+            else:
+                common.print_error('*Error*: Check VIEWER is not defined for task "' + str(task) + '".')
 
     def run(self):
         thread_list = []
@@ -583,10 +609,13 @@ class IfpSummary(IfpCommon):
 
             command = sum_action.get('COMMAND')
 
-            if ('PATH' in sum_action) and (sum_action['PATH']) and (os.path.exists(sum_action['PATH'])):
-                command = 'cd ' + str(sum_action['PATH']) + '; ' + str(command)
+            if ('PATH' in sum_action) and sum_action['PATH']:
+                if os.path.exists(sum_action['PATH']):
+                    command = 'cd ' + str(sum_action['PATH']) + '; ' + str(command)
+                else:
+                    common.print_warning('*Warning*: Summary PATH "' + str(sum_action['PATH']) + '" not exists.')
             else:
-                common.print_error('*Error*: Summary path "' + str(sum_action['PATH']) + '" is missing.')
+                common.print_warning('*Warning*: Summary PATH is not defined for task "' + str(task) + '".')
 
             (return_code, stdout, stderr) = common.run_command(command)
 
@@ -616,6 +645,7 @@ class IfpSummary(IfpCommon):
             thread.join()
 
         self.msg_signal.emit('>>> Summarying Done')
+
         # Tell GUI check done.
         self.finish_signal.emit()
 
@@ -635,13 +665,25 @@ class IfpSummaryView(IfpCommon):
         sum_action = self.config_dic['BLOCK'][block][version][flow][vendor][branch][task]['ACTION'].get('SUMMARY', None)
 
         if sum_action:
-            if ('PATH' in sum_action) and sum_action['PATH'] and (os.path.exists(sum_action['PATH'])):
-                if ('REPORT_FILE' in sum_action) and sum_action['REPORT_FILE']:
-                    if ('VIEWER' in sum_action) and sum_action['VIEWER']:
-                        command = 'cd ' + str(sum_action['PATH']) + '; ' + str(sum_action['VIEWER']) + ' ' + str(sum_action['REPORT_FILE'])
-                        common.run_command(command)
+            if ('PATH' in sum_action) and sum_action['PATH']:
+                if os.path.exists(sum_action['PATH']):
+                    command = 'cd ' + str(sum_action['PATH']) + ';'
+                else:
+                    common.print_warning('*Warning*: Summary PATH "' + str(sum_action['PATH']) + '" not exists.')
             else:
-                common.print_error('*Error*: Summary path "' + str(sum_action['PATH']) + '" is missing.')
+                common.print_warning('*Warning*: Summary PATH is not defined for task "' + str(task) + '".')
+
+            if ('VIEWER' in sum_action) and sum_action['VIEWER']:
+                if ('REPORT_FILE' in sum_action) and sum_action['REPORT_FILE']:
+                    if os.path.exists(sum_action['REPORT_FILE']):
+                        command = str(command) + ' ' + str(sum_action['VIEWER']) + ' ' + str(sum_action['REPORT_FILE'])
+                        common.run_command(command)
+                    else:
+                        common.print_error('*Error*: Summary REPORT_FILE "' + str(sum_action['REPORT_FILE']) + '" not exists.')
+                else:
+                    common.print_error('*Error*: Summary REPORT_FILE is not defined for task "' + str(task) + '".')
+            else:
+                common.print_error('*Error*: Summary VIEWER is not defined for task "' + str(task) + '".')
 
     def run(self):
         thread_list = []
@@ -680,10 +722,13 @@ class IfpRelease(IfpCommon):
 
             command = release_action.get('COMMAND')
 
-            if ('PATH' in release_action) and (release_action['PATH']) and (os.path.exists(release_action['PATH'])):
-                command = 'cd ' + str(release_action['PATH']) + '; ' + str(command)
+            if ('PATH' in release_action) and release_action['PATH']:
+                if os.path.exists(release_action['PATH']):
+                    command = 'cd ' + str(release_action['PATH']) + '; ' + str(command)
+                else:
+                    common.print_warning('*Warning*: Release PATH "' + str(release_action['PATH']) + '" not exists.')
             else:
-                common.print_error('*Error*: Release path "' + str(release_action['PATH']) + '" is missing.')
+                common.print_warning('*Warning*: Release PATH is not defined for task "' + str(task) + '".')
 
             (return_code, stdout, stderr) = common.run_command(command)
 
@@ -713,5 +758,6 @@ class IfpRelease(IfpCommon):
             thread.join()
 
         self.msg_signal.emit('>>> Release Done')
+
         # Tell GUI check done.
         self.finish_signal.emit()

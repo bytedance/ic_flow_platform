@@ -1,4 +1,5 @@
-from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem, QAction, QMessageBox, QHeaderView, QStyledItemDelegate
 from PyQt5.QtGui import QTextCursor
 
 
@@ -108,3 +109,35 @@ class QComboCheckBox(QComboBox):
         """
         super().clear()
         self.checkBoxList = []
+
+
+class Dialog:
+    def __init__(self, title, info, icon=QMessageBox.Critical):
+        msgbox = QMessageBox()
+        msgbox.setText(info)
+        msgbox.setWindowTitle(title)
+        msgbox.setIcon(icon)
+        msgbox.setStandardButtons(QMessageBox.Ok)
+        reply = msgbox.exec()
+
+        if reply == QMessageBox.Ok:
+            return
+
+
+class CustomDelegate(QStyledItemDelegate):
+    def __init__(self, wrap_columns=None):
+        super().__init__()
+        self.wrap_columns = wrap_columns
+
+    def paint(self, painter, option, index):
+        col = index.column()
+        text = index.data(Qt.DisplayRole)
+        if text and self.wrap_columns:
+            if col in self.wrap_columns:
+                painter.drawText(option.rect, Qt.TextWrapAnywhere | Qt.AlignVCenter, text)
+            else:
+                super().paint(painter, option, index)
+                return
+        else:
+            super().paint(painter, option, index)
+            return

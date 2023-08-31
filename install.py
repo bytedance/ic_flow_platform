@@ -76,6 +76,9 @@ xterm_command = "xterm -e"
 
 # send result command.
 send_result_command = ""
+
+# system log
+system_log_path = ""
 ''')
 
             os.chmod(config_file, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)

@@ -1140,9 +1140,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                     rpt = str(check_path) + '/' + str(rpt)
 
                 self.execute_action('Check', task_dic_list=[item, ])
-
-                if os.path.exists(rpt) and os.path.exists(check_path):
-                    self.execute_action('Check View', task_dic_list=[item, ])
+                self.execute_action('Check View', task_dic_list=[item, ])
 
     def pop_summary(self, item):
         task = self.config_dic['BLOCK'][item.Block][item.Version][item.Flow][item.Vendor][item.Branch][item.Task]
@@ -1160,9 +1158,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                     rpt = str(sum_path) + '/' + str(rpt)
 
                 self.execute_action('Summary', task_dic_list=[item, ])
-
-                if os.path.exists(rpt) and os.path.exists(sum_path):
-                    self.execute_action('Summary View', task_dic_list=[item, ])
+                self.execute_action('Summary View', task_dic_list=[item, ])
 
     def pop_xterm(self, item):
         task = self.config_dic['BLOCK'][item.Block][item.Version][item.Flow][item.Vendor][item.Branch][item.Task]
@@ -1484,7 +1480,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                 filtered_task_dic_list = self.check_rerun_item(task_dic_list)
             else:
                 filtered_task_dic_list = task_dic_list
-        elif action_name in ["Build", "Release"]:
+        elif action_name in ["Build", "Release", "Check View", "Summary View"]:
             filtered_task_dic_list = task_dic_list
         elif action_name == "Kill":
             for task in task_dic_list:

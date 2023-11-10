@@ -271,8 +271,8 @@ class IfpRun(IfpCommon):
 
             self.start_one_signal.emit(block, version, flow, vendor, branch, task, 'Running')
             self.msg_signal.emit('*Info*: running {} "{}" under {} for {} {} {} {} {} {}\n'.format(run_method,
-                                                                                                   run_action['PATH'],
                                                                                                    run_action['COMMAND'],
+                                                                                                   run_action['PATH'],
                                                                                                    block,
                                                                                                    version,
                                                                                                    flow,
@@ -302,23 +302,25 @@ class IfpRun(IfpCommon):
             if re.search(r'^\s*bsub', run_method):
                 process = common.spawn_process(command)
                 stdout = process.stdout.readline().decode('utf-8')
-                jobid = 'b:{}'.format(common.get_jobid(stdout))
 
-                self.set_one_jobid_signal.emit(block, version, flow, vendor, branch, task, 'Job', str(jobid))
-                self.set_run_time_signal.emit(block, version, flow, vendor, branch, task, 'Runtime', "pending")
+                if common.get_jobid(stdout):
+                    jobid = 'b:{}'.format(common.get_jobid(stdout))
 
-                while (True):
-                    current_job = jobid[2:]
-                    current_job_dic = common_lsf.get_bjobs_uf_info(command='bjobs -UF ' + str(current_job))
+                    self.set_one_jobid_signal.emit(block, version, flow, vendor, branch, task, 'Job', str(jobid))
+                    self.set_run_time_signal.emit(block, version, flow, vendor, branch, task, 'Runtime', "pending")
 
-                    if current_job_dic:
-                        job_status = current_job_dic[current_job]['status']
+                    while (True):
+                        current_job = jobid[2:]
+                        current_job_dic = common_lsf.get_bjobs_uf_info(command='bjobs -UF ' + str(current_job))
 
-                        if job_status == "RUN":
-                            self.set_run_time_signal.emit(block, version, flow, vendor, branch, task, 'Runtime', "00:00:00")
-                            break
+                        if current_job_dic:
+                            job_status = current_job_dic[current_job]['status']
 
-                    time.sleep(1)
+                            if job_status == "RUN":
+                                self.set_run_time_signal.emit(block, version, flow, vendor, branch, task, 'Runtime', "00:00:00")
+                                break
+
+                        time.sleep(1)
             else:
                 process = common.spawn_process(command)
                 jobid = 'l:{}'.format(process.pid)

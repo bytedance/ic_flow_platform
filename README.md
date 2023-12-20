@@ -1,7 +1,8 @@
+  - Step 4 : Open menubar `Setup > Set Depedency` to define task actuating logic
 # IC Flow Platform V1.2 (2023.12.31)
 
 ## Update history
-***
+  
 |Version |Date            | Update content      |
 | :-----------| :-----------| :-----------------  |
 | V1.2   |(2023.12.31)    | Support more complex logic control and centrally manage user settings |
@@ -11,7 +12,6 @@
 
 
 ## Introduction
-***
 
 ### 0. What is IFP?
 
@@ -44,20 +44,21 @@ Execute below command under install directory.
 
   - Step 1 : Create working path and enter into the directory
   - Step 2 : Execute $IFP_INSTALL_PATH/bin/ifp to run IFP with GUI mode
-  - Step 3 : Open menubar `Setup > Setting` to choose default setting and update personalizations
+  - Step 3 : Open menubar `Setup > Settings` to choose default setting and update personalizations
   
-![](./data/pictures/readme/IFP_setting.png)
+<img src="./data/pictures/readme/IFP_setting.png" width="80%">
   
-  - Step 4 : Open menubar `Setup > Set Depedency` to define task actuating logic
+  - Step 4 : Open menubar `Setup > Set Dependency` to define task actuating logic
   
-![](./data/pictures/readme/IFP_set_dependency.png)
+<img src="./data/pictures/readme/IFP_set_dependency.png" width="80%">  
   
   - Step 5 : Create your tasks in `CONFIG TAB` and adjust task detailed settings
   
-![](./data/pictures/readme/IFP_config_tab.png)
+<img src="./data/pictures/readme/IFP_config_tab.png" width="80%">  
   
   - Step 6 : Execute actions and monitor the progress in `MAIN TAB`
   
-![](./data/pictures/readme/IFP_main_tab.jpeg)
-
-More details please see "docs/IFP_user_manual.pdf"
+<img src="./data/pictures/readme/IFP_main_tab.jpeg" width="80%">
+  
+  
+More details please see ["docs/IFP_user_manual.pdf"](./docs/IFP_user_manual.pdf)

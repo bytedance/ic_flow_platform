@@ -1,4 +1,3 @@
-  - Step 4 : Open menubar `Setup > Set Depedency` to define task actuating logic
 # IC Flow Platform V1.2 (2023.12.31)
 
 ## Update history

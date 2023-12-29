@@ -35,6 +35,8 @@ class QComboCheckBox(QComboBox):
     def __init__(self, parent):
         super(QComboCheckBox, self).__init__(parent)
 
+        self.separator = ' '
+
         # self.qLineWidget is used to load QCheckBox items.
         self.qListWidget = QListWidget()
         self.setModel(self.qListWidget.model())
@@ -69,7 +71,7 @@ class QComboCheckBox(QComboBox):
         """
         Update QComboCheckBox show message with self.qLineEdit.
         """
-        selectedItemString = ' '.join(self.selectedItems().values())
+        selectedItemString = self.separator.join(self.selectedItems().values())
         self.qLineEdit.setReadOnly(False)
         self.qLineEdit.clear()
         self.qLineEdit.setText(selectedItemString)
@@ -109,6 +111,25 @@ class QComboCheckBox(QComboBox):
         """
         super().clear()
         self.checkBoxList = []
+
+    def setItemsCheckStatus(self, item_list=[], item_state=Qt.Checked):
+        """
+        set check state Qt.Checked or Qt.Unchecked
+        """
+        for (i, qBox) in enumerate(self.checkBoxList):
+            if qBox.text() in item_list:
+                qBox.setCheckState(item_state)
+
+    def stateChangedconnect(self, func=None):
+        if func:
+            for (i, qBox) in enumerate(self.checkBoxList):
+                qBox.stateChanged.connect(func)
+
+
+    def setEditLineSeparator(self, separator=' '):
+        if separator:
+            self.separator = separator
+
 
 
 class Dialog:

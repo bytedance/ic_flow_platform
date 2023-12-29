@@ -186,15 +186,12 @@ class MainWindow(QMainWindow):
         my_show_message.start()
 
         # Get self.license_dic.
-        if ('LM_LICENSE_FILE' in os.environ) and os.environ['LM_LICENSE_FILE']:
-            if config.lmstat_path:
-                my_get_license_info = common_license.GetLicenseInfo(lmstat_path=config.lmstat_path, bsub_command=config.lmstat_bsub_command)
-            else:
-                my_get_license_info = common_license.GetLicenseInfo(bsub_command=config.lmstat_bsub_command)
-
-            self.license_dic = my_get_license_info.get_license_info()
+        if config.lmstat_path:
+            my_get_license_info = common_license.GetLicenseInfo(lmstat_path=config.lmstat_path, bsub_command=config.lmstat_bsub_command)
         else:
-            time.sleep(0.01)
+            my_get_license_info = common_license.GetLicenseInfo(bsub_command=config.lmstat_bsub_command)
+
+        self.license_dic = my_get_license_info.get_license_info()
 
         # Print loading license informaiton message with GUI. (END)
         my_show_message.terminate()

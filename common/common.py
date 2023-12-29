@@ -8,7 +8,6 @@ import threading
 from PyQt5.QtCore import QThread
 from PyQt5.QtWidgets import QMessageBox
 
-sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 import common_pyqt5
 
 
@@ -175,3 +174,62 @@ class ThreadRun(QThread):
         for command in command_list:
             thread = threading.Thread(target=run_command, args=(command,))
             thread.start()
+
+
+class TaskStatus:
+    def __init__(self):
+        self.building = 'Building'
+        self.running = 'Running'
+        self.checking = 'Checking'
+        self.summarizing = 'Summarizing'
+        self.releasing = 'Releasing'
+        self.killed = 'Killed'
+        self.killing = 'Killing'
+        self.queued = 'Queued'
+        self.cancelled = 'Cancelled'
+        self.passed = 'Pass'
+        self.failed = 'Fail'
+        self.undefined = 'Undefined'
+
+class TaskAction:
+    def __init__(self):
+        self.build = 'Build'
+        self.run = 'Run'
+        self.check = 'Check'
+        self.check_view = 'Check View'
+        self.summarize = 'Summarize'
+        self.summarize_view = 'Summarize View'
+        self.release = 'Release'
+        self.kill = 'Kill'
+
+class ConfigSetting:
+    def __init__(self):
+        self.admin_setting_dic = {
+                'default_yaml_administrators': {'value': '', 'note': 'Only default_yaml_administrators can edit default.yaml on ifp GUI directory.'},
+                'system_log_path': {'value': '', 'note': 'system log'},
+                'lmstat_path': {'value': '', 'note': 'Specify lmstat path, example "/eda/synopsys/scl/2021.03/linux64/bin/lmstat".'}
+                }
+        self.user_setting_dic = {
+                'send_result_command': {'value': '', 'note': 'send result command'},
+                'xterm_command': {'value': 'xterm -e', 'note': 'xterm command.'}, 
+                'fullscreen_flag': {'value': True, 'note': 'launch ifp in fullscreen'}, 
+                'rerun_flag': {'value': True, 'note': 'remind user to confirm if rerun passed tasks'},
+                'ignore_fail': {'value': False, 'note': 'task will run even if dependent tasks failed'}, 
+                'send_result': {'value': False, 'note': 'send result to users after action done'},
+                'auto_import_tasks': {'value': True, 'note': 'import all tasks when add new block/version'}, 
+                'rerun_check_or_summarize_before_view': {'value': True, 'note': 'Auto rerun CHECK(SUMMARIZE) command before view check(summarize) report'}
+                }
+
+
+config = ConfigSetting()
+status = TaskStatus()
+action = TaskAction()
+status_ing = {action.build: status.building,
+              action.run: status.running,
+              action.check: status.checking,
+              action.summarize: status.summarizing,
+              action.release: status.releasing}
+UNEXPECTED_JOB_STATUS = [status.killed, status.killing, status.cancelled, '{} {}'.format(action.run, status.failed)]
+CLOSE_REMIND_STATUS = [status.building, status.running]
+ING_STATUS = [status.building, status.running]
+CONFIG_DIC = {**config.admin_setting_dic, **config.user_setting_dic}

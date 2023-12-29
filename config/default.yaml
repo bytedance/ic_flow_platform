@@ -20,7 +20,7 @@
 #
 #
 ## Supported action ##
-# BUILD/RUN/CHECK/SUMMARY/POST_RUN/RELEASE
+# BUILD/RUN/CHECK/SUMMARIZE/POST_RUN/RELEASE
 # 
 # 
 ## Supportedd action attribute ##
@@ -46,7 +46,7 @@
 #             COMMAND: ${IFP_INSTALL_PATH}/action/check/syn/synopsys/syn_synopsys.syn_dc.py -b ${BLOCK}
 #             VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report.py -i
 #             REPORT_FILE: file_check/file_check.rpt
-#         SUMMARY:
+#         SUMMARIZE:
 #             PATH: ${DEFAULT_PATH}/dc
 #             COMMAND: ${IFP_INSTALL_PATH}/action/summary/collect_syn_qor.py
 #             VIEWER: /bin/soffice

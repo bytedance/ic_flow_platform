@@ -6,6 +6,9 @@ import subprocess
 os.environ['PYTHONUNBUFFERED'] = '1'
 CWD = os.getcwd()
 
+sys.path.append(str(CWD) + '/common')
+import common
+
 
 def gen_wrapper_script(wrapper_script):
     """
@@ -68,18 +71,26 @@ def gen_config_file():
     else:
         try:
             with open(config_file, 'w') as CF:
-                CF.write('''# Only default_yaml_administrators can edit default.yaml on ifp GUI directory.
-default_yaml_administrators = ""
+                CF.writelines('## admin settings: Only administrator can modify below settings\n')
+                for key, dic in common.config.admin_setting_dic.items():
+                    value = dic['value']
+                    note = dic['note']
+                    CF.writelines('# ' + str(note) + '\n')
 
-# xterm command.
-xterm_command = "xterm -e"
+                    if isinstance(value, str):
+                        value = '\"' + value + '\"'
 
-# send result command.
-send_result_command = ""
+                    CF.writelines(str(key) + ' = ' + str(value) + '\n\n')
 
-# system log
-system_log_path = ""
-''')
+                CF.writelines('## IFP Config settings: Users can define personal settings in ~/.ifp/config/config.py, Below are default value.\n')
+                for key, dic in common.config.user_setting_dic.items():
+                    value = dic['value']
+                    note = dic['note']
+                    CF.writelines('# ' + str(note) + '\n')
+                    if isinstance(value, str):
+                        value = '\"' + value + '\"'
+
+                    CF.writelines(str(key) + ' = ' + str(value) + '\n\n')
 
             os.chmod(config_file, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
         except Exception as error:

@@ -8,33 +8,35 @@ import shutil
 import argparse
 import datetime
 import getpass
+import importlib
+from matplotlib import colors
+import functools
 
 # Import PyQt5 libraries.
 import yaml
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt
-from PyQt5.QtWidgets import QMainWindow, QApplication, QAction, QMessageBox, QTabWidget, QWidget, QFrame, QGridLayout, QTextEdit, QTableWidget, QHeaderView, QTableWidgetItem, QFileDialog, QTreeWidget, QTreeWidgetItem, QDialog, QCheckBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, \
-    QMenu
-from PyQt5.QtGui import QIcon, QBrush, QColor, QFont
+from PyQt5.QtWidgets import QMainWindow, QApplication, QAction, QMessageBox, QTabWidget, QWidget, QFrame, QGridLayout, QTextEdit, QTableWidget, QHeaderView, QTableWidgetItem, QFileDialog, QTreeWidget, QTreeWidgetItem, QDialog, QCheckBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMenu, QTableView, QProgressDialog
+from PyQt5.QtGui import QIcon, QBrush, QColor, QFont, QStandardItem, QStandardItemModel
 
 # Import local python files.
 import parse_config
-import function
 from user_config import UserConfig, DefaultConfig
+from job_manager import JobManager
 
 # Import common python files.
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 import common
 import common_pyqt5
 
-# Import config settings.
+# Import install config settings.
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/config')
-import config
+import config as install_config
 
 QT_DEVICE_PIXEL_RATIO = 1
 os.environ['PYTHONUNBUFFERED'] = '1'
 CWD = os.getcwd()
 USER = getpass.getuser()
-IFP_VERSION = 'V1.1'
+IFP_VERSION = 'V1.2'
 
 # Solve some unexpected warning message.
 if 'XDG_RUNTIME_DIR' not in os.environ:
@@ -71,14 +73,10 @@ def readArgs():
                         default=False,
                         action='store_true',
                         help='Enable check function, check results of tasks/corners with specified checklist.')
-    parser.add_argument('-summary', '--summary',
+    parser.add_argument('-summarize', '--summarize',
                         default=False,
                         action='store_true',
-                        help='Enable summary function, get summary report with specified information requirement.')
-    parser.add_argument('-post_run', '--post_run',
-                        default=False,
-                        action='store_true',
-                        help='Enable post run function, execute user specified command.')
+                        help='Enable summarize function, get summary report with specified information requirement.')
     parser.add_argument('-release', '--release',
                         default=False,
                         action='store_true',
@@ -100,7 +98,7 @@ def readArgs():
     if args.run and (not args.check):
         args.check = True
 
-    return (args.config_file, args.build, args.run, args.check, args.summary, args.post_run, args.release, args.debug)
+    return (args.config_file, args.build, args.run, args.check, args.summarize, args.release, args.debug)
 
 
 def gen_config_file(config_file):
@@ -120,7 +118,7 @@ def gen_config_file(config_file):
 
 # GUI (start) #
 class MainWindow(QMainWindow):
-    def __init__(self, config_file, build, run, check, summary, post_run, release, debug):
+    def __init__(self, config_file, build, run, check, summarize, release, debug):
         super().__init__()
 
         # IFP input parameters
@@ -128,32 +126,53 @@ class MainWindow(QMainWindow):
         self.build = build
         self.run = run
         self.check = check
-        self.summary = summary
-        self.post_run = post_run
+        self.summarize = summarize
         self.release = release
         self.debug = debug
 
-        # IFP global ENV flag
-        self.rerun_flag = True
-        self.ignore_fail = False
-        self.send_result = False
+        # IFP global ENV flag (USER), detailed description in def parse_ifp_env_setting
+        self.config_setting = ConfigSetting()
+        self.config_dic = self.config_setting.config_dic
+
+        for key, value in self.config_dic.items():
+            setattr(self, key, value)
+
+        # IFP global ENV flag (SYSTEM)
+        self.config_obj = None
+        self.main_table_info_list = None
+        self.status_filt_flag = ''
+        self.ifp_env_setting = None
 
         # Show or hide column flags
+        self.view_status_dic = {}
+        self.view_detail_column_dic = {}
         self.header_column_mapping = {}
         self.branch_row_mapping = {}
+        self.block_row_mapping = {}
 
         # Update ifp.py and user_config.py parameters when start ifp
+        self.job_manager = JobManager(self, debug=self.debug)
+        self.job_manager.disable_gui_signal.connect(self.disable_gui)
+        self.job_manager.finish_signal.connect(self.send_result_to_user)
+        self.job_manager.close_signal.connect(self.final_close)
         self.update_dict_by_load_config_file(self.config_file)
         self.default_config_file = self.config_obj.default_config_file
         self.env_dic = self.config_obj.env_dic
-        self.user_config = UserConfig(self.config_file, self.default_config_file)
+        self.user_config = UserConfig(self, self.config_file, self.default_config_file)
         self.user_config.save_flag.connect(lambda: self.save_config_file(save_mode='keep'))
-        self.setting_window = None
-        self.ifp_env_setting = None
         self.parse_ifp_env_setting()
 
+        # IFP sub windows
+        self.setting_window = None
+        self.config_view_window = None
+        self.flow_multiple_select_window = None
+        self.default_config_window = None
+        self.task_multiple_select_window = None
+
         # Generate the GUI.
-        self.main_table_title_list = ['Block', 'Version', 'Flow', 'Vendor', 'Branch', 'Task', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm']
+        self.main_table_title_list = ['Block', 'Version', 'Flow', 'Vendor', 'Branch', 'Task', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm', 'Build Status', 'Run Status', 'Check Status', 'Summarize Status', 'Release Status']
+        self.status_title_list = ['Build Status', 'Run Status', 'Check Status', 'Summarize Status', 'Release Status']
+        self.operation_title_list = ['Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm']
         self.gen_gui()
 
         # Switch to "CONFIG" tab if not BLOCK information on uer config file.
@@ -164,12 +183,35 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1000, self.execute_func)
 
         # System log
-        self.write_system_log('[%s] %s start ifp on host %s' % (datetime.datetime.now().strftime('%Y-%m-%d %H-%M-%S'), USER, os.popen('hostname').read().strip()))
+        self.ifp_start_time = datetime.datetime.now()
+        self.write_system_log('start ifp')
 
         # Define QTimer
         timer = QTimer(self)
         timer.start(1000)
         timer.timeout.connect(self.update_runtime)
+
+        # Init close dialog
+        self.close_dialog = QProgressDialog()
+        self.init_close_dialog()
+
+    def init_close_dialog(self):
+        self.close_dialog.setCancelButton(None)
+        self.close_dialog.setWindowFlags(Qt.CustomizeWindowHint | Qt.WindowTitleHint | Qt.WindowStaysOnTopHint)
+        self.close_dialog.setWindowTitle('Please Wait')
+        self.close_dialog.setLabelText('Killing Tasks. . .')
+        self.close_dialog.setRange(0, 0)
+        self.close_dialog.close()
+
+    def disable_gui(self, signal):
+        if signal:
+            self.top_tab.setTabEnabled(1, False)
+            self.setting_action.setEnabled(False)
+            self.dependency_action.setEnabled(False)
+        else:
+            self.top_tab.setTabEnabled(1, True)
+            self.setting_action.setEnabled(True)
+            self.dependency_action.setEnabled(True)
 
     def tab_changed(self, index):
         if index == 1:
@@ -209,16 +251,22 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('IC FLow Platform')
         self.setWindowIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/logo/ifp.png'))
         common_pyqt5.center_window(self)
-        self.showMaximized()
+
+        if self.fullscreen_flag:
+            self.showMaximized()
 
     # menubar (start) #
     def gen_menubar(self):
         menubar = self.menuBar()
 
         # File
-        setting_action = QAction('Setting', self)
-        setting_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/settings.png'))
-        setting_action.triggered.connect(self.gen_setting_gui)
+        self.setting_action = QAction('Setting', self)
+        self.setting_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/settings.png'))
+        self.setting_action.triggered.connect(self.gen_setting_gui)
+
+        self.dependency_action = QAction('Set Dependency', self)
+        self.dependency_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/settings.png'))
+        self.dependency_action.triggered.connect(self.user_config.set_dependency_priority)
 
         save_status_file_action = QAction('Save Status File', self)
         save_status_file_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/red/save_file.png'))
@@ -242,7 +290,7 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
 
         file_menu = menubar.addMenu('File')
-        file_menu.addAction(setting_action)
+        file_menu.addSeparator()
         file_menu.addAction(save_status_file_action)
         file_menu.addAction(load_status_file_action)
         file_menu.addAction(save_config_file_action)
@@ -250,19 +298,29 @@ class MainWindow(QMainWindow):
         file_menu.addAction(exit_action)
 
         # View
-        self.show_hide_menu = QMenu('Show or Hide Columns', self)
+        config_view_action = QAction('Config View', self)
+        config_view_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/settings.png'))
+        config_view_action.triggered.connect(self.gen_config_view_gui)
+
+        main_view_action = QAction('Main View', self)
+        main_view_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/settings.png'))
+        main_view_action.triggered.connect(self.gen_main_view_gui)
+
+        self.view_status_dic.setdefault('column', {})
 
         for i, item in enumerate(self.main_table_title_list):
             self.header_column_mapping[item] = i
-            action = QAction(item, self)
-            action.setCheckable(True)
-            action.setChecked(True)
-            action.triggered.connect(self.show_or_hide_column)
-            action.triggered.connect(self.user_config.show_or_hide_column)
-            self.show_hide_menu.addAction(action)
 
-        self.filter_branches_menu = QMenu('Filter Branches', self)
-        self.update_filter_branches_menu()
+            if item not in self.status_title_list:
+                self.view_status_dic['column'][item] = True
+
+        self.view_detail_column_dic = {title: True for title in self.operation_title_list}
+
+        detail_status_action = QAction('Detail Status Info', self)
+        detail_status_action.setShortcut('Ctrl+H')
+        detail_status_action.setCheckable(True)
+        detail_status_action.setChecked(False)
+        detail_status_action.triggered.connect(self.show_or_hide_detail_status)
 
         zoom_in_action = QAction('Zoom &In', self)
         zoom_in_action.setShortcut('Ctrl+I')
@@ -275,64 +333,53 @@ class MainWindow(QMainWindow):
         zoom_out_action.triggered.connect(self.zoom_out)
 
         view_menu = menubar.addMenu('View')
-        view_menu.addMenu(self.show_hide_menu)
-        view_menu.addMenu(self.filter_branches_menu)
+        view_menu.addAction(config_view_action)
+        view_menu.addAction(main_view_action)
+        view_menu.addSeparator()
         view_menu.addAction(zoom_in_action)
         view_menu.addAction(zoom_out_action)
-
-        # Setup
-        select_flows_action = QAction('Select Flows', self)
-        select_flows_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/red/F.png'))
-        select_flows_action.triggered.connect(self.select_flows)
-
-        select_steps_action = QAction('Select Tasks', self)
-        select_steps_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/red/T.png'))
-        select_steps_action.triggered.connect(self.select_tasks)
+        view_menu.addSeparator()
+        view_menu.addAction(detail_status_action)
 
         setup_menu = menubar.addMenu('Setup')
-        setup_menu.addAction(select_flows_action)
-        setup_menu.addAction(select_steps_action)
+        setup_menu.addAction(self.setting_action)
+        setup_menu.addAction(self.dependency_action)
 
         # Contral
         contral_all_action = QAction('&All_Steps', self)
         contral_all_action.setShortcut('Ctrl+A')
         contral_all_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/all.png'))
-        contral_all_action.triggered.connect(self.run_all_steps)
+        contral_all_action.triggered.connect(lambda: self.execute_action(common.action.run, run_all_steps=True))
 
-        contral_build_action = QAction('&Build', self)
+        contral_build_action = QAction('&' + common.action.build, self)
         contral_build_action.setShortcut('Ctrl+B')
         contral_build_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/build.png'))
-        contral_build_action.triggered.connect(lambda: self.execute_action('Build'))
+        contral_build_action.triggered.connect(lambda: self.execute_action(common.action.build))
 
-        contral_run_action = QAction('&Run', self)
+        contral_run_action = QAction('&' + common.action.run, self)
         contral_run_action.setShortcut('Ctrl+R')
         contral_run_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/run.png'))
-        contral_run_action.triggered.connect(lambda: self.execute_action('Run'))
+        contral_run_action.triggered.connect(lambda: self.execute_action(common.action.run))
 
-        contral_kill_action = QAction('&Kill', self)
+        contral_kill_action = QAction('&' + common.action.kill, self)
         contral_kill_action.setShortcut('Ctrl+K')
         contral_kill_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/kill.png'))
-        contral_kill_action.triggered.connect(lambda: self.execute_action('Kill'))
+        contral_kill_action.triggered.connect(lambda: self.execute_action(common.action.kill))
 
-        contral_check_action = QAction('&Check', self)
+        contral_check_action = QAction('&' + common.action.check, self)
         contral_check_action.setShortcut('Ctrl+C')
         contral_check_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/checklist.png'))
-        contral_check_action.triggered.connect(lambda: self.execute_action('Check'))
+        contral_check_action.triggered.connect(lambda: self.execute_action(common.action.check))
 
-        contral_summary_action = QAction('&Summary', self)
+        contral_summary_action = QAction('&' + common.action.summarize, self)
         contral_summary_action.setShortcut('Ctrl+S')
         contral_summary_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary.png'))
-        contral_summary_action.triggered.connect(lambda: self.execute_action('Summary'))
+        contral_summary_action.triggered.connect(lambda: self.execute_action(common.action.summarize))
 
-        contral_post_run_action = QAction('&Post Run', self)
-        contral_post_run_action.setShortcut('Ctrl+P')
-        contral_post_run_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/post_run.png'))
-        contral_post_run_action.triggered.connect(lambda: self.execute_action('Post Run'))
-
-        contral_release_action = QAction('&Release', self)
+        contral_release_action = QAction('&' + common.action.release, self)
         contral_release_action.setShortcut('Ctrl+Shift+R')
         contral_release_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/release.png'))
-        contral_release_action.triggered.connect(lambda: self.execute_action('Release'))
+        contral_release_action.triggered.connect(lambda: self.execute_action(common.action.release))
 
         contral_menu = menubar.addMenu('Control')
         contral_menu.addAction(contral_all_action)
@@ -341,7 +388,6 @@ class MainWindow(QMainWindow):
         contral_menu.addAction(contral_kill_action)
         contral_menu.addAction(contral_check_action)
         contral_menu.addAction(contral_summary_action)
-        contral_menu.addAction(contral_post_run_action)
         contral_menu.addAction(contral_release_action)
 
         # Tool
@@ -379,43 +425,138 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.setting_window.init_ui()
         self.setting_window.show()
 
+    def gen_main_view_gui(self):
+        self.config_view_window = ViewWindow(status_dic=self.view_status_dic, disable_list=self.view_disable_item_list, title='Main View')
+        self.config_view_window.setWindowModality(Qt.ApplicationModal)
+        self.config_view_window.item_select_status_signal.connect(self.update_main_view)
+        self.config_view_window.init_ui()
+        self.config_view_window.show()
+
+    def update_main_view(self, view_name, item_text, item_select_status):
+        if view_name == 'column':
+            if item_text not in self.header_column_mapping.keys():
+                return
+
+            if item_select_status:
+                self.main_table.showColumn(self.header_column_mapping[item_text])
+            else:
+                self.main_table.hideColumn(self.header_column_mapping[item_text])
+
+        elif view_name == 'branch':
+            if item_select_status:
+                # block hidden remain hidden
+                exclude_visible_row_list = []
+
+                for block in self.block_row_mapping.keys():
+                    if (block in self.view_status_dic['block'].keys()) and (not self.view_status_dic['block'][block]):
+                        exclude_visible_row_list += self.block_row_mapping[block]
+
+                for row in self.branch_row_mapping[item_text]:
+                    if row not in exclude_visible_row_list:
+                        self.main_table_info_list[row]['Visible'] = True
+            else:
+                for row in self.branch_row_mapping[item_text]:
+                    self.main_table_info_list[row]['Visible'] = False
+
+        elif view_name == 'block':
+            # Update self.main_table_info_list (Visible or not).
+            if item_select_status:
+                # branch hidden remain hidden
+                exclude_visible_row_list = []
+
+                for branch in self.branch_row_mapping.keys():
+                    if (branch in self.view_status_dic['branch'].keys()) and (not self.view_status_dic['branch'][branch]):
+                        exclude_visible_row_list += self.branch_row_mapping[branch]
+
+                for row in self.block_row_mapping[item_text]:
+                    if row not in exclude_visible_row_list:
+                        self.main_table_info_list[row]['Visible'] = True
+            else:
+                for row in self.block_row_mapping[item_text]:
+                    self.main_table_info_list[row]['Visible'] = False
+
+        self.view_status_dic[view_name][item_text] = item_select_status
+        self.update_main_table()
+        self.top_tab.setCurrentIndex(2)
+        self.update_status_table()
+
+    def gen_config_view_gui(self):
+        self.config_view_window = ViewWindow(status_dic=self.user_config.view_status_dic, title='Config View')
+        self.config_view_window.setWindowModality(Qt.ApplicationModal)
+        self.config_view_window.item_select_status_signal.connect(self.user_config.update_config_view)
+        self.config_view_window.init_ui()
+        self.config_view_window.show()
+
     def parse_ifp_env_setting(self):
         self.ifp_env_setting = {'Project settings': {'Project': {'Project name': {'widget_type': 'edit',
                                                                                   'value': self.config_dic['PROJECT']},
                                                                  'User group': {'widget_type': 'edit',
                                                                                 'value': self.config_dic['GROUP'] if 'GROUP' in self.config_dic.keys() else None},
                                                                  'Default setting': {'widget_type': 'edit',
-                                                                                     'value': self.default_config_file}}
+                                                                                     'value': self.default_config_file,
+                                                                                     'split_line': True},
+                                                                 'Auto import tasks': {'widget_type': 'select',
+                                                                                       'value': self.auto_import_tasks,
+                                                                                       'description': 'Import all tasks when add new block/version'}}
                                                      },
-                                'System settings': {'Cluster management': {'$BSUB_QUEUE': {'widget_type': 'edit',
+                                'System settings': {'Appearance': {'Fullscreen mode': {'widget_type': 'select',
+                                                                                       'value': self.fullscreen_flag,
+                                                                                       'description': 'Launch IFP in fullscreen mode'}},
+                                                    'Cluster management': {'$BSUB_QUEUE': {'widget_type': 'edit',
                                                                                            'value': self.config_dic['VAR']['BSUB_QUEUE'] if 'BSUB_QUEUE' in self.config_dic['VAR'].keys() else None}},
                                                     'Process management': {'Ignore fail tasks': {'widget_type': 'select',
                                                                                                  'value': self.ignore_fail,
                                                                                                  'description': 'Even if dependent tasks failed, selected task can start on schedule'},
+                                                                           'Rerun before view': {'widget_type': 'select',
+                                                                                                 'value': self.rerun_check_or_summarize_before_view,
+                                                                                                 'description': 'Auto rerun CHECK(SUMMARIZE) command before view check(summarize) report'},
                                                                            'Send results': {'widget_type': 'select',
                                                                                             'value': self.send_result,
                                                                                             'description': 'Send result to users after action done'},
                                                                            'Confirm rerun tasks': {'widget_type': 'select',
                                                                                                    'value': self.rerun_flag,
                                                                                                    'description': 'Remind user to confirm if rerun PASSED tasks'}
-                                                                           }
+                                                                           },
+
                                                     }
                                 }
 
     def update_ifp_setting(self, settings, need_reload_flag):
         self.ifp_env_setting = settings
-        self.rerun_flag = settings['System settings']['Process management']['Confirm rerun tasks']['value']
-        self.ignore_fail = settings['System settings']['Process management']['Ignore fail tasks']['value']
-        self.send_result = settings['System settings']['Process management']['Send results']['value']
 
         if not settings['Project settings']['Project']['Default setting']['value'] == self.default_config_file:
             self.default_config_file = settings['Project settings']['Project']['Default setting']['value']
             self.user_config.default_yaml = settings['Project settings']['Project']['Default setting']['value']
             self.user_config.update_default_setting()
 
+        if not settings['Project settings']['Project']['Auto import tasks']['value'] == self.auto_import_tasks:
+            self.config_setting.update_local_config('auto_import_tasks', settings['Project settings']['Project']['Auto import tasks']['value'])
+            self.auto_import_tasks = settings['Project settings']['Project']['Auto import tasks']['value']
+
+        if not settings['System settings']['Process management']['Confirm rerun tasks']['value'] == self.rerun_flag:
+            self.config_setting.update_local_config('rerun_flag', settings['System settings']['Process management']['Confirm rerun tasks']['value'])
+            self.rerun_flag = settings['System settings']['Process management']['Confirm rerun tasks']['value']
+
+        if not settings['System settings']['Process management']['Rerun before view']['value'] == self.rerun_check_or_summarize_before_view:
+            self.config_setting.update_local_config('rerun_check_or_summarize_before_view', settings['System settings']['Process management']['Rerun before view']['value'])
+            self.rerun_check_or_summarize_before_view = settings['System settings']['Process management']['Rerun before view']['value']
+
+        if not settings['System settings']['Process management']['Ignore fail tasks']['value'] == self.ignore_fail:
+            self.config_setting.update_local_config('ignore_fail', settings['System settings']['Process management']['Ignore fail tasks']['value'])
+            self.ignore_fail = settings['System settings']['Process management']['Ignore fail tasks']['value']
+
+        if not settings['System settings']['Process management']['Send results']['value'] == self.send_result:
+            self.config_setting.update_local_config('send_result', settings['System settings']['Process management']['Send results']['value'])
+            self.send_result = settings['System settings']['Process management']['Send results']['value']
+
+        if not settings['System settings']['Appearance']['Fullscreen mode']['value'] == self.fullscreen_flag:
+            self.config_setting.update_local_config('fullscreen_flag', settings['System settings']['Appearance']['Fullscreen mode']['value'])
+            self.fullscreen_flag = settings['System settings']['Appearance']['Fullscreen mode']['value']
+
+        self.config_setting.save_local_config()
+
         if need_reload_flag:
-            self.user_config.parsing_final_setting()
-            self.save_config_file(save_mode='keep')
+            self.user_config.save()
 
     # menubar (end) #
 
@@ -424,63 +565,55 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         # Run all steps
         run_all_steps_action = QAction('Run All Steps', self)
         run_all_steps_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/all.png'))
-        run_all_steps_action.triggered.connect(self.run_all_steps)
+        run_all_steps_action.triggered.connect(lambda: self.execute_action(common.action.run, run_all_steps=True))
 
         self.toolbar = self.addToolBar('Run All Steps')
         self.toolbar.addAction(run_all_steps_action)
 
         # Build
-        build_action = QAction('Build', self)
+        build_action = QAction(common.action.build, self)
         build_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/build.png'))
-        build_action.triggered.connect(lambda: self.execute_action('Build'))
+        build_action.triggered.connect(lambda: self.execute_action(common.action.build))
 
-        self.toolbar = self.addToolBar('Build')
+        self.toolbar = self.addToolBar(common.action.build)
         self.toolbar.addAction(build_action)
 
         # Run
-        run_action = QAction('Run', self)
+        run_action = QAction(common.action.run, self)
         run_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/run.png'))
-        run_action.triggered.connect(lambda: self.execute_action('Run'))
+        run_action.triggered.connect(lambda: self.execute_action(common.action.run))
 
-        self.toolbar = self.addToolBar('Run')
+        self.toolbar = self.addToolBar(common.action.run)
         self.toolbar.addAction(run_action)
 
         # Kill
-        kill_action = QAction('Kill', self)
+        kill_action = QAction(common.action.kill, self)
         kill_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/kill.png'))
-        kill_action.triggered.connect(lambda: self.execute_action('Kill'))
+        kill_action.triggered.connect(lambda: self.execute_action(common.action.kill))
 
-        self.toolbar = self.addToolBar('Kill')
+        self.toolbar = self.addToolBar(common.action.kill)
         self.toolbar.addAction(kill_action)
 
         # Check
-        check_action = QAction('Check', self)
+        check_action = QAction(common.action.check, self)
         check_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/checklist.png'))
-        check_action.triggered.connect(lambda: self.execute_action('Check'))
+        check_action.triggered.connect(lambda: self.execute_action(common.action.check))
 
-        self.toolbar = self.addToolBar('Check')
+        self.toolbar = self.addToolBar(common.action.check)
         self.toolbar.addAction(check_action)
 
         # Summary
-        summary_action = QAction('Summary', self)
+        summary_action = QAction(common.action.summarize, self)
         summary_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary.png'))
-        summary_action.triggered.connect(lambda: self.execute_action('Summary'))
+        summary_action.triggered.connect(lambda: self.execute_action(common.action.summarize))
 
-        self.toolbar = self.addToolBar('Summary')
+        self.toolbar = self.addToolBar(common.action.summarize)
         self.toolbar.addAction(summary_action)
 
-        # Post Run
-        post_run_action = QAction('Post Run', self)
-        post_run_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/post_run.png'))
-        post_run_action.triggered.connect(lambda: self.execute_action('Post Run'))
-
-        self.toolbar = self.addToolBar('Post Run')
-        self.toolbar.addAction(post_run_action)
-
         # Release
-        release_action = QAction('Release', self)
+        release_action = QAction(common.action.release, self)
         release_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/release.png'))
-        release_action.triggered.connect(lambda: self.execute_action('Release'))
+        release_action.triggered.connect(lambda: self.execute_action(common.action.release))
 
         self.toolbar = self.addToolBar('Release')
         self.toolbar.addAction(release_action)
@@ -491,7 +624,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             (status_file, file_type) = QFileDialog.getSaveFileName(self, 'Save status file', '.', 'YAML (*.yaml)')
 
         if status_file:
-            self.update_message_text('Save status into file "' + str(status_file) + '".')
+            self.update_message_text({'message': 'Save status into file "' + str(status_file) + '".', 'color': 'black'})
 
             # Seitch self.main_table_info_list into a dict.
             main_table_info_dic = {}
@@ -504,6 +637,11 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                                           'Branch': main_table_info['Branch'],
                                           'Task': main_table_info['Task'],
                                           'Status': main_table_info['Status'],
+                                          'BuildStatus': main_table_info['BuildStatus'],
+                                          'RunStatus': main_table_info['RunStatus'],
+                                          'CheckStatus': main_table_info['CheckStatus'],
+                                          'SummarizeStatus': main_table_info['SummarizeStatus'],
+                                          'ReleaseStatus': main_table_info['ReleaseStatus'],
                                           'Job': main_table_info['Job'],
                                           'Runtime': main_table_info['Runtime'],
                                           'Visible': main_table_info['Visible'],
@@ -517,7 +655,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             (status_file, file_type) = QFileDialog.getOpenFileName(self, 'Load status file', '.', '*')
 
         if status_file:
-            self.update_message_text('Load status with file "' + str(status_file) + '".')
+            self.update_message_text({'message': 'Load status with file "' + str(status_file) + '".', 'color': 'black'})
 
             # Get status from status file.
             with open(status_file, 'rb') as SF:
@@ -529,6 +667,11 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                     if (main_table_info['Block'] == status_dic['Block']) and (main_table_info['Version'] == status_dic['Version']) and (main_table_info['Flow'] == status_dic['Flow']) and (main_table_info['Vendor'] == status_dic['Vendor']) and (main_table_info['Branch'] == status_dic['Branch']) and (
                             main_table_info['Task'] == status_dic['Task']):
                         self.main_table_info_list[i]['Status'] = status_dic['Status']
+                        self.main_table_info_list[i]['BuildStatus'] = status_dic['BuildStatus']
+                        self.main_table_info_list[i]['RunStatus'] = status_dic['RunStatus']
+                        self.main_table_info_list[i]['CheckStatus'] = status_dic['CheckStatus']
+                        self.main_table_info_list[i]['SummarizeStatus'] = status_dic['SummarizeStatus']
+                        self.main_table_info_list[i]['ReleaseStatus'] = status_dic['ReleaseStatus']
                         self.main_table_info_list[i]['Job'] = status_dic['Job']
                         self.main_table_info_list[i]['Runtime'] = status_dic['Runtime']
                         self.main_table_info_list[i]['Visible'] = status_dic['Visible']
@@ -543,7 +686,8 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             (config_file, file_type) = QFileDialog.getOpenFileName(self, 'Load config file', '.', '*')
 
         if config_file:
-            self.update_message_text('Load config file "' + str(config_file) + '".')
+            self.save_status_file('./.ifp.status.yaml')
+            self.update_message_text({'message': 'Load config file "' + str(config_file) + '".', 'color': 'black'})
 
             # Update self.config_dic and self.main_table_info_list with new config_file.
             self.update_dict_by_load_config_file(config_file)
@@ -556,20 +700,37 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.user_config.config_path_edit.setText(self.config_file)
             self.user_config.load()
             self.update_filter_branches_menu()
+            self.load_status_file('./.ifp.status.yaml')
 
     def update_dict_by_load_config_file(self, config_file):
         self.config_file = config_file
-        self.config_obj = parse_config.Config(self.config_file)
+        self.config_obj = parse_config.Config(config_file)
         self.config_dic = self.config_obj.config_dic
         self.main_table_info_list = self.config_obj.main_table_info_list
+        self.job_manager.update(self.config_dic)
 
         self.branch_row_mapping = {}
+        self.block_row_mapping = {}
+
+        self.view_status_dic['block'] = {}
+        self.view_status_dic['branch'] = {}
+
         for (i, main_table_info) in enumerate(self.main_table_info_list):
             branch = main_table_info['Branch']
+            self.view_status_dic['branch'][branch] = True
+
             if branch not in self.branch_row_mapping.keys():
                 self.branch_row_mapping[branch] = [i]
             else:
                 self.branch_row_mapping[branch].append(i)
+
+            block = main_table_info['Block']
+            self.view_status_dic['block'][block] = True
+
+            if block not in self.block_row_mapping.keys():
+                self.block_row_mapping[block] = [i]
+            else:
+                self.block_row_mapping[block].append(i)
 
     def save_config_file(self, save_mode='keep'):
         """
@@ -590,15 +751,13 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             with open(config_file, 'w', encoding='utf-8') as SF:
                 yaml.dump(dict(self.user_config.final_setting), SF, indent=4, sort_keys=False)
 
-            self.save_status_file('./.ifp.status.yaml')
             self.load_config_file(config_file)
-            self.load_status_file('./.ifp.status.yaml')
             self.user_config.config_path_edit.setText(config_file)
 
     # Process status/config files (end) #
 
     def zoom_in(self):
-        self.update_message_text('Zoom in')
+        self.update_message_text({'message': 'Zoom in', 'color': 'black'})
 
         self.gui_width = self.width()
         self.gui_height = self.height()
@@ -607,7 +766,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.resize(self.gui_width, self.gui_height)
 
     def zoom_out(self):
-        self.update_message_text('Zoom out')
+        self.update_message_text({'message': 'Zoom out', 'color': 'black'})
 
         self.gui_width = self.width()
         self.gui_height = self.height()
@@ -616,7 +775,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.resize(self.gui_width, self.gui_height)
 
     def show_lsf_monitor(self):
-        self.update_message_text('Show LSF/Openlava information with tool "bmonitor".')
+        self.update_message_text({'message': 'Show LSF/Openlava information with tool "bmonitor".', 'color': 'black'})
 
         bmonitor_location = shutil.which('bmonitor')
 
@@ -634,9 +793,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                 QMessageBox.warning(self, 'LSF Monitor Warning', 'Not find "bmonitor" on system.')
 
     def edit_config_default(self):
-        self.class_default_config = DefaultConfig(self.default_config_file)
-        self.class_default_config.save_signal.connect(self.user_config.update_default_setting)
-        self.class_default_config.show()
+        self.default_config_window = DefaultConfig(self.default_config_file)
+        self.default_config_window.save_signal.connect(self.user_config.update_default_setting)
+        self.default_config_window.show()
 
     # Select flows (start) #
     def select_flows(self):
@@ -652,15 +811,15 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             if main_table_info['Flow'] not in flow_list:
                 flow_list.append(main_table_info['Flow'])
 
-        return (flow_list)
+        return flow_list
 
     def update_flow_select_status(self, flow, flow_select_status):
         if flow_select_status:
             status = Qt.Checked
-            self.update_message_text('Flow "' + str(flow) + '" is selected.')
+            self.update_message_text({'message': 'Flow "' + str(flow) + '" is selected.', 'color': 'black'})
         else:
             status = Qt.Unchecked
-            self.update_message_text('Flow "' + str(flow) + '" is un-selected.')
+            self.update_message_text({'message': 'Flow "' + str(flow) + '" is un-selected.', 'color': 'black'})
 
         for main_table_info in self.main_table_info_list:
             if flow == main_table_info['Flow']:
@@ -682,15 +841,15 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             if main_table_info['Task'] not in task_list:
                 task_list.append(main_table_info['Task'])
 
-        return (task_list)
+        return task_list
 
     def update_task_select_status(self, task, task_select_status):
         if task_select_status:
             status = Qt.Checked
-            self.update_message_text('Task "' + str(task) + '" is selected.')
+            self.update_message_text({'message': 'Task "' + str(task) + '" is selected.', 'color': 'black'})
         else:
             status = Qt.Unchecked
-            self.update_message_text('Task "' + str(task) + '" is un-selected.')
+            self.update_message_text({'message': 'Task "' + str(task) + '" is un-selected.', 'color': 'black'})
 
         for main_table_info in self.main_table_info_list:
             if task == main_table_info['Task']:
@@ -698,16 +857,16 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     # Select tasks (end) #
 
-    def run_all_steps(self):
-        build_obj = self.execute_action('Build', run=False)
-        run_obj = self.execute_action('Run', run=False)
-        check_obj = self.execute_action('Check', run=False)
-        sum_obj = self.execute_action('Summary', run=False)
-
-        build_obj.start()
-        build_obj.finish_signal.connect(lambda: run_obj.start())
-        run_obj.finish_signal.connect(lambda: check_obj.start())
-        check_obj.finish_signal.connect(lambda: sum_obj.start())
+    # def run_all_steps(self):
+    #     build_obj = self.execute_action('Build', run=False)
+    #     run_obj = self.execute_action('Run', run=False)
+    #     check_obj = self.execute_action('Check', run=False)
+    #     sum_obj = self.execute_action('Summary', run=False)
+    #
+    #     build_obj.start()
+    #     build_obj.finish_signal.connect(lambda: run_obj.start())
+    #     run_obj.finish_signal.connect(lambda: check_obj.start())
+    #     check_obj.finish_signal.connect(lambda: sum_obj.start())
 
     # toolbar (end) #
 
@@ -836,8 +995,6 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.sidebar_tree.header().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.sidebar_tree.header().setStretchLastSection(False)
 
-        self.sidebar_tree.itemClicked.connect(self.sidebar_tree_item_click_behavior)
-
         # Update self.sidebar_tree
         self.update_sidebar_tree()
 
@@ -854,14 +1011,14 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                     self.update_main_table_block_visible_status(child_item.text(column), child_item.checkState(column))
 
                 if item.checkState(column):
-                    self.update_message_text('All blocks are selected.')
+                    self.update_message_text({'message': 'All blocks are selected.', 'color': 'black'})
                 else:
-                    self.update_message_text('All blocks are un-selected.')
+                    self.update_message_text({'message': 'All blocks are un-selected.', 'color': 'black'})
             else:
                 if item.checkState(column):
-                    self.update_message_text('Block ' + str(item.text(column)) + ' is selected.')
+                    self.update_message_text({'message': 'Block ' + str(item.text(column)) + ' is selected.', 'color': 'black'})
                 else:
-                    self.update_message_text('Block ' + str(item.text(column)) + ' is un-selected.')
+                    self.update_message_text({'message': 'Block ' + str(item.text(column)) + ' is un-selected.', 'color': 'black'})
 
                 self.update_main_table_block_visible_status(item.text(column), item.checkState(column))
 
@@ -884,7 +1041,6 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.sidebar_tree.clear()
         root_item = QTreeWidgetItem(self.sidebar_tree)
         root_item.setText(0, self.config_dic['PROJECT'])
-        root_item.setCheckState(0, Qt.Checked)
         root_item.setIcon(0, QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/blue/project.png'))
 
         block_list = self.get_all_blocks()
@@ -898,10 +1054,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     def get_sidebar_tree_block_item(self, block, status=Qt.Checked):
         item = QTreeWidgetItem()
         item.setText(0, block)
-        item.setCheckState(0, status)
         item.setIcon(0, QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/blue/block.png'))
 
-        return (item)
+        return item
 
     def get_all_blocks(self):
         block_list = []
@@ -910,7 +1065,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             if main_table_info['Block'] not in block_list:
                 block_list.append(main_table_info['Block'])
 
-        return (block_list)
+        return block_list
 
     # sidebar_tree (end) #
 
@@ -929,7 +1084,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.status_table.verticalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
 
         self.status_table.setColumnCount(1)
-        self.status_table.setHorizontalHeaderLabels(['Task Status', ])
+        self.status_table.setHorizontalHeaderLabels(['Task Run Status', ])
         self.status_table.horizontalHeader().setDefaultAlignment(Qt.AlignLeft)
         self.status_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
@@ -937,8 +1092,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.status_table.setEditTriggers(QTableWidget.NoEditTriggers)
 
         # Trigger a slot function when a cell is double clicked
-        self.status_table.cellDoubleClicked.connect(self.click_status_table)
-        self.status_filt_flag = 'Total'
+        self.status_table.cellClicked.connect(self.click_status_table)
 
         # Update self.status_table.
         self.update_status_table()
@@ -948,78 +1102,79 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         Trigger this function when double clicked status table
         """
         item = self.status_table.verticalHeaderItem(row)
-        status = item.text()
+        self.status_filt_flag = item.text()
 
-        self.status_filt_flag = status
-        self.filt_main_table()
-
-    def filt_main_table(self):
-        """
-        Filters items in main table according to status
-        """
-        status = self.status_filt_flag
-
-        row_count = self.main_table.rowCount()
-
-        for row in range(row_count):
-
-            self.main_table.hideRow(row)
-            row_status = self.main_table.item(row, 6).text()
-
-            if status == "Total":
-                self.main_table.showRow(row)
-            elif status == "Run" and row_status == "Running":
-                self.main_table.showRow(row)
-            elif status == "Passed" and row_status == "RUN PASS":
-                self.main_table.showRow(row)
-            elif status == "Failed" and row_status == "RUN FAIL":
-                self.main_table.showRow(row)
-            elif status == "Others" and row_status != "Running" and row_status != "RUN PASS" and row_status != "RUN FAIL":
-                self.main_table.showRow(row)
+        self.update_main_table()
 
     def update_status_table(self):
         status_dic = self.get_status_dic()
+        hided_status_dic = self.get_hided_status_dic()
 
-        item = QTableWidgetItem(str(status_dic['Total']))
-        self.status_table.setItem(0, 0, item)
+        for (row, status) in enumerate(['Total', 'Run', 'Passed', 'Failed', 'Others']):
+            if hided_status_dic[status] > 0:
+                item = QTableWidgetItem(str(status_dic[status]) + "  (" + str(hided_status_dic[status]) + " hided)")
+            else:
+                item = QTableWidgetItem(str(status_dic[status]))
 
-        item = QTableWidgetItem(str(status_dic['Run']))
-        self.status_table.setItem(1, 0, item)
+            if status == 'Passed':
+                item.setForeground(QBrush(Qt.green))
+            elif status == 'Failed':
+                item.setForeground(QBrush(Qt.red))
 
-        item = QTableWidgetItem(str(status_dic['Passed']))
-        self.status_table.setItem(2, 0, item)
+            self.status_table.setItem(row, 0, item)
 
-        item = QTableWidgetItem(str(status_dic['Failed']))
-        item.setForeground(QBrush(Qt.green))
-        self.status_table.setItem(3, 0, item)
-
-        item = QTableWidgetItem(str(status_dic['Others']))
-        item.setForeground(QBrush(Qt.red))
-        self.status_table.setItem(4, 0, item)
-
-        self.filt_main_table()
+        self.update_main_table()
 
     def get_status_dic(self):
         status_dic = {'Total': 0, 'Run': 0, 'Passed': 0, 'Failed': 0, 'Others': 0}
 
         for main_table_info in self.main_table_info_list:
             status_dic['Total'] += 1
-            status = main_table_info['Status']
+            status = main_table_info['RunStatus']
+            check_status = main_table_info['CheckStatus']
+
+            if check_status in [common.status.checking, common.status.passed, common.status.failed]:
+                status = check_status
 
             if status:
-                if (status == 'Building') or (status == 'Running'):
+                if status == common.status.running:
                     status_dic['Run'] += 1
-                elif status.find('PASS') >= 0:
+                elif status == common.status.passed:
                     status_dic['Passed'] += 1
-                elif status.find('FAIL') >= 0:
+                elif status == common.status.failed:
                     status_dic['Failed'] += 1
                 else:
                     status_dic['Others'] += 1
             else:
                 status_dic['Others'] += 1
 
-        return (status_dic)
+        return status_dic
 
+    def get_hided_status_dic(self):
+        hided_status_dic = {'Total': 0, 'Run': 0, 'Passed': 0, 'Failed': 0, 'Others': 0}
+
+        for main_table_info in self.main_table_info_list:
+            if not main_table_info['Visible']:
+                hided_status_dic['Total'] += 1
+                status = main_table_info['RunStatus']
+                check_status = main_table_info['CheckStatus']
+
+                if check_status in [common.status.checking, common.status.passed, common.status.failed]:
+                    status = check_status
+
+                if status:
+                    if status == common.status.running:
+                        hided_status_dic['Run'] += 1
+                    elif status == common.status.passed:
+                        hided_status_dic['Passed'] += 1
+                    elif status == common.status.failed:
+                        hided_status_dic['Failed'] += 1
+                    else:
+                        hided_status_dic['Others'] += 1
+                else:
+                    hided_status_dic['Others'] += 1
+
+        return hided_status_dic
     # status_table (end) #
 
     # main_frame (start) #
@@ -1040,21 +1195,23 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if index == 5:
             status = Qt.Unchecked
 
-            for row in range(self.main_table.rowCount()):
-                if self.main_table.item(row, 5).checkState() == 0:
-                    status = Qt.Checked
-                    self.main_table_info_list[row]['Selected'] = True
-                else:
-                    self.main_table_info_list[row]['Selected'] = False
+            for main_table_info in self.main_table_info_list:
+                if main_table_info['Visible'] and self.filt_task_status(main_table_info):
+                    if not main_table_info['Selected']:
+                        status = Qt.Checked
 
             if status == Qt.Checked:
-                self.update_message_text('All tasks are selected.')
+                self.update_message_text({'message': 'All tasks are selected.', 'color': 'black'})
             else:
-
-                self.update_message_text('All tasks are un-selected.')
+                self.update_message_text({'message': 'All tasks are un-selected.', 'color': 'black'})
 
             for main_table_info in self.main_table_info_list:
-                if main_table_info['Visible']:
+                if main_table_info['Visible'] and self.filt_task_status(main_table_info):
+                    if status == Qt.Checked:
+                        main_table_info['Selected'] = True
+                    else:
+                        main_table_info['Selected'] = False
+
                     self.update_main_table_item(main_table_info['Block'], main_table_info['Version'], main_table_info['Flow'], main_table_info['Vendor'], main_table_info['Branch'], main_table_info['Task'], 'Task', main_table_info['Task'], selected=status)
 
     def main_table_item_click_behavior(self, item):
@@ -1064,7 +1221,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             visible_row = -1
 
             for (row, main_table_info) in enumerate(self.main_table_info_list):
-                if main_table_info['Visible']:
+                if main_table_info['Visible'] and self.filt_task_status(main_table_info):
                     visible_row += 1
 
                     if visible_row == item_row:
@@ -1072,11 +1229,11 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                             if item.checkState() == 0:
                                 status = Qt.Unchecked
                                 self.main_table_info_list[row]['Selected'] = False
-                                self.update_message_text('Row ' + str(visible_row+1) + ', task "' + str(main_table_info['Task']) + '" is un-selected.')
+                                self.update_message_text({'message': 'Row ' + str(visible_row+1) + ', task "' + str(main_table_info['Task']) + '" is un-selected.', 'color': 'black'})
                             else:
                                 status = Qt.Checked
                                 self.main_table_info_list[row]['Selected'] = True
-                                self.update_message_text('Row ' + str(visible_row+1) + ', task "' + str(main_table_info['Task']) + '" is selected.')
+                                self.update_message_text({'message': 'Row ' + str(visible_row+1) + ', task "' + str(main_table_info['Task']) + '" is selected.', 'color': 'black'})
 
                             self.update_main_table_item(main_table_info['Block'], main_table_info['Version'], main_table_info['Flow'], main_table_info['Vendor'], main_table_info['Branch'], main_table_info['Task'], 'Task', main_table_info['Task'], selected=status)
                         elif item_column == 7:
@@ -1088,7 +1245,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
                             if job and str(job).startswith('b'):
                                 jobid = str(job)[2:]
-                                self.update_message_text('View job information for "' + str(jobid) + '".')
+                                self.update_message_text({'message': 'View job information for "' + str(jobid) + '".', 'color': 'black'})
                                 self.view_job_info(jobid)
                             elif job and str(job).startswith('l'):
                                 pid = str(job)[2:]
@@ -1097,17 +1254,28 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                                 if not return_code:
                                     pid = stdout.decode('utf-8').split()[4]
                                     process_info = 'local process running, PID: {}'.format(pid)
-                                    self.update_message_text(process_info)
+                                    self.update_message_text({'message': process_info, 'color': 'black'})
                                 else:
-                                    self.update_message_text('Failed to get local process {} info'.format(pid))
+                                    self.update_message_text({'message': 'Failed to get local process {} info'.format(pid), 'color': 'red'})
                         elif item_column == 11:
                             self.pop_xterm(main_table_info)
+
+    def open_file(self, item):
+        task = self.config_dic['BLOCK'][item.Block][item.Version][item.Flow][item.Vendor][item.Branch][item.Task]
+
+        (log_file, file_type) = QFileDialog.getOpenFileName(self, 'Open file', str(task.PATH), 'LOG (*.log)')
+
+        if log_file:
+            command = 'gvim ' + str(os.path.realpath(log_file))
+
+            thread_run = common.ThreadRun()
+            thread_run.run([command, ])
 
     def view_job_info(self, jobid):
         """
         View job information with tool 'lsfMonitor'.
         """
-        self.update_message_text('Show job information for jobid "' + str(jobid) + '".')
+        self.update_message_text({'message': 'Show job information for jobid "' + str(jobid) + '".', 'color': 'black'})
 
         bmonitor_location = shutil.which('bmonitor')
         bmonitor = bmonitor_location
@@ -1125,44 +1293,18 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             QMessageBox.warning(self, 'LSF Monitor Warning', 'Not find "bmonitor" on system.')
 
     def pop_check(self, item):
-        task = self.config_dic['BLOCK'][item.Block][item.Version][item.Flow][item.Vendor][item.Branch][item.Task]
-
-        if 'CHECK' in task.ACTION.keys():
-            check_path = task.PATH
-
-            if 'PATH' in task.ACTION['CHECK'].keys():
-                check_path = task.ACTION['CHECK']['PATH']
-
-            if 'REPORT_FILE' in task.ACTION['CHECK'].keys():
-                rpt = task.ACTION['CHECK']['REPORT_FILE']
-
-                if not re.match('^/.*$', rpt):
-                    rpt = str(check_path) + '/' + str(rpt)
-
-                self.execute_action('Check', task_dic_list=[item, ])
-                self.execute_action('Check View', task_dic_list=[item, ])
+        self.execute_action(common.action.check_view, task_dic_list=[item, ])
 
     def pop_summary(self, item):
-        task = self.config_dic['BLOCK'][item.Block][item.Version][item.Flow][item.Vendor][item.Branch][item.Task]
-
-        if 'SUMMARY' in task.ACTION.keys():
-            sum_path = task.PATH
-
-            if 'PATH' in task.ACTION['SUMMARY'].keys():
-                sum_path = task.ACTION['SUMMARY']['PATH']
-
-            if 'REPORT_FILE' in task.ACTION['SUMMARY'].keys():
-                rpt = task.ACTION['SUMMARY']['REPORT_FILE']
-
-                if not re.match('^/.*$', rpt):
-                    rpt = str(sum_path) + '/' + str(rpt)
-
-                self.execute_action('Summary', task_dic_list=[item, ])
-                self.execute_action('Summary View', task_dic_list=[item, ])
+        self.execute_action(common.action.summarize_view, task_dic_list=[item, ])
 
     def pop_xterm(self, item):
         task = self.config_dic['BLOCK'][item.Block][item.Version][item.Flow][item.Vendor][item.Branch][item.Task]
-        command = str(config.xterm_command) + ' "cd ' + str(task.PATH) + '; exec ' + str(os.environ['SHELL']) + '"'
+        if 'COMMON' in task.ACTION:
+            command = str(self.xterm_command) + ' "cd ' + str(task.PATH) + '; ' + str(task.ACTION['COMMON']['XTERM_COMMAND']) + '; exec ' + str(os.environ['SHELL']) + '"'
+        else:
+            command = str(self.xterm_command) + ' "cd ' + str(task.PATH) + '; exec ' + str(os.environ['SHELL']) + '"'
+
         thread_run = common.ThreadRun()
         thread_run.run([command, ])
 
@@ -1181,6 +1323,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.main_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.main_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
 
+        self.main_table_header = self.main_table.horizontalHeader()
+        self.main_table_header.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.main_table_header.customContextMenuRequested.connect(self.generate_select_menu)
+
         self.main_table.setColumnWidth(2, 60)
         self.main_table.setColumnWidth(3, 80)
         self.main_table.setColumnWidth(5, 140)
@@ -1191,8 +1337,49 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.main_table.setColumnWidth(10, 70)
         self.main_table.setColumnWidth(11, 50)
 
+        # gen open file menu
+        self.main_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.main_table.customContextMenuRequested.connect(self.generate_openfile_menu)
+
         # Update self.main_table.
         self.update_main_table()
+        self.hide_detail_status()
+
+    def generate_select_menu(self, pos):
+        menu = QMenu()
+        column = self.main_table_header.logicalIndexAt(pos)
+
+        if column == 5:
+            select_flows_action = QAction('Select Flows', self)
+            select_flows_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/red/F.png'))
+            select_flows_action.triggered.connect(self.select_flows)
+            menu.addAction(select_flows_action)
+
+            select_steps_action = QAction('Select Tasks', self)
+            select_steps_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/red/T.png'))
+            select_steps_action.triggered.connect(self.select_tasks)
+            menu.addAction(select_steps_action)
+
+        menu.exec_(self.main_table.mapToGlobal(pos))
+
+    def generate_openfile_menu(self, pos):
+        menu = QMenu()
+        column = self.main_table_header.logicalIndexAt(pos)
+        current_selected_row = self.main_table.indexAt(pos).row()
+        filter_main_table_info_list = []
+
+        for (row, main_table_info) in enumerate(self.main_table_info_list):
+            if main_table_info['Visible']:
+                filter_main_table_info_list.append(main_table_info)
+
+        task_dic = filter_main_table_info_list[current_selected_row]
+
+        if column == 5:
+            open_file_action = QAction('Open File', self)
+            open_file_action.triggered.connect(lambda: self.open_file(task_dic))
+            menu.addAction(open_file_action)
+
+        menu.exec_(self.main_table.mapToGlobal(pos))
 
     def update_main_table(self):
         # Initial, clean up self.main_table.
@@ -1202,9 +1389,8 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         row_count = 0
 
         for main_table_info in self.main_table_info_list:
-            if main_table_info['Visible']:
+            if main_table_info['Visible'] and self.filt_task_status(main_table_info):
                 row_count += 1
-
         self.main_table.setRowCount(row_count)
 
         # Update content.
@@ -1217,7 +1403,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         visible_row = -1
 
         for main_table_info in self.main_table_info_list:
-            if not main_table_info['Visible']:
+            if not main_table_info['Visible'] or not self.filt_task_status(main_table_info):
                 continue
 
             visible_row += 1
@@ -1230,6 +1416,11 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             branch = main_table_info['Branch']
             task = main_table_info['Task']
             status = main_table_info['Status']
+            buildstatus = main_table_info['BuildStatus']
+            runstatus = main_table_info['RunStatus']
+            checkstatus = main_table_info['CheckStatus']
+            summarizestatus = main_table_info['SummarizeStatus']
+            releasestatus = main_table_info['ReleaseStatus']
             check = main_table_info['Check']
             summary = main_table_info['Summary']
             job = main_table_info['Job']
@@ -1254,6 +1445,11 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                 self.update_main_table_item(block, version, flow, vendor, branch, task, 'Task', task, selected=Qt.Unchecked)
 
             self.update_main_table_item(block, version, flow, vendor, branch, task, 'Status', status)
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'BuildStatus', buildstatus)
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'RunStatus', runstatus)
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'CheckStatus', checkstatus)
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'SummarizeStatus', summarizestatus)
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'ReleaseStatus', releasestatus)
             self.update_main_table_item(block, version, flow, vendor, branch, task, 'Check', check)
             self.update_main_table_item(block, version, flow, vendor, branch, task, 'Summary', summary)
             self.update_main_table_item(block, version, flow, vendor, branch, task, 'Job', job)
@@ -1284,18 +1480,31 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
                 row_dic[key]['last'] = row_dic[key]['current']
 
+    def filt_task_status(self, main_table_info):
+        status = self.status_filt_flag
+        row_status = main_table_info["RunStatus"]
+
+        check_status = main_table_info['CheckStatus']
+
+        if check_status in [common.status.checking, "{} {}".format(common.action.check, common.status.passed), "{} {}".format(common.action.check, common.status.failed)]:
+            row_status = check_status
+
+        if status == "" or status == "Total" or (status == "Run" and row_status == common.status.running) or (status == "Passed" and row_status == common.status.passed) or (status == "Failed" and row_status == common.status.failed) or (status == "Others" and row_status != common.status.running and row_status != common.status.passed and row_status != common.status.failed):
+            return 1
+        else:
+            return 0
+
     def update_main_table_item(self, block, version, flow, vendor, branch, task, key, value, color=None, selected=None, flags=None):
-        row_info_list = ['Block', 'Version', 'Flow', 'Vendor', 'Branch', 'Task', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm']
+        row_info_list = ['Block', 'Version', 'Flow', 'Vendor', 'Branch', 'Task', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm', 'BuildStatus', 'RunStatus', 'CheckStatus', 'SummarizeStatus', 'ReleaseStatus']
         visible_row = -1
 
         for (row, main_table_info) in enumerate(self.main_table_info_list):
-            if main_table_info['Visible']:
+            if main_table_info['Visible'] and self.filt_task_status(main_table_info):
                 visible_row += 1
 
             if (block == main_table_info['Block']) and (version == main_table_info['Version']) and (flow == main_table_info['Flow']) and (vendor == main_table_info['Vendor']) and (branch == main_table_info['Branch']) and (task == main_table_info['Task']):
                 # Update self.main_table_info_list.
-                if (key != 'Check') and (key != 'Summary') and (key != 'Xterm'):
-                    self.main_table_info_list[row][key] = value
+                self.main_table_info_list[row][key] = value
 
                 if selected:
                     self.main_table_info_list[row]['Selected'] = True
@@ -1304,11 +1513,11 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                         self.main_table_info_list[row]['Selected'] = False
 
                 # Update self.main_table.
-                if main_table_info['Visible']:
+                if main_table_info['Visible'] and self.filt_task_status(main_table_info):
                     if (key != 'Check') and (key != 'Summary') and (key != 'Xterm'):
                         item = QTableWidgetItem(value)
 
-                        if key == 'Status' and not color:
+                        if 'Status' in key and not color:
                             if re.search(r'pass', str(value), flags=re.I):
                                 color = QColor(0, 204, 68)
                             elif re.search(r'fail', str(value), flags=re.I):
@@ -1337,13 +1546,23 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                         self.main_table.setItem(visible_row, row_info_list.index(key), item)
 
                     if (key == 'Check') or (key == 'Summary') or (key == 'Xterm'):
-                        item = QTableWidgetItem(value)
+                        item = QTableWidgetItem(None)
 
                         if key == 'Check':
-                            item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/checklist.png'))
+                            if value == common.status.passed:
+                                item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/check_pass.png'))
+                            elif value == common.status.failed:
+                                item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/check_fail.png'))
+                            else:
+                                item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/check_init.png'))
 
                         if key == 'Summary':
-                            item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary.png'))
+                            if value == common.status.passed:
+                                item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary_pass.png'))
+                            elif value == common.status.failed:
+                                item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary_fail.png'))
+                            else:
+                                item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary_init.png'))
 
                         if key == 'Xterm':
                             item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/terminal.png'))
@@ -1373,10 +1592,37 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         message_frame_grid.addWidget(self.message_text, 0, 0)
         self.message_frame.setLayout(message_frame_grid)
 
-        self.update_message_text('Welcome to IC Flow Platform')
+        self.update_message_text({'message': 'Welcome to IC Flow Platform', 'color': 'black'})
 
-    def update_message_text(self, message):
+    def update_message_text(self, info_dic):
+        """
+        color support string like blue, Blue, BLUE ...
+        if could not identify color string , will print a warning message on terminal and using default color: block
+        for example, color could be yellow, green, blue, orange, brown, and etc ...
+        """
+        if 'message' not in info_dic:
+            return
+
+        message = info_dic['message']
+        color = info_dic['color'] if 'color' in info_dic else 'black'
         current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # default color: black
+        (red, green, blue) = (0, 0, 0)
+
+        if color:
+            color = color.lower()
+
+            try:
+                (red, green, blue) = (int(c * 255) for c in colors.to_rgb(color))
+            except ValueError:
+                common.print_warning('*Warning*: ValueError ' + color)
+
+        color = QColor(red, green, blue)
+        color_format = self.message_text.currentCharFormat()
+        color_format.setForeground(color)
+        self.message_text.setCurrentCharFormat(color_format)
+
         self.message_text.insertPlainText('[' + str(current_time) + ']    ' + str(message) + '\n')
         common_pyqt5.text_edit_visible_position(self.message_text, 'End')
 
@@ -1385,13 +1631,17 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     # GUI (end) #
 
     def write_system_log(self, message):
-        if not config.system_log_path == '':
-            if not os.path.exists(config.system_log_path):
-                common.run_command('touch %s' % config.system_log_path)
-                os.chmod(config.system_log_path, 0o0777)
+        if not install_config.system_log_path == '':
+            if not os.path.exists(install_config.system_log_path):
+                common.run_command('touch %s' % install_config.system_log_path)
+                os.chmod(install_config.system_log_path, 0o0777)
 
-            with open(config.system_log_path, 'a') as f:
-                f.write(message + '\n')
+            time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            user = USER
+            host = os.popen('hostname').read().strip()
+
+            with open(install_config.system_log_path, 'a') as f:
+                f.write('[%s][%s@%s]: %s\n' % (time, user, host, message))
 
     # GUI function (start) #
     def execute_func(self):
@@ -1399,97 +1649,61 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         Execute specified functions after GUI started.
         """
         if self.build:
-            self.execute_action('Build')
+            self.execute_action(common.action.build)
 
         if self.run:
-            self.execute_action('Run')
+            self.execute_action(common.action.run)
 
         if self.check:
-            self.execute_action('Check')
+            self.execute_action(common.action.check)
 
-        if self.summary:
-            self.execute_action('Summary')
-
-        if self.post_run:
-            self.execute_action('Post Run')
+        if self.summarize:
+            self.execute_action(common.action.summarize)
 
         if self.release:
-            self.execute_action('Release')
+            self.execute_action(common.action.release)
 
-    def execute_action(self, action_name, task_dic_list=[], run=True):
+    def execute_action(self, action_name, task_dic_list=None, run_all_steps=False):
+        if task_dic_list is None:
+            task_dic_list = []
+
         if not task_dic_list:
             task_dic_list = list(filter(lambda x: x.get('Selected'), self.main_table_info_list))
+            task_dic_list = self.filt_task_dic_list(action_name, task_dic_list)
 
         if not task_dic_list:
             return
 
-        task_dic_list = self.filt_task_dic_list(action_name, task_dic_list)
-
-        if action_name == 'Build':
-            ifp_obj = function.IfpBuild(task_dic_list, self.config_dic, debug=self.debug)
-            self.ic_build = ifp_obj
-        elif action_name == 'Run':
-            ifp_obj = function.IfpRun(task_dic_list, self.config_dic, action='RUN', debug=self.debug, ignore_fail=self.ignore_fail)
-            self.ic_run = ifp_obj
-        elif action_name == 'Kill':
-            ifp_obj = function.IfpKill(task_dic_list, self.config_dic, debug=self.debug)
-            self.ic_kill = ifp_obj
-        elif action_name == 'Check':
-            ifp_obj = function.IfpCheck(task_dic_list, self.config_dic, debug=self.debug)
-            self.ic_check = ifp_obj
-        elif action_name == 'Summary':
-            ifp_obj = function.IfpSummary(task_dic_list, self.config_dic, debug=self.debug)
-            self.ic_sum = ifp_obj
-        elif action_name == 'Post Run':
-            ifp_obj = function.IfpRun(task_dic_list, self.config_dic, action='POST_RUN', debug=self.debug, ignore_fail=self.ignore_fail)
-            self.ic_postrun = ifp_obj
-        elif action_name == 'Release':
-            ifp_obj = function.IfpRelease(task_dic_list, self.config_dic, debug=self.debug)
-            self.ic_release = ifp_obj
-        elif action_name == 'Check View':
-            ifp_obj = function.IfpCheckView(task_dic_list, self.config_dic, debug=self.debug)
-            self.ic_check_view = ifp_obj
-        elif action_name == 'Summary View':
-            ifp_obj = function.IfpSummaryView(task_dic_list, self.config_dic, debug=self.debug)
-            self.ic_sum_view = ifp_obj
-
-        # Update main table content.
-        if (action_name != 'Check View') and (action_name != 'Summary View'):
-            ifp_obj.start_one_signal.connect(self.update_task_status)
-            ifp_obj.msg_signal.connect(self.update_message_text)
-
-            if (action_name == 'Run') or (action_name == 'Post Run'):
-                ifp_obj.set_one_jobid_signal.connect(self.update_main_table_item)
-                ifp_obj.set_run_time_signal.connect(self.update_main_table_item)
-
-            ifp_obj.finish_one_signal.connect(self.update_task_status)
-
-            # Send result to user if send_result is specified.
-            ifp_obj.finish_signal.connect(self.send_result_to_user)
-
-        if run:
-            ifp_obj.start()
-
-        return ifp_obj
+        self.job_manager.receive_action(action_name, task_dic_list, run_all_steps=run_all_steps)
 
     def filt_task_dic_list(self, action_name, task_dic_list):
         filtered_task_dic_list = []
 
-        if action_name in ["Run", "Post Run"]:
+        if action_name in ["Run"]:
             if self.rerun_flag:
                 filtered_task_dic_list = self.check_rerun_item(task_dic_list)
             else:
                 filtered_task_dic_list = task_dic_list
-        elif action_name in ["Build", "Release", "Check View", "Summary View"]:
-            filtered_task_dic_list = task_dic_list
+
+            # Write system log
+            flow_list = []
+            for task_dic in filtered_task_dic_list:
+                flow_info = "%s-%s-%s" % (task_dic['Block'], task_dic['Version'], task_dic['Flow'])
+                if flow_info not in flow_list:
+                    flow_list.append(flow_info)
+                    self.write_system_log("run flow %s" % flow_info)
+        elif action_name in [common.action.build, common.action.release, common.action.check, common.action.check_view, common.action.summarize, common.action.summarize_view]:
+            for task in task_dic_list:
+                if task['Status']:
+                    if not re.match('.+ing$', task['Status'], re.I) and task['Status'] != common.status.queued:
+                        filtered_task_dic_list.append(task)
+                    else:
+                        self.update_message_text({'message': '*Warning*: Can\'t execute {} action to {} {} {} {} {} {} because it\'s {}.'.format(action_name, task['Block'], task['Version'], task['Flow'], task['Vendor'], task['Branch'], task['Task'], task['Status']), 'color': 'yellow'})
+                else:
+                    filtered_task_dic_list.append(task)
         elif action_name == "Kill":
             for task in task_dic_list:
-                if task['Status'] == "Running":
-                    filtered_task_dic_list.append(task)
-        elif (action_name == "Summary" or action_name == "Check"):
-            for task in task_dic_list:
-                if task['Status'] not in ["Running", "Killing", "Queued"]:
-                    filtered_task_dic_list.append(task)
+                filtered_task_dic_list.append(task)
 
         return filtered_task_dic_list
 
@@ -1500,7 +1714,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         warning_text = "Below tasks have run pass before: \n"
 
         for task in task_dic_list:
-            if task["Status"] == "RUN PASS":
+            if task["Status"] == "{} {}".format(common.action.run, common.status.passed):
                 rerun_task_dic_list.append(task)
                 if len(rerun_task_dic_list) <= 3:
                     warning_text = warning_text + "Block: " + task["Block"] + " Version: " + task["Version"] + " Task: " + task["Task"] + "\n"
@@ -1534,19 +1748,39 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
         return task_dic_list
 
-    def update_task_status(self, block, version, flow, vendor, branch, task, status):
+    def update_task_status(self, task_obj, action, status):
+        block, version, flow, vendor, branch, task = task_obj.block, task_obj.version, task_obj.flow, task_obj.vendor, task_obj.branch, task_obj.task
         self.config_dic['BLOCK'][block][version][flow][vendor][branch][task].Status = status
         self.update_main_table_item(block, version, flow, vendor, branch, task, 'Status', status)
+
+        if re.match(r'(\S+)\s+(\S+)', status, flags=re.I):
+            status_value = re.match(r'(\S+)\s+(\S+)', status, flags=re.I).group(2)
+        else:
+            status_value = status
+
+        if action == common.action.build:
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'BuildStatus', status_value)
+        elif action == common.action.run:
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'RunStatus', status_value)
+        elif action == common.action.check:
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'CheckStatus', status_value)
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'Check', status_value)
+        elif action == common.action.summarize:
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'SummarizeStatus', status_value)
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'Summary', status_value)
+        elif action == common.action.release:
+            self.update_main_table_item(block, version, flow, vendor, branch, task, 'ReleaseStatus', status_value)
+
         self.update_status_table()
 
     def send_result_to_user(self):
-        if self.send_result and config.send_result_command:
+        if self.send_result and self.send_result_command:
             result_report = self.gen_result_report()
 
-            send_result_command = re.sub('USER', USER, config.send_result_command)
+            send_result_command = re.sub('USER', USER, self.send_result_command)
             send_result_command = re.sub('RESULT', result_report, send_result_command)
 
-            self.update_message_text('Send result.')
+            self.update_message_text({'message': 'Send result.', 'color': 'black'})
             os.system(send_result_command)
 
     def gen_result_report(self):
@@ -1569,8 +1803,13 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         """
         When user close GUI MainWindow, This function will execute
         """
+        # Click exit button when close_dialog is displayed is an invalid action
+        if self.close_dialog.isVisible():
+            event.ignore()
+            return
+
         running_tasks = []
-        warning_text = "Below jobs are running:\n"
+        warning_text = "Below jobs are working:\n"
 
         # read main_table_info_list and get running tasks
         for main_table_info in self.main_table_info_list:
@@ -1579,9 +1818,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             task = main_table_info['Task']
             status = main_table_info['Status']
 
-            if status == "Building" or status == "Running":
-                items = "Block:" + block + "  Version:" + version + " Task:" + task
-                running_tasks.append(items)
+            if status in common.CLOSE_REMIND_STATUS:
+                running_tasks.append(main_table_info)
+                items = "Block:" + block + "  Version:" + version + " Task:" + task + " Status:" + status
 
                 if len(running_tasks) <= 3:
                     warning_text = warning_text + items + "\n"
@@ -1589,18 +1828,35 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if len(running_tasks) > 3:
             warning_text = warning_text + "......\n"
 
-        warning_text = warning_text + "\nSure to quit and end all of them?"
+        warning_text = warning_text + "\nSure to quit and close all of them?"
 
         if len(running_tasks) > 0:
             # Build QMessageBox
             reply = QMessageBox.question(self, "Warning", warning_text, QMessageBox.Yes | QMessageBox.No)
 
             if reply == QMessageBox.Yes:
-                event.accept()
-            else:
-                event.ignore()
-        else:
-            event.accept()
+                # Execute killing action to all tasks
+                kill_tasks = self.job_manager.kill_all_jobs_before_close_window()
+
+                if kill_tasks:
+                    self.setEnabled(False)
+                    self.close_dialog.show()
+                    event.ignore()
+                    return
+
+        ifp_close_time = datetime.datetime.now()
+        run_time = (ifp_close_time - self.ifp_start_time).seconds
+        hours = run_time // 3600
+        minutes = (run_time % 3600) // 60
+        seconds = run_time % 60
+        self.write_system_log("close ifp, total runtime %02d:%02d:%02d" % (hours, minutes, seconds))
+
+        self.user_config.thread.quit()
+        event.accept()
+
+    def final_close(self):
+        self.close_dialog.close()
+        self.close()
 
     def update_runtime(self):
         """
@@ -1616,47 +1872,55 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             status = main_table_info['Status']
             runtime = main_table_info['Runtime']
 
-            if status == "Running" and runtime and runtime != "pending":
+            if status == common.status.running and runtime and runtime != "pending":
                 runtime = datetime.datetime.strptime(runtime, "%H:%M:%S")
                 runtime += datetime.timedelta(seconds=1)
                 self.update_main_table_item(block, version, flow, vendor, branch, task, 'Runtime', runtime.strftime("%H:%M:%S"))
 
-            elif status == "Killing" and runtime == "pending":
+            elif status == common.status.killing and runtime == "pending":
                 self.update_main_table_item(block, version, flow, vendor, branch, task, 'Runtime', "00:00:00")
 
-    def show_or_hide_column(self):
-        action = self.sender()
-
-        if action.text() not in self.header_column_mapping.keys():
-            return
-
-        if action.isChecked():
-            self.main_table.showColumn(self.header_column_mapping[action.text()])
-        else:
-            self.main_table.hideColumn(self.header_column_mapping[action.text()])
-
-        self.update_main_table()
-
     def update_filter_branches_menu(self):
-        self.filter_branches_menu.clear()
-
         for branch in self.branch_row_mapping.keys():
-            action = QAction(branch, self)
-            action.setCheckable(True)
-            action.setChecked(True)
-            action.triggered.connect(self.show_or_hide_branch)
-            action.triggered.connect(self.user_config.show_or_hide_branch)
-            self.filter_branches_menu.addAction(action)
+            self.update_main_view(view_name='branch', item_text=branch, item_select_status=True)
+            self.user_config.update_config_view(view_name='branch', item_text=branch, item_select_status=True)
 
-    def show_or_hide_branch(self):
+    def update_filter_block_menu(self):
+        for branch in self.branch_row_mapping.keys():
+            self.update_main_view(view_name='block', item_text=branch, item_select_status=True)
+            self.user_config.update_config_view(view_name='block', item_text=branch, item_select_status=True)
+
+    def show_or_hide_detail_status(self):
         action = self.sender()
 
         if action.isChecked():
-            for row in self.branch_row_mapping[action.text()]:
-                self.main_table.showRow(row)
+            self.show_detail_status()
         else:
-            for row in self.branch_row_mapping[action.text()]:
-                self.main_table.hideRow(row)
+            self.hide_detail_status()
+
+    def show_detail_status(self):
+        self.view_disable_item_list = self.operation_title_list
+
+        for column in self.main_table_title_list:
+            if column in self.operation_title_list:
+                self.main_table.hideColumn(self.header_column_mapping[column])
+                self.view_detail_column_dic[column] = self.view_status_dic['column'][column]
+
+        for title in self.status_title_list:
+            self.main_table.showColumn(self.header_column_mapping[title])
+
+    def hide_detail_status(self):
+        self.view_disable_item_list = []
+
+        for column in self.main_table_title_list:
+            if column in self.operation_title_list:
+
+                if self.view_detail_column_dic[column]:
+                    self.main_table.showColumn(self.header_column_mapping[column])
+                    self.view_status_dic['column'][column] = self.view_detail_column_dic[column]
+
+        for title in self.status_title_list:
+            self.main_table.hideColumn(self.header_column_mapping[title])
 
 
 class MultipleSelectWindow(QDialog):
@@ -1806,6 +2070,15 @@ class SettingWindow(QMainWindow):
                         label.setFixedHeight(10)
                         row += 1
 
+                    if 'split_line' in self.ifp_env_setting[main_category][child_category][item].keys():
+                        hline = QFrame(self)
+                        hline.setFrameShape(QFrame.HLine)
+                        hline.setFrameShadow(QFrame.Plain)
+                        hline.setStyleSheet("color : grey")
+                        hline.setLineWidth(0)
+                        hline.setMidLineWidth(0)
+                        layout.addWidget(hline)
+
                 layout.addStretch(1)
                 layout.setStretch(row + 1, 50)
                 self.main_layout.addWidget(frame)
@@ -1902,12 +2175,220 @@ class SettingWindow(QMainWindow):
         self.close()
 
 
+class ConfigSetting():
+    def __init__(self):
+        self.local_config_dir = '/home/' + USER + '/.ifp/config'
+        self.local_config_file = self.local_config_dir + '/config.py'
+        self.config_dic = common.CONFIG_DIC
+        self.local_config_dic = {}
+
+        # Get install config settings as default setting
+        for key in self.config_dic:
+            if key in dir(install_config):
+                value = getattr(install_config, key)
+            else:
+                value = self.config_dic[key]['value']
+
+            self.config_dic.update({key: value})
+
+        # If user has local config file
+        if os.path.isfile(self.local_config_file):
+            # Import local config.py
+            spec = importlib.util.spec_from_file_location('config', self.local_config_file)
+            local_config = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(local_config)
+
+            # If user has define personal setting in ~/.ifp/config/config.py, use user's setting
+            for key in dir(local_config):
+                if not re.match('^__.+__$', key):
+                    value = getattr(local_config, key)
+                    self.local_config_dic.setdefault(key, value)
+                    if key in self.config_dic and key not in common.config.admin_setting_dic:
+                        self.config_dic.update({key: value})
+
+    def update_local_config(self, config_item, config_value):
+        # If user defined item in local config.py, update it
+        # If user didn't define item in local config.py, create it
+        self.local_config_dic.update({config_item: config_value})
+
+    def save_local_config(self):
+        if self.local_config_dic:
+            # Create .ifp/config dir
+            if not os.path.isdir(self.local_config_dir):
+                os.makedirs(self.local_config_dir)
+
+            with open(self.local_config_file, 'w') as f:
+                for item, value in self.local_config_dic.items():
+                    f.write(str(item) + ' = ' + str(value) + '\n')
+
+
+class ViewWindow(QMainWindow):
+    item_select_status_signal = pyqtSignal(str, str, bool)
+
+    def __init__(self, status_dic=None, disable_list=None, title='Main View'):
+        super().__init__()
+
+        if disable_list is None:
+            disable_list = []
+
+        if status_dic is None:
+            status_dic = {}
+
+        self.view_select_dic = status_dic
+        self.disable_list = disable_list
+        self.title = title
+
+    def init_ui(self):
+        self.top_widget = QWidget()
+        self.top_layout = QVBoxLayout()
+        self.top_widget.setLayout(self.top_layout)
+        self.setCentralWidget(self.top_widget)
+
+        self.main_widget = QWidget()
+        self.main_layout = QGridLayout()
+        self.main_layout.setColumnStretch(0, 1)
+        self.main_layout.setColumnStretch(0, 6)
+        self.main_widget.setLayout(self.main_layout)
+
+        self.top_layout.addWidget(self.main_widget)
+        self.top_layout.setStretch(0, 10)
+        self.top_layout.setStretch(1, 1)
+
+        self.tables = {}
+        self.current_frame = None
+
+        self.tree = QTreeWidget()
+        self.tree.clicked.connect(self.generate_selection)
+        self.frame0 = QFrame(self.main_widget)
+        self.frame0.setFixedWidth(150)
+
+        self.setFixedSize(500, 400)
+        self.setWindowTitle(self.title)
+        common_pyqt5.center_window(self)
+
+        self.gen_tree()
+        self.main_layout.addWidget(self.frame0, 0, 0)
+
+        self.gen_table()
+
+        self.current_frame = self.tables['column']
+        self.current_frame.show()
+
+    def gen_table(self):
+        for view_name in self.view_select_dic:
+            table = QTableView(self.main_widget)
+            model = QStandardItemModel()
+            table.setModel(model)
+            table.setFixedWidth(300)
+            table.setShowGrid(False)
+            table.setSortingEnabled(True)
+            table.verticalHeader().setVisible(False)
+            table.horizontalHeader().setVisible(False)
+
+            model.setColumnCount(2)
+            table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+
+            item_list = list(self.view_select_dic[view_name].keys())
+
+            item_len = len(item_list)
+
+            if item_len % 2 != 0:
+                row_num = int(item_len / 2) + 1
+            else:
+                row_num = int(item_len / 2)
+
+            model.setRowCount(row_num)
+
+            row = 0
+            column = 0
+
+            for item in item_list:
+                if row >= row_num:
+                    column = 1
+                    row = 0
+
+                check_item = QStandardItem(item)
+
+                if item in self.disable_list:
+                    check_item.setForeground(QBrush(QColor(*(int(c * 255) for c in colors.to_rgb('grey')))))
+                    check_item.setCheckable(False)
+                else:
+                    check_item.setCheckable(True)
+
+                if self.view_select_dic[view_name][item]:
+                    check_item.setCheckState(Qt.Checked)
+                else:
+                    check_item.setCheckState(Qt.Unchecked)
+
+                model.setItem(row, column, check_item)
+
+                row += 1
+
+            model.itemChanged.connect(functools.partial(self.update_view, view_name))
+            self.tables[view_name] = table
+            self.main_layout.addWidget(table, 0, 1)
+            table.hide()
+
+    def generate_selection(self):
+        view_name = self.tree.currentItem().text(0)
+
+        if view_name in self.view_select_dic.keys():
+            self.current_frame.hide()
+            table = self.tables[view_name]
+            table.show()
+            self.current_frame = table
+
+    def gen_tree(self):
+        layout = QVBoxLayout()
+        self.frame0.setLayout(layout)
+
+        self.tree.clear()
+        self.tree.setColumnCount(1)
+        self.tree.setColumnWidth(0, 240)
+        self.tree.setHeaderHidden(True)
+        self.tree.horizontalScrollBar().hide()
+
+        column_parent = QTreeWidgetItem(self.tree)
+        column_parent.setText(0, 'column')
+        column_parent.setForeground(0, QBrush(QColor(0, 0, 0)))
+        column_parent.setFont(0, QFont('Calibri', 10, QFont.Bold))
+        column_parent.setSelected(True)
+        column_parent.setExpanded(False)
+
+        row_parent = QTreeWidgetItem(self.tree)
+        row_parent.setText(0, 'row')
+        row_parent.setForeground(0, QBrush(QColor(0, 0, 0)))
+        row_parent.setFont(0, QFont('Calibri', 10, QFont.Bold))
+        row_parent.setSelected(False)
+        row_parent.setExpanded(True)
+
+        block_child = QTreeWidgetItem(row_parent)
+        block_child.setText(0, 'block')
+        block_child.setFont(0, QFont('Calibri', 10))
+        block_child.setExpanded(False)
+
+        branch_child = QTreeWidgetItem(row_parent)
+        branch_child.setText(0, 'branch')
+        branch_child.setFont(0, QFont('Calibri', 10))
+        branch_child.setExpanded(False)
+
+        layout.addWidget(self.tree)
+
+        return self.frame0
+
+    def update_view(self, view_name, item=None):
+        if view_name and item:
+            item_status = True if item.checkState() else False
+            self.item_select_status_signal.emit(view_name, item.text(), item_status)
+
+
 # Main Process #
 def main():
-    (config_file, build, run, check, summary, post_run, release, debug) = readArgs()
+    (config_file, build, run, check, summarize, release, debug) = readArgs()
     QApplication.setFont(QFont("Calibri", 10))
     app = QApplication(sys.argv)
-    mw = MainWindow(config_file, build, run, check, summary, post_run, release, debug)
+    mw = MainWindow(config_file, build, run, check, summarize, release, debug)
     mw.show()
     sys.exit(app.exec_())
 

@@ -76,6 +76,11 @@ TASK:
             COMMAND: python3 ${DEMO_PATH}/project_setting/check/syn/synopsys/syn_synopsys.syn_dc.py -b ${BLOCK}
             VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
             REPORT_FILE: ${DEFAULT_PATH}/dc/file_check/file_check.rpt
+        SUMMARIZE:
+            PATH: ${DEFAULT_PATH}/dc
+            COMMAND: python3 ${DEMO_PATH}/project_setting/summary/collect_syn_qor.py
+            VIEWER: /bin/soffice
+            REPORT_FILE: ${DEFAULT_PATH}/dc/syn_qor.xlsx
     fv:synopsys:fm_rtl2gate:
         BUILD:
             PATH: ${CWD}

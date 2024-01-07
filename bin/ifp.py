@@ -1679,9 +1679,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     def filt_task_dic_list(self, action_name, task_dic_list):
         filtered_task_dic_list = []
 
-        if action_name in ["Run"]:
+        if action_name in [common.action.run, common.action.build]:
             if self.rerun_flag:
-                filtered_task_dic_list = self.check_rerun_item(task_dic_list)
+                filtered_task_dic_list = self.check_rerun_item(task_dic_list, action_name)
             else:
                 filtered_task_dic_list = task_dic_list
 
@@ -1707,14 +1707,14 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
         return filtered_task_dic_list
 
-    def check_rerun_item(self, task_dic_list):
+    def check_rerun_item(self, task_dic_list, action_name):
         # Checks whether any tasks has RUN PASS
         rerun_task_dic_list = []
         normal_task_dic_list = []
-        warning_text = "Below tasks have run pass before: \n"
+        warning_text = "Below tasks have run/check pass before: \n"
 
         for task in task_dic_list:
-            if task["Status"] == "{} {}".format(common.action.run, common.status.passed):
+            if (task["CheckStatus"] == common.status.passed) or (task['CheckStatus'] != common.status.failed and task['RunStatus'] == common.status.passed):
                 rerun_task_dic_list.append(task)
                 if len(rerun_task_dic_list) <= 3:
                     warning_text = warning_text + "Block: " + task["Block"] + " Version: " + task["Version"] + " Task: " + task["Task"] + "\n"
@@ -1724,7 +1724,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if len(rerun_task_dic_list) > 3:
             warning_text = warning_text + "...\n"
 
-        warning_text = warning_text + "\nSure to rerun these tasks?"
+        warning_text = warning_text + "\nSure to " + action_name + " these tasks?"
 
         if len(rerun_task_dic_list) > 0:
             message_box = QMessageBox(self)

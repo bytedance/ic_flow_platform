@@ -164,7 +164,7 @@ def get_env_dic(project=None, group=None):
 
 class ThreadRun(QThread):
     """
-    This calss is used to run command on a thread.
+    This class is used to run command on a thread.
     """
 
     def __init__(self):
@@ -230,6 +230,6 @@ status_ing = {action.build: status.building,
               action.summarize: status.summarizing,
               action.release: status.releasing}
 UNEXPECTED_JOB_STATUS = [status.killed, status.killing, status.cancelled, '{} {}'.format(action.run, status.failed)]
-CLOSE_REMIND_STATUS = [status.building, status.running]
+CLOSE_REMIND_STATUS = [status.building, status.running, status.checking, status.summarizing, status.releasing]
 ING_STATUS = [status.building, status.running]
 CONFIG_DIC = {**config.admin_setting_dic, **config.user_setting_dic}

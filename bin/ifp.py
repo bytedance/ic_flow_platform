@@ -15,7 +15,7 @@ import functools
 # Import PyQt5 libraries.
 import yaml
 from PyQt5.QtCore import pyqtSignal, QTimer, Qt
-from PyQt5.QtWidgets import QMainWindow, QApplication, QAction, QMessageBox, QTabWidget, QWidget, QFrame, QGridLayout, QTextEdit, QTableWidget, QHeaderView, QTableWidgetItem, QFileDialog, QTreeWidget, QTreeWidgetItem, QDialog, QCheckBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMenu, QTableView, QProgressDialog
+from PyQt5.QtWidgets import QMainWindow, QApplication, QAction, QMessageBox, QTabWidget, QWidget, QFrame, QGridLayout, QTextEdit, QTableWidget, QHeaderView, QTableWidgetItem, QFileDialog, QTreeWidget, QTreeWidgetItem, QDialog, QCheckBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMenu, QTableView, QProgressDialog, QSplitter
 from PyQt5.QtGui import QIcon, QBrush, QColor, QFont, QStandardItem, QStandardItemModel
 
 # Import local python files.
@@ -965,13 +965,21 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.message_frame.setFrameShadow(QFrame.Raised)
         self.message_frame.setFrameShape(QFrame.Box)
 
+        # self.main_splitter
+        self.main_splitter = QSplitter(self)
+        self.main_splitter.setOrientation(0)
+        self.main_splitter.addWidget(self.main_frame)
+        self.main_splitter.addWidget(self.message_frame)
+
+        self.main_splitter.setStretchFactor(0, 3)
+        self.main_splitter.setStretchFactor(1, 1)
+
         # Grid
         main_tab_grid = QGridLayout()
 
         main_tab_grid.addWidget(self.sidebar_tree, 0, 0, 1, 1)
         main_tab_grid.addWidget(self.status_table, 1, 0, 2, 1)
-        main_tab_grid.addWidget(self.main_frame, 0, 1, 2, 2)
-        main_tab_grid.addWidget(self.message_frame, 2, 1, 1, 1)
+        main_tab_grid.addWidget(self.main_splitter, 0, 1, 3, 2)
 
         main_tab_grid.setRowStretch(0, 5)
         main_tab_grid.setRowStretch(1, 1)
@@ -992,7 +1000,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     def gen_sidebar_tree(self):
         self.sidebar_tree.setColumnCount(1)
         self.sidebar_tree.setHeaderLabels(['     Project - Block', ])
-        self.sidebar_tree.header().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.sidebar_tree.header().setSectionResizeMode(QHeaderView.Stretch)
         self.sidebar_tree.header().setStretchLastSection(False)
 
         # Update self.sidebar_tree
@@ -1603,6 +1611,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if 'message' not in info_dic:
             return
 
+        common_pyqt5.text_edit_visible_position(self.message_text, 'End')
         message = info_dic['message']
         color = info_dic['color'] if 'color' in info_dic else 'black'
         current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1698,7 +1707,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                     if not re.match('.+ing$', task['Status'], re.I) and task['Status'] != common.status.queued:
                         filtered_task_dic_list.append(task)
                     else:
-                        self.update_message_text({'message': '*Warning*: Can\'t execute {} action to {} {} {} {} {} {} because it\'s {}.'.format(action_name, task['Block'], task['Version'], task['Flow'], task['Vendor'], task['Branch'], task['Task'], task['Status']), 'color': 'yellow'})
+                        self.update_message_text({'message': '*Warning*: Can\'t execute {} action to {} {} {} {} {} {} because it\'s {}.'.format(action_name, task['Block'], task['Version'], task['Flow'], task['Vendor'], task['Branch'], task['Task'], task['Status']), 'color': 'orange'})
                 else:
                     filtered_task_dic_list.append(task)
         elif action_name == "Kill":
@@ -1841,8 +1850,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                 if kill_tasks:
                     self.setEnabled(False)
                     self.close_dialog.show()
-                    event.ignore()
-                    return
+
+            event.ignore()
+            return
 
         ifp_close_time = datetime.datetime.now()
         run_time = (ifp_close_time - self.ifp_start_time).seconds

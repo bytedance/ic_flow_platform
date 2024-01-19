@@ -926,8 +926,10 @@ class TaskObject(QThread):
                         if current_job_dic:
                             job_status = current_job_dic[current_job]['status']
 
-                            if job_status in ["RUN", 'EXIT'] and action in [common.action.run]:
-                                self.set_run_time_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Runtime', "00:00:00")
+                            if job_status in ["RUN", 'EXIT']:
+                                if action in [common.action.run]:
+                                    self.set_run_time_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Runtime', "00:00:00")
+
                                 break
 
                         time.sleep(1)

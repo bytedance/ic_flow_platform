@@ -2543,9 +2543,9 @@ class WindowForDependency(QMainWindow):
         else:
             flow = tree_item.parent().text(0)
 
-            if my_match := re.match(r'(\S+)\s*->\s*(\S+)', view_name):
-                vendor = my_match.group(1)
-                branch = my_match.group(2)
+            if my_match := re.match(r'(.*)->(.*)', view_name):
+                vendor = my_match.group(1).strip()
+                branch = my_match.group(2).strip()
 
                 self.update_dependency_show_info(view_name='task_dependency', flow=flow, vendor=vendor, branch=branch)
 
@@ -2582,9 +2582,9 @@ class WindowForDependency(QMainWindow):
         else:
             flow = self.before_tree_item.parent().text(0)
 
-            if my_match := re.match(r'(\S+)\s*->\s*(\S+)', self.before_tree_item.text(0)):
-                vendor = my_match.group(1)
-                branch = my_match.group(2)
+            if my_match := re.match(r'(.*)->(.*)', self.before_tree_item.text(0)):
+                vendor = my_match.group(1).strip()
+                branch = my_match.group(2).strip()
 
                 for task in self.current_dependency_priority_dic['task_dependency'][flow][vendor][branch].keys():
                     repeat_condition_list = self.current_dependency_priority_dic['task_dependency'][flow][vendor][branch][task].split(',')

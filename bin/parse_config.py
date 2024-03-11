@@ -151,6 +151,9 @@ class Config:
                         self.var_dic[key] = value
 
         if user_config_dic:
+            self.var_dic['PROJECT'] = self.PROJECT
+            self.var_dic['GROUP'] = self.GROUP
+
             if ('VAR' in user_config_dic) and isinstance(user_config_dic['VAR'], dict):
                 for (key, value) in user_config_dic['VAR'].items():
                     if isinstance(value, str):

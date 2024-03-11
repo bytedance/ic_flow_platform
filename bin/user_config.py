@@ -616,7 +616,6 @@ class UserConfig(QMainWindow):
     """
 
     def parsing_user_setting(self):
-        self.user_input = AutoVivification()
         self.branch_row_mapping = AutoVivification()
         self.view_status_dic.setdefault('branch', {})
         self.view_status_dic.setdefault('block', {})
@@ -768,9 +767,20 @@ class UserConfig(QMainWindow):
         if 'VAR' in self.raw_setting.keys():
             self.user_var = self.raw_setting['VAR']
 
+        if 'PROJECT' in self.raw_setting.keys():
+            self.user_input['PROJECT'] = self.raw_setting['PROJECT']
+        else:
+            self.user_input['PROJECT'] = ''
+
+        if 'GROUP' in self.raw_setting.keys():
+            self.user_input['GROUP'] = self.raw_setting['GROUP']
+        else:
+            self.user_input['GROUP'] = ''
+
         self.preprocess_setting()
         self.draw_table(self.raw_setting, stage='load')
         self.parsing_user_setting()
+
 
     def save(self):
         self.parsing_final_setting()
@@ -928,12 +938,13 @@ class UserConfig(QMainWindow):
         self.dependency_setting_windows.save_signal.connect(self.save)
         self.dependency_setting_windows.show()
 
-    def clean_dict_for_empty_key(self):
+    def clean_dict_for_empty_key(self, deleted_branch_list=None):
         raw_setting = copy.deepcopy(self.user_input)
 
         for block in raw_setting['BLOCK'].keys():
             if raw_setting['BLOCK'][block] == {}:
                 del self.user_input['BLOCK'][block]
+                del self.view_status_dic['block'][block]
             else:
                 for version in raw_setting['BLOCK'][block].keys():
                     if raw_setting['BLOCK'][block][version] == {}:
@@ -966,6 +977,9 @@ class UserConfig(QMainWindow):
                                                     del self.user_input['BLOCK'][block]
                                     else:
                                         for branch in raw_setting['BLOCK'][block][version][flow][vendor].keys():
+                                            if deleted_branch_list and branch in deleted_branch_list:
+                                                deleted_branch_list.remove(branch)
+
                                             if raw_setting['BLOCK'][block][version][flow][vendor][branch] == {}:
                                                 del self.user_input['BLOCK'][block][version][flow][vendor][branch]
 
@@ -981,6 +995,9 @@ class UserConfig(QMainWindow):
                                                             if self.user_input['BLOCK'][block] == {}:
                                                                 del self.user_input['BLOCK'][block]
 
+        for branch in deleted_branch_list:
+            del self.view_status_dic['branch'][branch]
+
     def clean_dependency_dict_for_empty_key(self):
         raw_dependency = copy.deepcopy(self.dependency_priority)
 
@@ -992,6 +1009,12 @@ class UserConfig(QMainWindow):
                     if not raw_dependency[block][version]:
                         del self.dependency_priority[block][version]
                     else:
+                        if 'flow_dependency' not in raw_dependency[block][version]:
+                            continue
+
+                        if 'task_dependency' not in raw_dependency[block][version]:
+                            continue
+                            
                         if not raw_dependency[block][version]['flow_dependency']:
                             del self.dependency_priority[block][version]['flow_dependency']
 
@@ -1020,9 +1043,9 @@ class UserConfig(QMainWindow):
         self.child.show()
 
     def remove_current_item(self, item):
-
         self.parsing_user_setting()
         selected_rows = AutoVivification()
+        selected_branch_list = []
 
         for index in self.setup_table.selectedIndexes():
             if index.column() not in selected_rows.keys():
@@ -1038,10 +1061,18 @@ class UserConfig(QMainWindow):
             return
 
         if item == 'block':
+            selected_block_list = []
+
             for row in selected_rows[0]:
                 block = self.setup_model.index(row, 0).data()
+
+                if block not in selected_block_list:
+                    selected_block_list.append(block)
+
                 del self.user_input['BLOCK'][block]
                 del self.dependency_priority[block]
+
+            for block in selected_block_list:
                 del self.view_status_dic['block'][block]
 
         if item == 'version':
@@ -1076,15 +1107,20 @@ class UserConfig(QMainWindow):
                 del self.dependency_priority[block][version]['task_dependency'][flow][vendor]
 
         if item == 'branch':
+            selected_branch_list = []
+
             for row in selected_rows[4]:
                 block = self.setup_model.index(row, 0).data()
                 version = self.setup_model.index(row, 1).data()
                 flow = self.setup_model.index(row, 2).data()
                 vendor = self.setup_model.index(row, 3).data()
                 branch = self.setup_model.index(row, 4).data()
+
+                if branch not in selected_branch_list:
+                    selected_branch_list.append(branch)
+
                 del self.user_input['BLOCK'][block][version][flow][vendor][branch]
                 del self.dependency_priority[block][version]['task_dependency'][flow][vendor][branch]
-                del self.view_status_dic['branch'][branch]
 
         if item == 'task':
             for row in selected_rows[5]:
@@ -1103,7 +1139,7 @@ class UserConfig(QMainWindow):
                     new_dependency = self.remove_dependency_specific_item(dependency, flow)
                     self.dependency_priority[block][version]['task_dependency'][flow][vendor][branch][task_item] = new_dependency
 
-        self.clean_dict_for_empty_key()
+        self.clean_dict_for_empty_key(deleted_branch_list=selected_branch_list)
         self.clean_dependency_dict_for_empty_key()
         self.draw_table(self.user_input)
         self.save()
@@ -2017,7 +2053,9 @@ class WindowForDetailedTaskInfo(QMainWindow):
         self.setup_table.setShowGrid(True)
 
         # Defined by system
-        self.env_mapping = {'${CWD}': self.cwd,
+        self.env_mapping = {'${PROJECT}': self.user_input['PROJECT'],
+                            '${GROUP}': self.user_input['GROUP'],
+                            '${CWD}': self.cwd,
                             '${IFP_INSTALL_PATH}': os.getenv('IFP_INSTALL_PATH'),
                             '${BLOCK}': self.block,
                             '${VERSION}': self.version,

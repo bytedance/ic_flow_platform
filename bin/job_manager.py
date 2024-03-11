@@ -777,9 +777,18 @@ class TaskObject(QThread):
     def get_run_method(self, run_action):
         run_method = run_action.get('RUN_METHOD', '')
 
-        # if run_method without -I option
-        if re.search('bsub', run_method) and (not re.search('-I', run_method)):
-            run_method = run_method + ' -I '
+        if re.search('bsub', run_method):
+
+            # if run_method with -K option
+            if re.search('-K', run_method):
+                run_method = run_method.replace('-K', '-I')
+
+            # if run_method without -I option
+            if not re.search('-I', run_method):
+                run_method = run_method + ' -I'
+
+        if re.search('xterm', run_method) and (not re.search('-T', run_method)):
+          run_method = re.sub(r'xterm', f'xterm -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"', run_method)
 
         return run_method
 
@@ -948,6 +957,9 @@ class TaskObject(QThread):
             stdout, stderr = process.communicate()
             return_code = process.returncode
 
+            stdout = str(stdout, 'utf-8').strip()
+            stderr = str(stderr, 'utf-8').strip()
+
             while self.status == common.status.killing:
                 time.sleep(3)
 
@@ -956,11 +968,11 @@ class TaskObject(QThread):
             else:
                 if return_code == 0:
                     self.status = '{} {}'.format(action, common.status.passed)
+                    self.msg_signal.emit({'message': '{} done for {} {} {} {} {} {}\n'.format(action, self.block, self.version, self.flow, self.vendor, self.branch, self.task), 'color': 'black'})
                 else:
                     self.status = '{} {}'.format(action, common.status.failed)
-
-                self.print_output(self.block, self.version, self.flow, self.vendor, self.branch, self.task, self.status, stdout + stderr)
-                self.msg_signal.emit({'message': '*Info*: job done for {} {} {} {} {} {}\n'.format(self.block, self.version, self.flow, self.vendor, self.branch, self.task), 'color': 'black'})
+                    self.msg_signal.emit({'message': '{} failed for {} {} {} {} {} {}.\n{}'.format(action, self.block, self.version, self.flow, self.vendor, self.branch, self.task, stdout + stderr), 'color': 'red'})
+                    self.msg_signal.emit({'message': 'You can press the Xterm button to debug', 'color': 'red'})
 
             if action in [common.action.check, common.action.check_view]:
                 self.check_status = self.status

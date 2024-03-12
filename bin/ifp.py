@@ -14,7 +14,7 @@ import functools
 
 # Import PyQt5 libraries.
 import yaml
-from PyQt5.QtCore import pyqtSignal, QTimer, Qt
+from PyQt5.QtCore import pyqtSignal, QTimer, Qt, QProcess
 from PyQt5.QtWidgets import QMainWindow, QApplication, QAction, QMessageBox, QTabWidget, QWidget, QFrame, QGridLayout, QTextEdit, QTableWidget, QHeaderView, QTableWidgetItem, QFileDialog, QTreeWidget, QTreeWidgetItem, QDialog, QCheckBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QMenu, QTableView, QProgressDialog, QSplitter
 from PyQt5.QtGui import QIcon, QBrush, QColor, QFont, QStandardItem, QStandardItemModel
 
@@ -150,13 +150,16 @@ class MainWindow(QMainWindow):
         self.branch_row_mapping = {}
         self.block_row_mapping = {}
 
+        # LSF Monitor list
+        self.monitor_list = []
+
         # Update ifp.py and user_config.py parameters when start ifp
+        self.default_config_file = None
         self.job_manager = JobManager(self, debug=self.debug)
         self.job_manager.disable_gui_signal.connect(self.disable_gui)
         self.job_manager.finish_signal.connect(self.send_result_to_user)
         self.job_manager.close_signal.connect(self.final_close)
         self.update_dict_by_load_config_file(self.config_file)
-        self.default_config_file = self.config_obj.default_config_file
         self.env_dic = self.config_obj.env_dic
         self.user_config = UserConfig(self, self.config_file, self.default_config_file)
         self.user_config.save_flag.connect(lambda: self.save_config_file(save_mode='keep'))
@@ -705,6 +708,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     def update_dict_by_load_config_file(self, config_file):
         self.config_file = config_file
         self.config_obj = parse_config.Config(config_file)
+        self.default_config_file = self.config_obj.default_config_file
         self.config_dic = self.config_obj.config_dic
         self.main_table_info_list = self.config_obj.main_table_info_list
         self.job_manager.update(self.config_dic)
@@ -746,6 +750,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if config_file:
             self.user_config.final_setting['PROJECT'] = self.ifp_env_setting['Project settings']['Project']['Project name']['value']
             self.user_config.final_setting['GROUP'] = self.ifp_env_setting['Project settings']['Project']['User group']['value']
+            self.user_config.final_setting['DEFAULT_YAML'] = self.default_config_file
             self.user_config.final_setting['VAR']['BSUB_QUEUE'] = self.ifp_env_setting['System settings']['Cluster management']['$BSUB_QUEUE']['value']
 
             with open(config_file, 'w', encoding='utf-8') as SF:
@@ -777,20 +782,15 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     def show_lsf_monitor(self):
         self.update_message_text({'message': 'Show LSF/Openlava information with tool "bmonitor".', 'color': 'black'})
 
-        bmonitor_location = shutil.which('bmonitor')
+        bmonitor = shutil.which('bmonitor')
 
-        if bmonitor_location:
-            os.system('bmonitor')
-        else:
+        if not bmonitor:
             bmonitor = str(os.environ['IFP_INSTALL_PATH']) + '/tools/lsfMonitor/monitor/bin/bmonitor'
 
-            if os.path.exists(bmonitor):
-                (return_code, stdout, stderr) = common.run_command(bmonitor)
-
-                if return_code != 0:
-                    QMessageBox.warning(self, 'LSF Monitor Warning', 'Failed on starting "bmonitor".')
-            else:
-                QMessageBox.warning(self, 'LSF Monitor Warning', 'Not find "bmonitor" on system.')
+        if os.path.exists(bmonitor):
+            self.run_monitor(bmonitor, 'default')
+        else:
+            QMessageBox.warning(self, 'LSF Monitor Warning', 'Not find "bmonitor" on system.')
 
     def edit_config_default(self):
         self.default_config_window = DefaultConfig(self.default_config_file)
@@ -1293,10 +1293,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
         if os.path.exists(bmonitor):
             command = str(bmonitor) + ' -t JOB -dl -j ' + str(jobid)
-            (return_code, stdout, stderr) = common.run_command(command)
-
-            if return_code != 0:
-                QMessageBox.warning(self, 'LSF Monitor Warning', 'Failed on getting job information for jobid "' + str(jobid) + '".')
+            self.run_monitor(command, str(jobid))
         else:
             QMessageBox.warning(self, 'LSF Monitor Warning', 'Not find "bmonitor" on system.')
 
@@ -1932,6 +1929,33 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         for title in self.status_title_list:
             self.main_table.hideColumn(self.header_column_mapping[title])
 
+    def run_monitor(self, command, jobid):
+        message = 'Monitor for ' + jobid + ' is already running.'
+
+        if jobid in self.monitor_list:
+            QMessageBox.warning(self, 'LSF Monitor Warning', message)
+            return
+
+        self.monitor_list.append(jobid)
+
+        process = QProcess(self)
+        process.setProperty("jobid", jobid)
+        process.finished.connect(self.monitor_finished)
+        process.errorOccurred.connect(self.monitor_error)
+        process.start(command)
+
+    def monitor_finished(self, exitCode, exitStatus):
+        if exitCode != 0:
+            QMessageBox.warning(self, 'LSF Monitor Warning', 'LSFMonitor start unsuccessfully.')
+
+        jobid = self.sender().property('jobid')
+        self.monitor_list.remove(jobid)
+
+    def monitor_error(self, error):
+        QMessageBox.warning(self, 'LSF Monitor Warning', 'LSFMonitor start unsuccessfully.')
+        jobid = self.sender().property('jobid')
+        self.monitor_list.remove(jobid)
+
 
 class MultipleSelectWindow(QDialog):
     """
@@ -2158,7 +2182,18 @@ class SettingWindow(QMainWindow):
                         new_setting = self.ifp_env_setting[main_category][child_category][item]['widget'].text()
 
                         if item == 'Default setting':
-                            if not new_setting == default_yaml_path:
+                            if not raw_setting == new_setting:
+                                reply = QMessageBox.question(self, "Warning", "You define default setting from %s, press Yes to save setting or press No to keep raw setting." % new_setting)
+
+                                if reply == QMessageBox.Yes:
+                                    self.ifp_env_setting[main_category][child_category][item]['value'] = new_setting
+                                    self.need_reload_flag = True
+                                    continue
+                                elif reply == QMessageBox.No:
+                                    self.ifp_env_setting[main_category][child_category][item]['value'] = raw_setting
+                                    continue
+
+                            elif not new_setting == default_yaml_path:
                                 reply = QMessageBox.question(self, "Warning", "Flow will parse default setting from : \n %s \ndue to Project(%s) and Group(%s), press Yes to save setting or press No to keep raw setting." % (default_yaml_path, project, group))
 
                                 if reply == QMessageBox.Yes:

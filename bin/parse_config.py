@@ -116,6 +116,7 @@ class Config:
         # self.PROJECT saves project information from user config file.
         self.PROJECT = ''
         self.GROUP = ''
+        self.default_config_file = ''
         # self.var_dic saves all VAR settings from user config file.
         self.var_dic = {'IFP_INSTALL_PATH': os.environ['IFP_INSTALL_PATH'],
                         'CWD': CWD}
@@ -134,8 +135,14 @@ class Config:
             if 'GROUP' in user_config_dic:
                 self.GROUP = user_config_dic['GROUP']
 
+            if 'DEFAULT_YAML' in user_config_dic:
+                self.default_config_file = user_config_dic['DEFAULT_YAML']
+
         # Parse default config file.
-        self.default_config_file = common.get_default_yaml_path(self.PROJECT, self.GROUP)
+        if self.default_config_file:
+            pass
+        else:
+            self.default_config_file = common.get_default_yaml_path(self.PROJECT, self.GROUP)
 
         # self.var_dic saves all VAR settings from env VAR
         self.env_dic = common.get_env_dic(project=self.PROJECT, group=self.GROUP)

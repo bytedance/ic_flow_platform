@@ -776,6 +776,7 @@ class TaskObject(QThread):
 
     def get_run_method(self, run_action):
         run_method = run_action.get('RUN_METHOD', '')
+        command = run_action.get('COMMAND')
 
         if re.search('bsub', run_method):
 

@@ -6,6 +6,9 @@ import shutil
 import filecmp
 import argparse
 
+sys.path.insert(0, str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/monitor')
+from common import common
+
 os.environ['PYTHONUNBUFFERED'] = '1'
 
 
@@ -22,7 +25,7 @@ def read_args():
     args = parser.parse_args()
 
     if not os.path.exists(args.patch_path):
-        print('*Error*: "' + str(args.path_path) + '": No such patch path.')
+        common.bprint('"' + str(args.path_path) + '": No such patch path.', level='Error')
         sys.exit(1)
 
     return args.patch_path
@@ -30,8 +33,8 @@ def read_args():
 
 class Patch():
     def __init__(self, patch_path):
-        self.install_path = os.environ['LSFMONITOR_INSTALL_PATH']
-        self.patch_path = patch_path
+        self.install_path = os.path.realpath(os.environ['LSFMONITOR_INSTALL_PATH'])
+        self.patch_path = os.path.realpath(patch_path)
         self.ignore_py_list = ['monitor/conf/config.py',]
 
         print('Install Path : ' + str(self.install_path))
@@ -45,7 +48,7 @@ class Patch():
         Make sure install_path and the patch_path have the same directory name.
         """
         if os.path.basename(self.install_path) != os.path.basename(self.patch_path):
-            print('*Warning*: current install path name is "' + str(os.path.basename(self.install_path)) + '", but patch path name is "' + str(os.path.basename(self.patch_path)) + '".')
+            common.bprint('Current install path name is "' + str(os.path.basename(self.install_path)) + '", but patch path name is "' + str(os.path.basename(self.patch_path)) + '".', level='Warning')
 
             choice = input('Do you want to continue? (y|n) ')
 
@@ -88,16 +91,38 @@ class Patch():
                 abs_patch_py = str(self.patch_path) + '/' + str(py_file)
 
                 if (py_file not in install_py_list) or (not filecmp.cmp(abs_install_py, abs_patch_py)):
-                    print('> Copying python file "' + str(abs_patch_py) + '" into "' + str(abs_install_py) + '".')
+                    # Remove old python file.
+                    if py_file in install_py_list:
+                        print('> Remove old python file "' + str(abs_install_py) + '".')
+
+                        try:
+                            os.remove(abs_install_py)
+                        except Exception as error:
+                            common.bprint('Failed on removing old python file "' + str(abs_install_py) + '".', level='Error')
+                            common.bprint(error, color='red', display_method=1, indent=9)
+                            sys.exit(1)
+
+                    # Create directory for new python file.
+                    abs_install_path = os.path.dirname(abs_install_py)
+
+                    if not os.path.exists(abs_install_path):
+                        print('> Create directory "' + str(abs_install_path) + '".')
+
+                        try:
+                            os.makedirs(abs_install_path)
+                        except Exception as error:
+                            common.bprint('Failed on creating directory "' + str(abs_install_path) + '".', level='Error')
+                            common.bprint(error, color='red', display_method=1, indent=9)
+                            sys.exit(1)
+
+                    # Copy path python file into install path.
+                    print('> Copy python file "' + str(abs_patch_py) + '" into "' + str(abs_install_py) + '".')
 
                     try:
-                        if py_file in install_py_list:
-                            os.remove(abs_install_py)
-
                         shutil.copyfile(abs_patch_py, abs_install_py)
                     except Exception as error:
-                        print('*Error*: Failed on copying file "' + str(abs_patch_py) + '" into "' + str(abs_install_py) + '".')
-                        print('         ' + str(error))
+                        common.bprint('Failed on copying file "' + str(abs_patch_py) + '" into "' + str(abs_install_py) + '".', level='Error')
+                        common.bprint(error, color='red', display_method=1, indent=9)
                         sys.exit(1)
 
 

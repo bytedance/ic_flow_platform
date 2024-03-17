@@ -31,10 +31,10 @@ def read_args():
     args = parser.parse_args()
 
     if (not args.job) and (not args.pid):
-        common.print_error('*Error*: "--job" or "--pid" must be specified.')
+        common.bprint('"--job" or "--pid" must be specified.', level='Error')
         sys.exit(1)
 
-    return (args.job, args.pid)
+    return args.job, args.pid
 
 
 class ProcessTracer(QMainWindow):
@@ -60,14 +60,14 @@ class ProcessTracer(QMainWindow):
         job_dic = common_lsf.get_lsf_bjobs_uf_info(command)
 
         if job_dic[job]['status'] != 'RUN':
-            common.print_error('*Error*: Job "' + str(job) + '" is not running, cannot get process status.')
+            common.bprint('Job "' + str(job) + '" is not running, cannot get process status.', level='Error')
             sys.exit(1)
         else:
             if not job_dic[job]['pids']:
-                common.print_error('*Error*: Not find PIDs information for job "' + str(job) + '".')
+                common.bprint('Not find PIDs information for job "' + str(job) + '".', level='Error')
                 sys.exit(1)
 
-        return (job_dic, job_dic[job]['pids'])
+        return job_dic, job_dic[job]['pids']
 
     def check_pid(self, pid):
         pid_list = []
@@ -85,7 +85,7 @@ class ProcessTracer(QMainWindow):
                     pid_list.extend(tmp_pid_list)
 
         if not pid_list:
-            common.print_error('*Error*: No valid pid was found.')
+            common.bprint('No valid pid was found.', level='Error')
             sys.exit(1)
 
         return pid_list
@@ -155,7 +155,7 @@ class ProcessTracer(QMainWindow):
                 host_status = bhosts_dic['STATUS'][0]
 
                 if host_status != 'ok':
-                    common.print_warning('*Warning*: host "' + str(first_started_on_host) + '" is ' + str(host_status) + ' status, cannot submit job on it.')
+                    common.bprint('Host "' + str(first_started_on_host) + '" is ' + str(host_status) + ' status, cannot submit job on it.', level='Warning')
                     return ''
 
             bsub_command = str(bsub_command) + ' -m ' + str(first_started_on_host)

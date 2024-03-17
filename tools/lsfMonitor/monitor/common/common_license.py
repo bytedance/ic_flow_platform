@@ -54,22 +54,19 @@ class GetLicenseInfo():
                                         'license_files': '',
                                         'license_server_status': 'UNKNOWN',
                                         'license_server_version': '',
-                                        'vendor_daemon': { vendor_daemon: {
-                                                                           'vendor_daemon_status': 'UP',
+                                        'vendor_daemon': { vendor_daemon: {'vendor_daemon_status': 'UP',
                                                                            'vendor_daemon_version': '',
-                                                                           'feature': {feature: {
-                                                                                                 'issued': '0',
+                                                                           'feature': {feature: {'issued': '0',
                                                                                                  'in_use': '0',
                                                                                                  'in_use_info_string': [],
                                                                                                  'in_use_info': [],
                                                                                                 },
                                                                                       },
-                                                                           'expires': {feature: {
-                                                                                                 'version': '',
-                                                                                                 'license': '',
-                                                                                                 'vendor': '',
-                                                                                                 'expires': '',
-                                                                                                },
+                                                                           'expires': {feature: [{'version': '',
+                                                                                                  'license': '',
+                                                                                                  'vendor': '',
+                                                                                                  'expires': '',
+                                                                                                },]
                                                                                       },
                                                                           },
                                                          },
@@ -420,7 +417,8 @@ class FilterLicenseDic():
 
     def filter_show_mode_feature(self, license_dic, show_mode):
         """
-        Filter license_dic with show_mode (IN_USE/ALL).
+        Filter license_dic with show_mode.
+        show_mode could be "IN_USE/NOT_USED" or "Expired/Nearly_Expired/Unexpired".
         """
         new_license_dic = {}
 
@@ -429,13 +427,15 @@ class FilterLicenseDic():
                 for feature in license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'].keys():
                     expire_dic_list = []
 
-                    if show_mode == 'IN_USE':
-                        if license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use'] == '0':
+                    if show_mode in ['IN_USE', 'NOT_USED']:
+                        if (show_mode == 'IN_USE') and (license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use'] == '0'):
                             continue
-                        else:
-                            if feature in license_dic[license_server]['vendor_daemon'][vendor_daemon]['expires']:
-                                for expire_dic in license_dic[license_server]['vendor_daemon'][vendor_daemon]['expires'][feature]:
-                                    expire_dic_list.append(expire_dic)
+                        elif (show_mode == 'NOT_USED') and (license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][feature]['in_use'] != '0'):
+                            continue
+
+                        if feature in license_dic[license_server]['vendor_daemon'][vendor_daemon]['expires']:
+                            for expire_dic in license_dic[license_server]['vendor_daemon'][vendor_daemon]['expires'][feature]:
+                                expire_dic_list.append(expire_dic)
                     elif show_mode in ['Expired', 'Nearly_Expired', 'Unexpired']:
                         if feature in license_dic[license_server]['vendor_daemon'][vendor_daemon]['expires']:
                             for expire_dic in license_dic[license_server]['vendor_daemon'][vendor_daemon]['expires'][feature]:
@@ -508,7 +508,7 @@ def switch_start_time(start_time, compare_second='', format=''):
         try:
             start_second = time.mktime(time.strptime(start_time_with_year, '%Y %a %m/%d %H:%M'))
         except Exception:
-            print('*Error*: variable "start_time_with_year", value is "' + str(start_time_with_year) + '", not follow the time format "%Y %a %m/%d %H:%M".')
+            common.bprint('Value of variable "start_time_with_year" is "' + str(start_time_with_year) + '", not follow the time format "%Y %a %m/%d %H:%M".', level='Error')
 
         if not compare_second:
             compare_second = time.time()
@@ -593,7 +593,7 @@ def parse_license_file(license_file):
     vendor_daemon_compile = re.compile(r'^\s*(VENDOR|DAEMON)\s+(\S+)\s*(\S+)?\s*(.+)?$')
     feature_compile = re.compile(r'^\s*(FEATURE|PACKAGE|INCREMENT)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+.*$')
 
-    with open(license_file,  'r', errors='ignore') as LF:
+    with open(license_file, 'r', errors='ignore') as LF:
         for line in LF.readlines():
             if feature_compile.match(line):
                 my_match = feature_compile.match(line)

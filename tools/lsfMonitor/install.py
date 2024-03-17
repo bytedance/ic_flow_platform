@@ -14,7 +14,7 @@ def check_python_version():
     print('>>> Check python version.')
 
     current_python = sys.version_info[:2]
-    required_python = (3, 5)
+    required_python = (3, 8)
 
     if current_python < required_python:
         sys.stderr.write("""
@@ -28,13 +28,14 @@ but you're trying to install it on Python {}.{}.
     else:
         print('    Required python version : ' + str(required_python))
         print('    Current  python version : ' + str(current_python))
+        print('')
 
 
 def gen_shell_tools():
     """
     Generate shell scripts under <LSFMONITOR_INSTALL_PATH>/tools.
     """
-    tool_list = ['monitor/bin/bmonitor', 'monitor/bin/bsample', 'monitor/tools/check_issue_reason', 'monitor/tools/patch', 'monitor/tools/process_tracer', 'monitor/tools/seedb', 'monitor/tools/show_license_feature_usage']
+    tool_list = ['monitor/bin/bmonitor', 'monitor/bin/bsample', 'monitor/tools/akill', 'monitor/tools/check_issue_reason', 'monitor/tools/patch', 'monitor/tools/process_tracer', 'monitor/tools/seedb', 'monitor/tools/show_license_feature_usage']
 
     for tool_name in tool_list:
         tool = str(CWD) + '/' + str(tool_name)
@@ -43,7 +44,6 @@ def gen_shell_tools():
         if 'LD_LIBRARY_PATH' in os.environ:
             ld_library_path_setting = str(ld_library_path_setting) + str(os.environ['LD_LIBRARY_PATH'])
 
-        print('')
         print('>>> Generate script "' + str(tool) + '".')
 
         try:
@@ -60,7 +60,7 @@ export LSFMONITOR_INSTALL_PATH=""" + str(CWD) + """
 """ + str(ld_library_path_setting) + """
 
 # Execute """ + str(tool_name) + """.py.
-python3 $LSFMONITOR_INSTALL_PATH/""" + str(tool_name) + '.py $@')
+python3 $LSFMONITOR_INSTALL_PATH/""" + str(tool_name) + '.py "$@"')
 
             os.chmod(tool, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
         except Exception as error:
@@ -92,7 +92,7 @@ db_path = "''' + str(db_path) + '''"
 lmstat_path = "''' + str(lmstat_path) + '''"
 
 # Specify lmstat bsub command, example "bsub -q normal -Is".
-lmstat_bsub_command = "bsub -q normal -Is"
+lmstat_bsub_command = ""
 ''')
 
             os.chmod(config_file, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)

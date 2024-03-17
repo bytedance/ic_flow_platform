@@ -20,7 +20,7 @@ def read_args():
 
     parser.add_argument('-t', '--title',
                         nargs='+',
-                        default=['Message', ],
+                        default=['Message',],
                         help='Specify message title, default is "Message".')
     parser.add_argument('-m', '--message',
                         required=True,
@@ -31,7 +31,7 @@ def read_args():
     title_string = ' '.join(args.title)
     message_string = ' '.join(args.message)
 
-    return (title_string, message_string)
+    return title_string, message_string
 
 
 class ShowMessage(QMainWindow):

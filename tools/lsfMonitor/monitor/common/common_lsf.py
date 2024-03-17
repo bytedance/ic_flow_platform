@@ -1,6 +1,8 @@
 import os
 import re
 import sys
+import time
+import datetime
 import collections
 
 sys.path.append(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/monitor')
@@ -36,8 +38,8 @@ def get_command_dict(command):
                 command_info = line.split()
 
                 if len(command_info) < len(key_list):
-                    common.print_warning('*Warning* (get_command_dict) : For command "' + str(command) + '", below info line is incomplate/unexpected.')
-                    common.print_warning('           ' + str(line))
+                    common.bprint('For command "' + str(command) + '", below info line is incomplate/unexpected.', level='Warning')
+                    common.bprint(line, color='yellow', display_method=1, indent=11)
 
                 for j in range(len(key_list)):
                     key = key_list[j]
@@ -50,18 +52,6 @@ def get_command_dict(command):
                     my_dic[key].append(value)
 
     return my_dic
-
-
-def get_bjobs_info(command='bjobs -u all -w'):
-    """
-    Get bjobs info with command 'bjobs'.
-    ====
-    JOBID   USER      STAT  QUEUE      FROM_HOST   EXEC_HOST   JOB_NAME            SUBMIT_TIME
-    101     liyanqing RUN   normal     cmp01       2*cmp01     Tesf for lsfMonitor Oct 26 17:43
-    ====
-    """
-    bjobs_dic = get_command_dict(command)
-    return bjobs_dic
 
 
 def get_bqueues_info(command='bqueues -w'):
@@ -86,6 +76,48 @@ def get_bhosts_info(command='bhosts -w'):
     """
     bhosts_dic = get_command_dict(command)
     return bhosts_dic
+
+
+def get_bjobs_info(command='bjobs -u all -w'):
+    """
+    Get bjobs info with command 'bjobs'.
+    ====
+    JOBID   USER      STAT  QUEUE      FROM_HOST   EXEC_HOST   JOB_NAME            SUBMIT_TIME
+    101     liyanqing RUN   normal     cmp01       2*cmp01     Tesf for lsfMonitor Oct 26 17:43
+    ====
+    """
+    bjobs_dic = {}
+    key_list = []
+    (return_code, stdout, stderr) = common.run_command(command)
+    i = -1
+
+    for line in str(stdout, 'utf-8').split('\n'):
+        line = line.strip()
+
+        if line:
+            i += 1
+
+            if i == 0:
+                key_list = line.split()
+
+                for key in key_list:
+                    bjobs_dic[key] = []
+            else:
+                if not re.match(r'^\s*(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)\s+((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+ \d+:\d+)\s*$', line):
+                    common.bprint('Invalid bjobs information for below line.', level='Warning')
+                    common.bprint(line, color='yellow', display_method=1, indent=11)
+                else:
+                    my_match = re.match(r'^\s*(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)\s+((Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+ \d+:\d+)\s*$', line)
+                    bjobs_dic['JOBID'].append(my_match.group(1))
+                    bjobs_dic['USER'].append(my_match.group(2))
+                    bjobs_dic['STAT'].append(my_match.group(3))
+                    bjobs_dic['QUEUE'].append(my_match.group(4))
+                    bjobs_dic['FROM_HOST'].append(my_match.group(5))
+                    bjobs_dic['EXEC_HOST'].append(my_match.group(6))
+                    bjobs_dic['JOB_NAME'].append(my_match.group(7))
+                    bjobs_dic['SUBMIT_TIME'].append(my_match.group(8))
+
+    return bjobs_dic
 
 
 def get_bhosts_load_info(command='bhosts -l'):
@@ -184,33 +216,49 @@ def get_busers_info(command='busers all'):
     return busers_dic
 
 
-def get_tool_name():
+def get_lsid_info():
     """
-    Make sure it is lsf or openlava.
+    Get information of "tool/tool_version/cluster/master" from command "lsid".
     """
-    command = 'lsid'
-    (return_code, stdout, stderr) = common.run_command(command)
+    tool = ''
+    tool_version = ''
+    cluster = ''
+    master = ''
+    (return_code, stdout, stderr) = common.run_command('lsid')
 
     for line in str(stdout, 'utf-8').split('\n'):
         line = line.strip()
 
-        if re.search(r'LSF', line):
-            return 'lsf'
-        elif re.search(r'Open_lava', line) or re.search(r'openlava', line):
-            return 'openlava'
+        if re.match(r'^\s*My\s+cluster\s+name\s+is\s+(\S+)\s*$', line):
+            my_match = re.match(r'^\s*My\s+cluster\s+name\s+is\s+(\S+)\s*$', line)
+            cluster = my_match.group(1)
+        elif re.match(r'^\s*My\s+master\s+name\s+is\s+(\S+)\s*$', line):
+            my_match = re.match(r'^\s*My\s+master\s+name\s+is\s+(\S+)\s*$', line)
+            master = my_match.group(1)
+        elif re.search(r'LSF', line):
+            tool = 'LSF'
 
-    print('*Warning*: Not sure current cluster is LSF or Openlava.')
-    return ''
+            if re.match(r'^.*\s+([\d\.]+),.*$', line):
+                my_match = re.match(r'^.*\s+([\d\.]+),.*$', line)
+                tool_version = my_match.group(1)
+        elif re.search(r'Open_lava', line) or re.search(r'openlava', line):
+            tool = 'openlava'
+
+            if re.match(r'^.*\s+([\d\.]+),.*$', line):
+                my_match = re.match(r'^.*\s+([\d\.]+),.*$', line)
+                tool_version = my_match.group(1)
+
+    return tool, tool_version, cluster, master
 
 
 def get_bjobs_uf_info(command='bjobs -u all -UF'):
     """
     Get job information with "bjobs -UF".
     """
-    tool = get_tool_name()
+    (tool, tool_version, cluster, master) = get_lsid_info()
     my_dic = {}
 
-    if tool == 'lsf':
+    if tool == 'LSF':
         my_dic = get_lsf_bjobs_uf_info(command)
     elif tool == 'openlava':
         my_dic = get_openlava_bjobs_uf_info(command)
@@ -713,8 +761,14 @@ def get_host_group_members(host_group_name):
         if re.search(r'No such user/host group', line):
             break
         elif re.match(r'^' + str(host_group_name) + ' .*$', line):
-            my_list = line.split()
-            host_list = my_list[1:]
+            line_list = line.split()
+
+            for (i, host) in enumerate(line_list):
+                if i >= 1:
+                    if host == '(':
+                        break
+                    else:
+                        host_list.append(host)
 
     return host_list
 
@@ -736,8 +790,14 @@ def get_user_group_members(user_group_name):
         line = line.strip()
 
         if re.match(r'^' + str(user_group_name) + ' .*$', line):
-            my_list = line.split()
-            user_list = my_list[1:]
+            line_list = line.split()
+
+            for (i, user) in enumerate(line_list):
+                if i >= 1:
+                    if user == '(':
+                        break
+                    else:
+                        user_list.append(user)
 
     return user_list
 
@@ -767,7 +827,7 @@ def get_queue_host_info():
             hosts_string = my_match.group(1)
 
             if hosts_string == 'all':
-                common.print_warning('*Warning* (get_queue_host_info) : queue "' + str(queue) + '" is not well configured, all of the hosts are on the same queue.')
+                common.bprint('Queue "' + str(queue) + '" is not well configured, all of the hosts are on the same queue.', level='Warning')
                 queue_host_dic[queue] = get_host_list()
             else:
                 queue_host_dic.setdefault(queue, [])
@@ -834,3 +894,37 @@ def get_lsf_unit_for_limits():
             break
 
     return lsf_unit_for_limits
+
+
+def switch_submit_time(submit_time, compare_second='', format=''):
+    """
+    Switch submit_time format from "%a %m/%d %H:%M" to specified format (or start_second by default).
+    """
+    new_submit_time = submit_time
+
+    if submit_time and (submit_time != 'N/A') and (submit_time != 'RESERVATION'):
+        # Switch submit_time to start_second.
+        current_year = datetime.date.today().year
+        submit_time_with_year = str(current_year) + ' ' + str(submit_time)
+        submit_time_with_year = re.sub('  ', ' ', submit_time_with_year)
+
+        try:
+            start_second = time.mktime(time.strptime(submit_time_with_year, '%Y %b %d %H:%M'))
+        except Exception:
+            common.bprint('Variable "submit_time_with_year", value is "' + str(submit_time_with_year) + '", not follow the time format "%Y %b %d %H:%M".', level='Error')
+
+        if not compare_second:
+            compare_second = time.time()
+
+        if int(start_second) > int(compare_second):
+            current_year = int(datetime.date.today().year) - 1
+            submit_time_with_year = str(current_year) + ' ' + str(submit_time)
+            start_second = time.mktime(time.strptime(submit_time_with_year, '%Y %b %d %H:%M'))
+
+        # Switch start_second to expected time format.
+        if format:
+            new_submit_time = time.strftime(format, time.localtime(start_second))
+        else:
+            new_submit_time = start_second
+
+    return new_submit_time

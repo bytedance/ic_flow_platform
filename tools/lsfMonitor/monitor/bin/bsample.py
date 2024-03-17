@@ -53,10 +53,10 @@ def read_args():
     args = parser.parse_args()
 
     if (not args.job) and (not args.queue) and (not args.host) and (not args.load) and (not args.user) and (not args.utilization):
-        common.print_error('*Error*: at least one argument of "job/queue/host/load/user/utilization" must be selected.')
+        common.bprint('At least one argument of "job/queue/host/load/user/utilization" must be selected.', level='Error')
         sys.exit(1)
 
-    return (args.job, args.queue, args.host, args.load, args.user, args.utilization)
+    return args.job, args.queue, args.host, args.load, args.user, args.utilization
 
 
 class Sampling:
@@ -72,6 +72,9 @@ class Sampling:
         self.user_sampling = user_sampling
         self.utilization_sampling = utilization_sampling
 
+        # Check cluster info.
+        cluster = self.check_cluster_info()
+
         # Get sample time.
         self.sample_second = int(time.time())
         self.sample_date = datetime.datetime.today().strftime('%Y%m%d')
@@ -79,15 +82,31 @@ class Sampling:
 
         # Create db path.
         self.db_path = str(config.db_path) + '/monitor'
+
+        if cluster:
+            self.db_path = str(config.db_path) + '/' + str(cluster)
+
         job_db_path = str(self.db_path) + '/job'
 
         if not os.path.exists(job_db_path):
             try:
                 os.makedirs(job_db_path)
             except Exception as error:
-                common.print_error('*Error*: Failed on creating sqlite job db directory "' + str(job_db_path) + '".')
-                common.print_error('         ' + str(error))
+                common.bprint('Failed on creating sqlite job db directory "' + str(job_db_path) + '".', level='Error')
+                common.bprint(error, color='red', display_method=1, indent=9)
                 sys.exit(1)
+
+    def check_cluster_info(self):
+        """
+        Make sure LSF or Openlava environment exists.
+        """
+        (tool, tool_version, cluster, master) = common_lsf.get_lsid_info()
+
+        if tool == '':
+            common.bprint('Not find any LSF or Openlava environment!', date_format='%Y-%m-%d %H:%M:%S', level='Error')
+            sys.exit(1)
+
+        return cluster
 
     def sample_job_info(self):
         """
@@ -123,7 +142,7 @@ class Sampling:
                                 last_sample_second = int(data_dic['sample_second'][-1])
 
                                 if self.sample_second - last_sample_second > 3600:
-                                    common.print_warning('    *Warning*: table "' + str(job_table_name) + '" already existed even one hour ago, will drop it.')
+                                    common.bprint('Table "' + str(job_table_name) + '" already existed even one hour ago, will drop it.', level='Warning', indent=4)
                                     common_sqlite3.drop_sql_table(job_db_file, job_db_conn, job_table_name, commit=False)
                                     job_table_list.remove(job_table_name)
 
@@ -153,12 +172,14 @@ class Sampling:
 
         if result == 'passed':
             queue_table_list = common_sqlite3.get_sql_table_list(queue_db_file, queue_db_conn)
+            bhosts_dic = common_lsf.get_bhosts_info()
+            queue_host_dic = common_lsf.get_queue_host_info()
             bqueues_dic = common_lsf.get_bqueues_info()
             queue_list = bqueues_dic['QUEUE_NAME']
             queue_list.append('ALL')
 
-            key_list = ['sample_second', 'sample_time', 'NJOBS', 'PEND', 'RUN', 'SUSP']
-            key_type_list = ['INTEGER PRIMARY KEY', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT']
+            key_list = ['sample_second', 'sample_time', 'TOTAL', 'NJOBS', 'PEND', 'RUN', 'SUSP']
+            key_type_list = ['INTEGER PRIMARY KEY', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT']
 
             for i in range(len(queue_list)):
                 queue = queue_list[i]
@@ -186,10 +207,23 @@ class Sampling:
                     common_sqlite3.create_sql_table(queue_db_file, queue_db_conn, queue_table_name, key_string, commit=False)
 
                 # Insert sql table value.
+                total_slots = 0
+
                 if queue == 'ALL':
-                    value_list = [self.sample_second, self.sample_time, sum([int(i) for i in bqueues_dic['NJOBS']]), sum([int(i) for i in bqueues_dic['PEND']]), sum([int(i) for i in bqueues_dic['RUN']]), sum([int(i) for i in bqueues_dic['SUSP']])]
+                    for max in bhosts_dic['MAX']:
+                        if re.match(r'^\d+$', max):
+                            total_slots += int(max)
+
+                    value_list = [self.sample_second, self.sample_time, total_slots, sum([int(i) for i in bqueues_dic['NJOBS']]), sum([int(i) for i in bqueues_dic['PEND']]), sum([int(i) for i in bqueues_dic['RUN']]), sum([int(i) for i in bqueues_dic['SUSP']])]
                 else:
-                    value_list = [self.sample_second, self.sample_time, bqueues_dic['NJOBS'][i], bqueues_dic['PEND'][i], bqueues_dic['RUN'][i], bqueues_dic['SUSP'][i]]
+                    for queue_host in queue_host_dic[queue]:
+                        host_index = bhosts_dic['HOST_NAME'].index(queue_host)
+                        host_max = bhosts_dic['MAX'][host_index]
+
+                        if re.match(r'^\d+$', host_max):
+                            total_slots += int(host_max)
+
+                    value_list = [self.sample_second, self.sample_time, total_slots, bqueues_dic['NJOBS'][i], bqueues_dic['PEND'][i], bqueues_dic['RUN'][i], bqueues_dic['SUSP'][i]]
 
                 value_string = common_sqlite3.gen_sql_table_value_string(value_list)
                 common_sqlite3.insert_into_sql_table(queue_db_file, queue_db_conn, queue_table_name, value_string, commit=False)
@@ -397,6 +431,15 @@ class Sampling:
                 for (j, host_name) in enumerate(bhosts_dic['HOST_NAME']):
                     if (host_name == host) and re.match(r'^\d+$', bhosts_dic['NJOBS'][j]) and re.match(r'^\d+$', bhosts_dic['MAX'][j]) and (int(bhosts_dic['MAX'][j]) != 0):
                         slot_utilization = round(int(bhosts_dic['NJOBS'][j])/int(bhosts_dic['MAX'][j])*100, 1)
+
+                        if int(slot_utilization) > 100:
+                            common.bprint('For host "' + str(host) + '", invalid slot utilization "' + str(slot_utilization) + '".', level='Warning', indent=4)
+
+                            if bhosts_dic['STATUS'][j] == 'unavail':
+                                slot_utilization = 0.0
+                            else:
+                                slot_utilization = 100.0
+
                         break
 
                 # Get cpu_utilization.
@@ -412,25 +455,30 @@ class Sampling:
                     if (host_name == host) and re.match(r'^(\d+(\.\d+)?)([MGT])$', lshosts_dic['maxmem'][k]) and re.match(r'^(\d+(\.\d+)?)([MGT])$', lsload_dic['mem'][i]):
                         # Get maxmem with MB.
                         maxmem_match = re.match(r'^(\d+(\.\d+)?)([MGT])$', lshosts_dic['maxmem'][k])
-                        maxmem = maxmem_match.group(1)
+                        maxmem = float(maxmem_match.group(1))
                         maxmem_unit = maxmem_match.group(3)
 
                         if maxmem_unit == 'G':
-                            maxmem = float(maxmem)*1024
+                            maxmem = maxmem*1024
                         elif maxmem_unit == 'T':
-                            maxmem = float(maxmem)*1024*1024
+                            maxmem = maxmem*1024*1024
 
                         # Get mem with MB.
                         mem_match = re.match(r'^(\d+(\.\d+)?)([MGT])$', lsload_dic['mem'][i])
-                        mem = mem_match.group(1)
+                        mem = float(mem_match.group(1))
                         mem_unit = mem_match.group(3)
 
                         if mem_unit == 'G':
-                            mem = float(mem)*1024
+                            mem = mem*1024
                         elif mem_unit == 'T':
-                            mem = float(mem)*1024*1024
+                            mem = mem*1024*1024
 
                         mem_utilization = round((maxmem-mem)*100/maxmem, 1)
+
+                        if int(mem_utilization) > 100:
+                            common.bprint('For host "' + str(host) + '", invalid mem utilization "' + str(mem_utilization) + '".', level='Warning', indent=4)
+                            mem_utilization = 100.0
+
                         break
 
                 # Insert sql table value.
@@ -481,6 +529,18 @@ class Sampling:
                     slot_avg_utilization = round(slot_utilization_sum/len(utilization_db_data_dic['slot']), 1)
                     cpu_avg_utilization = round(cpu_utilization_sum/len(utilization_db_data_dic['slot']), 1)
                     mem_avg_utilization = round(mem_utilization_sum/len(utilization_db_data_dic['slot']), 1)
+
+                    if int(slot_avg_utilization) > 100:
+                        common.bprint('For db table "' + str(utilization_table_name) + '", invalid slot average utilization "' + str(slot_avg_utilization) + '".', level='Warning', indent=4)
+                        slot_avg_utilization = 100.0
+
+                    if int(cpu_avg_utilization) > 100:
+                        common.bprint('For db table "' + str(utilization_table_name) + '", invalid cpu average utilization "' + str(cpu_avg_utilization) + '".', level='Warning', indent=4)
+                        cpu_avg_utilization = 100.0
+
+                    if int(mem_avg_utilization) > 100:
+                        common.bprint('For db table "' + str(utilization_table_name) + '", invalid mem average utilization "' + str(mem_avg_utilization) + '".', level='Warning', indent=4)
+                        mem_avg_utilization = 100.0
 
                     utilization_day_dic[utilization_table_name] = {'slot': slot_avg_utilization, 'cpu': cpu_avg_utilization, 'mem': mem_avg_utilization}
 

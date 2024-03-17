@@ -30,7 +30,7 @@ def read_args():
 
     args = parser.parse_args()
 
-    return (args.job, args.issue)
+    return args.job, args.issue
 
 
 class MainWindow(QMainWindow):

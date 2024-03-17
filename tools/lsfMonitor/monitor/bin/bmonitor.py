@@ -10,13 +10,9 @@ import getpass
 import datetime
 import argparse
 
-from PyQt5.QtWidgets import QApplication, QWidget, QMainWindow, QAction, qApp, QTextEdit, QTabWidget, QFrame, QGridLayout, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox, QLineEdit, QComboBox, QHeaderView, QDateEdit
-from PyQt5.QtGui import QBrush, QFont
-from PyQt5.QtCore import Qt, QTimer, QThread, QDate
-
-from matplotlib.backends.backend_qt5 import NavigationToolbar2QT
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from matplotlib.figure import Figure
+from PyQt5.QtWidgets import QApplication, QWidget, QMainWindow, QAction, qApp, QTextEdit, QTabWidget, QFrame, QGridLayout, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox, QLineEdit, QComboBox, QHeaderView, QDateEdit, QFileDialog
+from PyQt5.QtGui import QIcon, QBrush, QFont
+from PyQt5.QtCore import Qt, QThread, QDate
 
 sys.path.append(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/monitor')
 from common import common
@@ -35,6 +31,7 @@ if os.path.exists(local_config):
     import config
 
 os.environ['PYTHONUNBUFFERED'] = '1'
+VERSION = 'V1.4.2 (2024.03.15)'
 
 # Solve some unexpected warning message.
 if 'XDG_RUNTIME_DIR' not in os.environ:
@@ -45,17 +42,6 @@ if 'XDG_RUNTIME_DIR' not in os.environ:
         os.makedirs(os.environ['XDG_RUNTIME_DIR'])
 
     os.chmod(os.environ['XDG_RUNTIME_DIR'], stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
-
-
-def check_tool():
-    """
-    Make sure LSF or Openlava environment exists.
-    """
-    tool = common_lsf.get_tool_name()
-
-    if tool == '':
-        print('*Error*: Not find any LSF or Openlava environment!')
-        sys.exit(1)
 
 
 def read_args():
@@ -93,7 +79,7 @@ def read_args():
         job_dic = common_lsf.get_bjobs_info(command)
 
         if not job_dic:
-            args.jobid = None
+            args.jobid = ''
 
     # Set default tab for args.feature.
     if args.feature and (not args.tab):
@@ -107,16 +93,7 @@ def read_args():
     if not args.tab:
         args.tab = 'JOBS'
 
-    return (args.jobid, args.user, args.feature, args.tab, args.disable_license)
-
-
-class FigureCanvas(FigureCanvasQTAgg):
-    """
-    Generate a new figure canvas.
-    """
-    def __init__(self):
-        self.figure = Figure()
-        super().__init__(self.figure)
+    return args.jobid, args.user, args.feature, args.tab, args.disable_license
 
 
 class MainWindow(QMainWindow):
@@ -126,6 +103,15 @@ class MainWindow(QMainWindow):
     def __init__(self, specified_job, specified_user, specified_feature, specified_tab, disable_license):
         super().__init__()
 
+        # Check cluster info.
+        cluster = self.check_cluster_info()
+
+        # Set db_path.
+        self.db_path = str(config.db_path) + '/monitor'
+
+        if cluster and os.path.exists(str(config.db_path) + '/' + str(cluster)):
+            self.db_path = str(config.db_path) + '/' + str(cluster)
+
         # Init variables.
         self.specified_job = specified_job
         self.specified_user = specified_user
@@ -134,25 +120,27 @@ class MainWindow(QMainWindow):
 
         self.lsf_unit_for_limits = common_lsf.get_lsf_unit_for_limits()
 
-        # Get LSF queue/host information.
-        current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Enable detail information on QUEUE/UTILIZATION tab.
+        self.enable_queue_detail = False
+        self.enable_utilization_detail = False
 
-        print('* [' + str(current_time) + '] Loading LSF information, please wait a moment ...')
+        # Init LSF information related variables.
+        self.bhosts_dic = {}
+        self.lsload_dic = {}
+        self.queues_dic = {}
+        self.lshosts_dic = {}
+        self.queue_host_dic = {}
+        self.host_queue_dic = {}
+        self.bhosts_load_dic = {}
 
-        my_show_message = ShowMessage('Info', 'Loading LSF information, please wait a moment ...')
-        my_show_message.start()
-
-        self.bhosts_dic = common_lsf.get_bhosts_info()
-        self.host_list = self.bhosts_dic['HOST_NAME']
-        self.queues_dic = common_lsf.get_bqueues_info()
-        self.queue_list = self.queues_dic['QUEUE_NAME']
-        self.host_queue_dic = common_lsf.get_host_queue_info()
-        self.queue_host_dic = common_lsf.get_queue_host_info()
-        self.bhosts_load_dic = common_lsf.get_bhosts_load_info()
-        self.lshosts_dic = common_lsf.get_lshosts_info()
-        self.lsload_dic = common_lsf.get_lsload_info()
-
-        my_show_message.terminate()
+        # Set self.lsf_info_dic for how to get LSF information.
+        self.lsf_info_dic = {'bhosts': {'exec_cmd': 'self.bhosts_dic = common_lsf.get_bhosts_info()', 'update_second': 0},
+                             'lsload': {'exec_cmd': 'self.lsload_dic = common_lsf.get_lsload_info()', 'update_second': 0},
+                             'queues': {'exec_cmd': 'self.queues_dic = common_lsf.get_bqueues_info()', 'update_second': 0},
+                             'lshosts': {'exec_cmd': 'self.lshosts_dic = common_lsf.get_lshosts_info()', 'update_second': 0},
+                             'queue_host': {'exec_cmd': 'self.queue_host_dic = common_lsf.get_queue_host_info()', 'update_second': 0},
+                             'host_queue': {'exec_cmd': 'self.host_queue_dic = common_lsf.get_host_queue_info()', 'update_second': 0},
+                             'bhosts_load': {'exec_cmd': 'self.bhosts_load_dic = common_lsf.get_bhosts_load_info()', 'update_second': 0}}
 
         # Get license information.
         self.license_dic = {}
@@ -165,6 +153,42 @@ class MainWindow(QMainWindow):
         # Switch tab.
         self.switch_tab(specified_tab)
 
+    def check_cluster_info(self):
+        """
+        Make sure LSF or Openlava environment exists.
+        """
+        (tool, tool_version, cluster, master) = common_lsf.get_lsid_info()
+
+        if tool == '':
+            common.bprint('Not find any LSF or Openlava environment!', date_format='%Y-%m-%d %H:%M:%S', level='Error')
+            sys.exit(1)
+
+        common.bprint(str(tool) + ' (' + str(tool_version) + ')', date_format='%Y-%m-%d %H:%M:%S')
+        common.bprint('My cluster name is "' + str(cluster) + '"', date_format='%Y-%m-%d %H:%M:%S')
+        common.bprint('My master name is "' + str(master) + '"', date_format='%Y-%m-%d %H:%M:%S')
+        common.bprint('', date_format='%Y-%m-%d %H:%M:%S')
+
+        return cluster
+
+    def fresh_lsf_info(self, lsf_info):
+        """
+        Get LSF information with functions on common_lsf.
+        If the information is updated in 30 seconds, will not update it again.
+        """
+        if lsf_info in self.lsf_info_dic:
+            current_second = int(time.time())
+
+            if current_second - self.lsf_info_dic[lsf_info]['update_second'] > 30:
+                common.bprint('Loading LSF ' + str(lsf_info) + ' information, please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
+                my_show_message = ShowMessage('Info', 'Loading LSF ' + str(lsf_info) + ' information, please wait a moment ...')
+                my_show_message.start()
+
+                exec(self.lsf_info_dic[lsf_info]['exec_cmd'])
+                self.lsf_info_dic[lsf_info]['update_second'] = current_second
+
+                time.sleep(0.01)
+                my_show_message.terminate()
+
     def get_license_dic(self):
         if self.disable_license:
             return
@@ -173,31 +197,31 @@ class MainWindow(QMainWindow):
         current_second = int(time.time())
 
         if current_second - self.license_dic_second <= 300:
+            common.bprint('Will not get license information repeatedly in 300 seconds.', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
             return
 
         self.license_dic_second = current_second
 
         # Print loading license message.
-        current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        print('* [' + str(current_time) + '] Loading License information, please wait a moment ...')
+        common.bprint('Loading License information, please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
 
         my_show_message = ShowMessage('Info', 'Loading license information, please wait a moment ...')
         my_show_message.start()
 
         # Get self.license_dic.
-        if config.lmstat_path:
-            my_get_license_info = common_license.GetLicenseInfo(lmstat_path=config.lmstat_path, bsub_command=config.lmstat_bsub_command)
-        else:
-            my_get_license_info = common_license.GetLicenseInfo(bsub_command=config.lmstat_bsub_command)
+        if ('LM_LICENSE_FILE' in os.environ) and os.environ['LM_LICENSE_FILE']:
+            if config.lmstat_path:
+                my_get_license_info = common_license.GetLicenseInfo(lmstat_path=config.lmstat_path, bsub_command=config.lmstat_bsub_command)
+            else:
+                my_get_license_info = common_license.GetLicenseInfo(bsub_command=config.lmstat_bsub_command)
 
-        self.license_dic = my_get_license_info.get_license_info()
+            self.license_dic = my_get_license_info.get_license_info()
 
-        # Print loading license informaiton message with GUI. (END)
+        time.sleep(0.01)
         my_show_message.terminate()
 
         if not self.license_dic:
-            print('*Warning*: Not find any valid license information.')
+            common.bprint('Not find any valid license information.', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
 
     def init_ui(self):
         """
@@ -238,8 +262,9 @@ class MainWindow(QMainWindow):
         self.gen_license_tab()
 
         # Show main window
-        self.setWindowTitle('lsfMonitor')
-        self.resize(1111, 620)
+        self.resize(1200, 610)
+        self.setWindowTitle('lsfMonitor ' + str(VERSION))
+        self.setWindowIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/monitor.ico'))
         common_pyqt5.center_window(self)
 
     def switch_tab(self, specified_tab):
@@ -263,29 +288,63 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
 
         # File
+        export_jobs_table_action = QAction('Export jobs table', self)
+        export_jobs_table_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/save.png'))
+        export_jobs_table_action.triggered.connect(self.export_jobs_table)
+
+        export_hosts_table_action = QAction('Export hosts table', self)
+        export_hosts_table_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/save.png'))
+        export_hosts_table_action.triggered.connect(self.export_hosts_table)
+
+        export_queues_table_action = QAction('Export queues table', self)
+        export_queues_table_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/save.png'))
+        export_queues_table_action.triggered.connect(self.export_queues_table)
+
+        export_utilization_table_action = QAction('Export utilization table', self)
+        export_utilization_table_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/save.png'))
+        export_utilization_table_action.triggered.connect(self.export_utilization_table)
+
+        export_license_feature_table_action = QAction('Export license feature table', self)
+        export_license_feature_table_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/save.png'))
+        export_license_feature_table_action.triggered.connect(self.export_license_feature_table)
+
+        export_license_expires_table_action = QAction('Export license expires table', self)
+        export_license_expires_table_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/save.png'))
+        export_license_expires_table_action.triggered.connect(self.export_license_expires_table)
+
         exit_action = QAction('Exit', self)
+        exit_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/exit.png'))
         exit_action.triggered.connect(qApp.quit)
 
         file_menu = menubar.addMenu('File')
+        file_menu.addAction(export_jobs_table_action)
+        file_menu.addAction(export_hosts_table_action)
+        file_menu.addAction(export_queues_table_action)
+        file_menu.addAction(export_utilization_table_action)
+        file_menu.addAction(export_license_feature_table_action)
+        file_menu.addAction(export_license_expires_table_action)
         file_menu.addAction(exit_action)
 
         # Setup
-        fresh_action = QAction('Fresh', self)
-        fresh_action.triggered.connect(self.fresh)
-        self.periodic_fresh_timer = QTimer(self)
-        periodic_fresh_action = QAction('Periodic Fresh (5 min)', self, checkable=True)
-        periodic_fresh_action.triggered.connect(self.periodic_fresh)
+        enable_queue_detail_action = QAction('Enable queue detail', self, checkable=True)
+        enable_queue_detail_action.triggered.connect(self.func_enable_queue_detail)
+
+        enable_utilization_detail_action = QAction('Enable utilization detail', self, checkable=True)
+        enable_utilization_detail_action.triggered.connect(self.func_enable_utilization_detail)
 
         setup_menu = menubar.addMenu('Setup')
-        setup_menu.addAction(fresh_action)
-        setup_menu.addAction(periodic_fresh_action)
+        setup_menu.addAction(enable_queue_detail_action)
+        setup_menu.addAction(enable_utilization_detail_action)
 
         # Function
         check_pend_reason_action = QAction('Check Pend reason', self)
+        check_pend_reason_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/pend.png'))
         check_pend_reason_action.triggered.connect(self.check_pend_reason)
         check_slow_reason_action = QAction('Check Slow reason', self)
+        check_slow_reason_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/slow.png'))
         check_slow_reason_action.triggered.connect(self.check_slow_reason)
         check_fail_reason_action = QAction('Check Fail reason', self)
+        check_fail_reason_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/fail.png'))
         check_fail_reason_action.triggered.connect(self.check_fail_reason)
 
         function_menu = menubar.addMenu('Function')
@@ -295,34 +354,38 @@ class MainWindow(QMainWindow):
 
         # Help
         version_action = QAction('Version', self)
+        version_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/version.png'))
         version_action.triggered.connect(self.show_version)
 
         about_action = QAction('About lsfMonitor', self)
+        about_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/about.png'))
         about_action.triggered.connect(self.show_about)
 
         help_menu = menubar.addMenu('Help')
         help_menu.addAction(version_action)
         help_menu.addAction(about_action)
 
-    def fresh(self):
+    def func_enable_queue_detail(self, state):
         """
-        Re-build the GUI with latest LSF status.
-        """
-        self.gen_jobs_tab_table()
-        self.gen_hosts_tab_table()
-        self.gen_queues_tab_table()
-        self.gen_license_tab_feature_table(self.license_dic)
-        self.gen_license_tab_expires_table(self.license_dic)
-
-    def periodic_fresh(self, state):
-        """
-        Fresh the GUI every 300 seconds.
+        Show detail information for RUN/PEND curve on QUEUE tab.
         """
         if state:
-            self.periodic_fresh_timer.timeout.connect(self.fresh)
-            self.periodic_fresh_timer.start(300000)
+            self.enable_queue_detail = True
+            self.queues_tab_begin_date_edit.setDate(QDate.currentDate().addDays(-7))
         else:
-            self.periodic_fresh_timer.stop()
+            self.enable_queue_detail = False
+            self.queues_tab_begin_date_edit.setDate(QDate.currentDate().addMonths(-1))
+
+    def func_enable_utilization_detail(self, state):
+        """
+        Show detail information for utilization curve on UTILIZATION tab.
+        """
+        if state:
+            self.enable_utilization_detail = True
+            self.utilization_tab_begin_date_edit.setDate(QDate.currentDate().addDays(-7))
+        else:
+            self.enable_utilization_detail = False
+            self.utilization_tab_begin_date_edit.setDate(QDate.currentDate().addMonths(-1))
 
     def check_pend_reason(self):
         """
@@ -349,8 +412,7 @@ class MainWindow(QMainWindow):
         """
         Show lsfMonitor version information.
         """
-        version = 'V1.3.2'
-        QMessageBox.about(self, 'lsfMonitor', 'Version: ' + str(version) + '        ')
+        QMessageBox.about(self, 'lsfMonitor', 'Version: ' + str(VERSION) + '        ')
 
     def show_about(self):
         """
@@ -359,7 +421,9 @@ class MainWindow(QMainWindow):
         about_message = """
 Thanks for downloading lsfMonitor.
 
-lsfMonitor is an open source software for LSF information data-collection, data-analysis and data-display."""
+lsfMonitor is an open source software for LSF information data-collection, data-analysis and data-display.
+
+Please contact with liyanqing1987@163.com with any question."""
 
         QMessageBox.about(self, 'lsfMonitor', about_message)
 
@@ -368,7 +432,7 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         """
         Show the specified warning message on both of command line and GUI window.
         """
-        common.print_warning(warning_message)
+        common.bprint(warning_message, date_format='%Y-%m-%d %H:%M:%S', level='Warning')
         QMessageBox.warning(self, 'lsfMonitor Warning', warning_message)
 # Common sub-functions (end) #
 
@@ -411,11 +475,7 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         job_tab_grid.setColumnStretch(0, 1)
         job_tab_grid.setColumnStretch(1, 10)
 
-        job_tab_grid.setRowMinimumHeight(0, 60)
-        job_tab_grid.setRowMinimumHeight(1, 320)
-        job_tab_grid.setRowMinimumHeight(2, 120)
         job_tab_grid.setColumnMinimumWidth(0, 250)
-        job_tab_grid.setColumnMinimumWidth(1, 500)
 
         self.job_tab.setLayout(job_tab_grid)
 
@@ -566,8 +626,8 @@ lsfMonitor is an open source software for LSF information data-collection, data-
 
     def gen_job_tab_frame3(self):
         # self.job_tab_frame3
-        self.job_tab_mem_canvas = FigureCanvas()
-        self.job_tab_mem_toolbar = NavigationToolbar2QT(self.job_tab_mem_canvas, self)
+        self.job_tab_mem_canvas = common_pyqt5.FigureCanvasQTAgg()
+        self.job_tab_mem_toolbar = common_pyqt5.NavigationToolbar2QT(self.job_tab_mem_canvas, self, x_is_date=False)
 
         # self.job_tab_frame3 - Grid
         job_tab_frame3_grid = QGridLayout()
@@ -580,43 +640,44 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         Get job information with "bjobs -UF <job_id>", save the infomation into dict self.job_tab_current_job_dic.
         Update self.job_tab_frame1 and self.job_tab_frame3.
         """
-        self.job_tab_current_job = self.job_tab_job_line.text().strip()
-
-        print('* Checking job "' + str(self.job_tab_current_job) + '".')
-
-        # Initicalization
+        # Initicalization JOB tab.
         self.update_job_tab_frame1(init=True)
         self.update_job_tab_frame2(init=True)
         self.update_job_tab_frame3(init=True)
 
-        # Job name must be a string of numbers.
-        current_job = self.job_tab_current_job
+        # Get real jobid and check it.
+        self.job_tab_current_job = self.job_tab_job_line.text().strip()
 
-        if re.match(r'^(\d+)(\[\d+\])?$', self.job_tab_current_job):
-            my_match = re.match(r'^(\d+)(\[\d+\])?$', self.job_tab_current_job)
-            current_job = my_match.group(1)
-        else:
+        if not re.match(r'^(\d+)(\[\d+\])?$', self.job_tab_current_job):
             warning_message = '*Warning*: No valid job is specified!'
             self.gui_warning(warning_message)
             return
 
+        my_match = re.match(r'^(\d+)(\[\d+\])?$', self.job_tab_current_job)
+        current_job = my_match.group(1)
+
+        common.bprint('Checking job "' + str(current_job) + '".', date_format='%Y-%m-%d %H:%M:%S')
+
         # Get job info
-        print('* Getting LSF job information for "' + str(current_job) + '", please wait a moment ...')
+        common.bprint('Getting LSF job information for "' + str(current_job) + '", please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
 
         my_show_message = ShowMessage('Info', 'Getting LSF job information for "' + str(current_job) + '", please wait a moment ...')
         my_show_message.start()
 
         self.job_tab_current_job_dic = common_lsf.get_bjobs_uf_info(command='bjobs -UF ' + str(current_job))
 
+        time.sleep(0.01)
         my_show_message.terminate()
 
-        if self.job_tab_current_job_dic:
-            # Update the related frames with the job info.
-            self.update_job_tab_frame1()
-            self.update_job_tab_frame2()
-            self.update_job_tab_frame3()
-        else:
-            print('*Warning*: Not find job information for job "' + str(current_job) + '".')
+        if not self.job_tab_current_job_dic:
+            warning_message = '*Warning*: Not find job information for job "' + str(current_job) + '".'
+            self.gui_warning(warning_message)
+            return
+
+        # Update JOB tab with latest job info.
+        self.update_job_tab_frame1()
+        self.update_job_tab_frame2()
+        self.update_job_tab_frame3()
 
     def update_job_tab_frame1(self, init=False):
         """
@@ -730,21 +791,21 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         job_range_dic = common.get_job_range_dic([self.job_tab_current_job, ])
         job_range_list = list(job_range_dic.keys())
         job_range = job_range_list[0]
-        job_db_file = str(config.db_path) + '/monitor/job/' + str(job_range) + '.db'
+        job_db_file = str(self.db_path) + '/job/' + str(job_range) + '.db'
 
         if not os.path.exists(job_db_file):
-            common.print_warning('*Warning*: Job memory usage information is missing for "' + str(self.job_tab_current_job) + '".')
+            common.bprint('Job memory usage information is missing for "' + str(self.job_tab_current_job) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
         else:
             (job_db_file_connect_result, job_db_conn) = common_sqlite3.connect_db_file(job_db_file)
 
             if job_db_file_connect_result == 'failed':
-                common.print_warning('*Warning*: Failed on connecting job database file "' + str(job_db_file) + '".')
+                common.bprint('Failed on connecting job database file "' + str(job_db_file) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
             else:
                 table_name = 'job_' + str(self.job_tab_current_job)
                 data_dic = common_sqlite3.get_sql_table_data(job_db_file, job_db_conn, table_name, ['sample_time', 'mem'])
 
                 if not data_dic:
-                    common.print_warning('*Warning*: job memory usage information is empty for "' + str(self.job_tab_current_job) + '".')
+                    common.bprint('Job memory usage information is empty for "' + str(self.job_tab_current_job) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 else:
                     sample_time_list = data_dic['sample_time']
                     mem_list = data_dic['mem']
@@ -765,7 +826,7 @@ lsfMonitor is an open source software for LSF information data-collection, data-
 
                 job_db_conn.close()
 
-        return (runtime_list, real_mem_list)
+        return runtime_list, real_mem_list
 
     def update_job_tab_frame3(self, init=False):
         """
@@ -791,7 +852,9 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         axes.set_title('memory usage for job "' + str(self.job_tab_current_job) + '"')
         axes.set_xlabel('Runtime (Minutes)')
         axes.set_ylabel('Memory Usage (G)')
-        axes.plot(runtime_list, mem_list, 'ro-')
+        axes.plot(runtime_list, mem_list, 'go-', label='MEM', linewidth=0.1, markersize=0.1)
+        axes.fill_between(runtime_list, mem_list, color='green', alpha=0.5)
+        axes.legend(loc='upper right')
         axes.grid()
         self.job_tab_mem_canvas.draw()
 # For job TAB (end) #
@@ -835,27 +898,24 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         jobs_tab_status_label.setStyleSheet("font-weight: bold;")
         jobs_tab_status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.jobs_tab_status_combo = QComboBox(self.jobs_tab_frame0)
-        self.set_jobs_tab_status_combo(['RUN', 'PEND', 'DONE', 'EXIT', 'ALL'])
-        self.jobs_tab_status_combo.activated.connect(self.gen_jobs_tab_table)
+        self.jobs_tab_status_combo = common_pyqt5.QComboCheckBox(self.jobs_tab_frame0)
+        self.set_jobs_tab_status_combo()
 
         # "Queue" item.
         jobs_tab_queue_label = QLabel('Queue', self.jobs_tab_frame0)
         jobs_tab_queue_label.setStyleSheet("font-weight: bold;")
         jobs_tab_queue_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.jobs_tab_queue_combo = QComboBox(self.jobs_tab_frame0)
+        self.jobs_tab_queue_combo = common_pyqt5.QComboCheckBox(self.jobs_tab_frame0)
         self.set_jobs_tab_queue_combo()
-        self.jobs_tab_queue_combo.activated.connect(self.gen_jobs_tab_table)
 
         # "Host" item.
         jobs_tab_started_on_label = QLabel('Host', self.jobs_tab_frame0)
         jobs_tab_started_on_label.setStyleSheet("font-weight: bold;")
         jobs_tab_started_on_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.jobs_tab_started_on_combo = QComboBox(self.jobs_tab_frame0)
-        self.set_jobs_tab_started_on_combo()
-        self.jobs_tab_started_on_combo.activated.connect(self.gen_jobs_tab_table)
+        self.jobs_tab_host_combo = common_pyqt5.QComboCheckBox(self.jobs_tab_frame0)
+        self.set_jobs_tab_host_combo()
 
         # "User" item.
         jobs_tab_user_label = QLabel('User', self.jobs_tab_frame0)
@@ -878,12 +938,11 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         jobs_tab_frame0_grid.addWidget(jobs_tab_queue_label, 0, 2)
         jobs_tab_frame0_grid.addWidget(self.jobs_tab_queue_combo, 0, 3)
         jobs_tab_frame0_grid.addWidget(jobs_tab_started_on_label, 0, 4)
-        jobs_tab_frame0_grid.addWidget(self.jobs_tab_started_on_combo, 0, 5)
+        jobs_tab_frame0_grid.addWidget(self.jobs_tab_host_combo, 0, 5)
         jobs_tab_frame0_grid.addWidget(jobs_tab_user_label, 0, 6)
         jobs_tab_frame0_grid.addWidget(self.jobs_tab_user_line, 0, 7)
         jobs_tab_frame0_grid.addWidget(jobs_tab_check_button, 0, 8)
 
-        jobs_tab_frame0_grid.setColumnStretch(0, 1)
         jobs_tab_frame0_grid.setColumnStretch(1, 1)
         jobs_tab_frame0_grid.setColumnStretch(2, 1)
         jobs_tab_frame0_grid.setColumnStretch(3, 1)
@@ -901,13 +960,14 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.jobs_tab_table.setSortingEnabled(True)
         self.jobs_tab_table.setColumnCount(0)
         self.jobs_tab_table.setColumnCount(11)
-        self.jobs_tab_table.setHorizontalHeaderLabels(['Job', 'User', 'Status', 'Queue', 'Host', 'Started', 'Project', 'Slot', 'Rusage (G)', 'Mem (G)', 'Command'])
+        self.jobs_tab_table_title_list = ['Job', 'User', 'Status', 'Queue', 'Host', 'Started', 'Project', 'Slot', 'Rusage (G)', 'Mem (G)', 'Command']
+        self.jobs_tab_table.setHorizontalHeaderLabels(self.jobs_tab_table_title_list)
 
-        self.jobs_tab_table.setColumnWidth(0, 70)
-        self.jobs_tab_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.jobs_tab_table.setColumnWidth(0, 80)
+        self.jobs_tab_table.setColumnWidth(1, 120)
         self.jobs_tab_table.setColumnWidth(2, 60)
-        self.jobs_tab_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self.jobs_tab_table.setColumnWidth(4, 105)
+        self.jobs_tab_table.setColumnWidth(3, 125)
+        self.jobs_tab_table.setColumnWidth(4, 120)
         self.jobs_tab_table.setColumnWidth(5, 150)
         self.jobs_tab_table.setColumnWidth(6, 100)
         self.jobs_tab_table.setColumnWidth(7, 40)
@@ -925,48 +985,62 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             command = str(command) + ' -u ' + str(specified_user)
 
         # Get specified queue related jobs.
-        specified_queue = self.jobs_tab_queue_combo.currentText().strip()
+        specified_queue_list = self.jobs_tab_queue_combo.currentText().strip().split()
 
-        if specified_queue != 'ALL':
-            command = str(command) + ' -q ' + str(specified_queue)
+        if (len(specified_queue_list) == 1) and (specified_queue_list[0] != 'ALL'):
+            command = str(command) + ' -q ' + str(specified_queue_list[0])
 
         # Get specified status (RUN/PEND/ALL) related jobs.
-        specified_status = self.jobs_tab_status_combo.currentText().strip()
+        specified_status_list = self.jobs_tab_status_combo.currentText().strip().split()
 
-        if specified_status == 'RUN':
+        if (len(specified_status_list) == 1) and (specified_status_list[0] == 'RUN'):
             command = str(command) + ' -r'
-        elif specified_status == 'PEND':
+        elif (len(specified_status_list) == 1) and (specified_status_list[0] == 'PEND'):
             command = str(command) + ' -p'
         else:
             command = str(command) + ' -a'
 
         # Get specified host related jobs.
-        specified_host = self.jobs_tab_started_on_combo.currentText().strip()
+        specified_host_list = self.jobs_tab_host_combo.currentText().strip().split()
 
-        if specified_host != 'ALL':
-            command = str(command) + ' -m ' + str(specified_host)
+        if (len(specified_host_list) == 1) and (specified_host_list[0] != 'ALL'):
+            command = str(command) + ' -m ' + str(specified_host_list[0])
 
         # Run command to get expected jobs information.
-        current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        print('* [' + str(current_time) + '] Loading LSF jobs information, please wait a moment ...')
+        common.bprint('Loading LSF jobs information, please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
 
         my_show_message = ShowMessage('Info', 'Loading LSF jobs information, please wait a moment ...')
         my_show_message.start()
 
-        orig_job_dic = common_lsf.get_bjobs_uf_info(command)
+        job_dic = common_lsf.get_bjobs_uf_info(command)
 
+        time.sleep(0.01)
         my_show_message.terminate()
 
         # Filter job_dic.
-        job_dic = {}
+        job_list = list(job_dic.keys())
 
-        if (specified_status == 'DONE') or (specified_status == 'EXIT'):
-            for job in orig_job_dic.keys():
-                if orig_job_dic[job]['status'] == specified_status:
-                    job_dic.setdefault(job, orig_job_dic[job])
-        else:
-            job_dic = orig_job_dic
+        for job in job_list:
+            if ('ALL' not in specified_status_list) and (job_dic[job]['status'] not in specified_status_list):
+                del job_dic[job]
+                continue
+
+            if ('ALL' not in specified_queue_list) and (len(specified_queue_list) > 1) and (job_dic[job]['queue'] not in specified_queue_list):
+                del job_dic[job]
+                continue
+
+            if ('ALL' not in specified_host_list) and (len(specified_host_list) > 1):
+                find_host = False
+                started_on_list = job_dic[job]['started_on'].strip().split()
+
+                for specified_host in specified_host_list:
+                    if specified_host in started_on_list:
+                        find_host = True
+                        break
+
+                if not find_host:
+                    del job_dic[job]
+                    continue
 
         # Fill self.jobs_tab_table items.
         self.jobs_tab_table.setRowCount(0)
@@ -991,8 +1065,8 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             item = QTableWidgetItem(job_dic[job]['status'])
             item.setFont(QFont('song', 9, QFont.Bold))
 
-            if job_dic[job]['status'] == 'PEND':
-                item.setForeground(QBrush(Qt.red))
+            if (job_dic[job]['status'] == 'PEND') or (job_dic[job]['status'] == 'EXIT'):
+                item.setBackground(QBrush(Qt.red))
 
             self.jobs_tab_table.setItem(i, j, item)
 
@@ -1057,7 +1131,7 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                 self.jobs_tab_table.setItem(i, j, item)
 
                 if ((not job_dic[job]['rusage_mem']) and (mem_value > 0)) or (job_dic[job]['rusage_mem'] and (mem_value > rusage_mem_value)):
-                    item.setForeground(QBrush(Qt.red))
+                    item.setBackground(QBrush(Qt.red))
 
             # Fill "Command" item.
             j = j+1
@@ -1104,52 +1178,76 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                 job_status = self.jobs_tab_table.item(current_row, 2).text().strip()
 
                 if job_status == 'PEND':
-                    print('* Getting job pend reason for "' + str(job) + '", please wait a moment ...')
+                    common.bprint('Getting job pend reason for "' + str(job) + '", please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
                     self.my_check_issue_reason = CheckIssueReason(job=job, issue='PEND')
                     self.my_check_issue_reason.start()
                 elif job_status == 'RUN':
-                    print('* Getting job process information for "' + str(job) + '", please wait a moment ...')
+                    common.bprint('Getting job process information for "' + str(job) + '", please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
                     self.my_check_issue_reason = CheckIssueReason(job=job, issue='SLOW')
                     self.my_check_issue_reason.start()
                 elif (job_status == 'DONE') or (job_status == 'EXIT'):
-                    print('* Getting job fail reason for "' + str(job) + '", please wait a moment ...')
+                    common.bprint('Getting job fail reason for "' + str(job) + '", please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
                     self.my_check_issue_reason = CheckIssueReason(job=job, issue='FAIL')
                     self.my_check_issue_reason.start()
 
-    def set_jobs_tab_status_combo(self, status_list):
+    def set_jobs_tab_status_combo(self, status_list=[]):
         """
         Set (initialize) self.jobs_tab_status_combo.
         """
         self.jobs_tab_status_combo.clear()
 
+        if not status_list:
+            status_list = ['RUN', 'PEND', 'DONE', 'EXIT', 'ALL']
+
         for status in status_list:
-            self.jobs_tab_status_combo.addItem(status)
+            self.jobs_tab_status_combo.addCheckBoxItem(status)
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.jobs_tab_status_combo.checkBoxList):
+            if (qBox.text() == 'RUN') and (qBox.isChecked() is False):
+                self.jobs_tab_status_combo.checkBoxList[i].setChecked(True)
+                break
 
     def set_jobs_tab_queue_combo(self, queue_list=[]):
         """
         Set (initialize) self.jobs_tab_queue_combo.
         """
         self.jobs_tab_queue_combo.clear()
+        self.fresh_lsf_info('queues')
 
         if not queue_list:
-            queue_list = copy.deepcopy(self.queue_list)
+            queue_list = copy.deepcopy(self.queues_dic['QUEUE_NAME'])
+            queue_list.sort()
             queue_list.insert(0, 'ALL')
 
         for queue in queue_list:
-            self.jobs_tab_queue_combo.addItem(queue)
+            self.jobs_tab_queue_combo.addCheckBoxItem(queue)
 
-    def set_jobs_tab_started_on_combo(self, host_list=[]):
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.jobs_tab_queue_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.jobs_tab_queue_combo.checkBoxList[i].setChecked(True)
+                break
+
+    def set_jobs_tab_host_combo(self, host_list=[]):
         """
-        Set (initialize) self.jobs_tab_started_on_combo.
+        Set (initialize) self.jobs_tab_host_combo.
         """
-        self.jobs_tab_started_on_combo.clear()
+        self.jobs_tab_host_combo.clear()
 
         if not host_list:
-            host_list = copy.deepcopy(self.host_list)
+            self.fresh_lsf_info('bhosts')
+            host_list = copy.deepcopy(self.bhosts_dic['HOST_NAME'])
             host_list.insert(0, 'ALL')
 
         for host in host_list:
-            self.jobs_tab_started_on_combo.addItem(host)
+            self.jobs_tab_host_combo.addCheckBoxItem(host)
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.jobs_tab_host_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.jobs_tab_host_combo.checkBoxList[i].setChecked(True)
+                break
 # For jobs TAB (end) #
 
 # For hosts TAB (start) #
@@ -1187,36 +1285,32 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         hosts_tab_status_label.setStyleSheet("font-weight: bold;")
         hosts_tab_status_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.hosts_tab_status_combo = QComboBox(self.hosts_tab_frame0)
+        self.hosts_tab_status_combo = common_pyqt5.QComboCheckBox(self.hosts_tab_frame0)
         self.set_hosts_tab_status_combo()
-        self.hosts_tab_status_combo.activated.connect(self.gen_hosts_tab_table)
 
         # "Queue" item.
         hosts_tab_queue_label = QLabel('Queue', self.hosts_tab_frame0)
         hosts_tab_queue_label.setStyleSheet("font-weight: bold;")
         hosts_tab_queue_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.hosts_tab_queue_combo = QComboBox(self.hosts_tab_frame0)
+        self.hosts_tab_queue_combo = common_pyqt5.QComboCheckBox(self.hosts_tab_frame0)
         self.set_hosts_tab_queue_combo()
-        self.hosts_tab_queue_combo.activated.connect(self.gen_hosts_tab_table)
 
         # "MAX" item.
         hosts_tab_max_label = QLabel('MAX', self.hosts_tab_frame0)
         hosts_tab_max_label.setStyleSheet("font-weight: bold;")
         hosts_tab_max_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.hosts_tab_max_combo = QComboBox(self.hosts_tab_frame0)
+        self.hosts_tab_max_combo = common_pyqt5.QComboCheckBox(self.hosts_tab_frame0)
         self.set_hosts_tab_max_combo()
-        self.hosts_tab_max_combo.activated.connect(self.gen_hosts_tab_table)
 
         # "MaxMem" item.
         hosts_tab_maxmem_label = QLabel('MaxMem', self.hosts_tab_frame0)
         hosts_tab_maxmem_label.setStyleSheet("font-weight: bold;")
         hosts_tab_maxmem_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.hosts_tab_maxmem_combo = QComboBox(self.hosts_tab_frame0)
+        self.hosts_tab_maxmem_combo = common_pyqt5.QComboCheckBox(self.hosts_tab_frame0)
         self.set_hosts_tab_maxmem_combo()
-        self.hosts_tab_maxmem_combo.activated.connect(self.gen_hosts_tab_table)
 
         # "Host" item.
         hosts_tab_host_label = QLabel('Host', self.hosts_tab_frame0)
@@ -1246,7 +1340,6 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         hosts_tab_frame0_grid.addWidget(self.hosts_tab_host_line, 0, 9)
         hosts_tab_frame0_grid.addWidget(hosts_tab_check_button, 0, 10)
 
-        hosts_tab_frame0_grid.setColumnStretch(0, 1)
         hosts_tab_frame0_grid.setColumnStretch(1, 1)
         hosts_tab_frame0_grid.setColumnStretch(2, 1)
         hosts_tab_frame0_grid.setColumnStretch(3, 1)
@@ -1266,9 +1359,10 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.hosts_tab_table.setSortingEnabled(True)
         self.hosts_tab_table.setColumnCount(0)
         self.hosts_tab_table.setColumnCount(11)
-        self.hosts_tab_table.setHorizontalHeaderLabels(['Host', 'Status', 'Queue', 'MAX', 'Njobs', 'Ut (%)', 'MaxMem (G)', 'Mem (G)', 'MaxSwp (G)', 'Swp (G)', 'Tmp (G)'])
+        self.hosts_tab_table_title_list = ['Host', 'Status', 'Queue', 'MAX', 'Njobs', 'Ut (%)', 'MaxMem (G)', 'Mem (G)', 'MaxSwp (G)', 'Swp (G)', 'Tmp (G)']
+        self.hosts_tab_table.setHorizontalHeaderLabels(self.hosts_tab_table_title_list)
 
-        self.hosts_tab_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.hosts_tab_table.setColumnWidth(0, 150)
         self.hosts_tab_table.setColumnWidth(1, 90)
         self.hosts_tab_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.hosts_tab_table.setColumnWidth(3, 60)
@@ -1285,13 +1379,27 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.hosts_tab_table.setRowCount(0)
         self.hosts_tab_table.setRowCount(len(hosts_tab_specified_host_list))
 
-        for i in range(len(hosts_tab_specified_host_list)):
-            host = hosts_tab_specified_host_list[i]
+        # Fresh LSF bhosts/lsload/lshosts/host_queue/bhosts_load information.
+        self.fresh_lsf_info('bhosts')
+        self.fresh_lsf_info('lsload')
+        self.fresh_lsf_info('lshosts')
+        self.fresh_lsf_info('host_queue')
+        self.fresh_lsf_info('bhosts_load')
+
+        for (i, host) in enumerate(hosts_tab_specified_host_list):
+            fatal_error = False
 
             # Fill "Host" item.
             j = 0
             item = QTableWidgetItem(host)
             item.setFont(QFont('song', 9, QFont.Bold))
+
+            if host == 'lost_and_found':
+                fatal_error = True
+
+            if fatal_error:
+                item.setBackground(QBrush(Qt.red))
+
             self.hosts_tab_table.setItem(i, j, item)
 
             # Fill "Status" item.
@@ -1301,17 +1409,26 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             item = QTableWidgetItem(status)
 
             if (str(status) == 'unavail') or (str(status) == 'unreach') or (str(status) == 'closed_LIM'):
-                item.setForeground(QBrush(Qt.red))
+                fatal_error = True
+
+            if fatal_error:
+                item.setBackground(QBrush(Qt.red))
 
             self.hosts_tab_table.setItem(i, j, item)
 
             # Fill "Queue" item.
             j = j+1
+            queues = ''
 
             if host in self.host_queue_dic.keys():
                 queues = ' '.join(self.host_queue_dic[host])
-                item = QTableWidgetItem(queues)
-                self.hosts_tab_table.setItem(i, j, item)
+
+            item = QTableWidgetItem(queues)
+
+            if fatal_error:
+                item.setBackground(QBrush(Qt.red))
+
+            self.hosts_tab_table.setItem(i, j, item)
 
             # Fill "MAX" item.
             j = j+1
@@ -1319,11 +1436,15 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             max = self.bhosts_dic['MAX'][index]
 
             if not re.match(r'^[0-9]+$', max):
-                common.print_warning('*Warning*: host(' + str(host) + ') MAX info "' + str(max) + '": invalid value, reset it to "0".')
+                common.bprint('Host(' + str(host) + ') MAX info "' + str(max) + '": invalid value, reset it to "0".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 max = 0
 
             item = QTableWidgetItem()
             item.setData(Qt.DisplayRole, int(max))
+
+            if fatal_error:
+                item.setBackground(QBrush(Qt.red))
+
             self.hosts_tab_table.setItem(i, j, item)
 
             # Fill "Njobs" item.
@@ -1332,12 +1453,16 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             njobs = self.bhosts_dic['NJOBS'][index]
 
             if not re.match(r'^[0-9]+$', njobs):
-                common.print_warning('*Warning*: host(' + str(host) + ') NJOBS info "' + str(njobs) + '": invalid value, reset it to "0".')
+                common.bprint('Host(' + str(host) + ') NJOBS info "' + str(njobs) + '": invalid value, reset it to "0".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 njobs = 0
 
             item = QTableWidgetItem()
             item.setData(Qt.DisplayRole, int(njobs))
             item.setFont(QFont('song', 9, QFont.Bold))
+
+            if fatal_error:
+                item.setBackground(QBrush(Qt.red))
+
             self.hosts_tab_table.setItem(i, j, item)
 
             # Fill "Ut" item.
@@ -1352,14 +1477,14 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             ut = re.sub(r'%', '', ut)
 
             if not re.match(r'^[0-9]+$', ut):
-                common.print_warning('*Warning*: host(' + str(host) + ') ut info "' + str(ut) + '": invalid value, reset it to "0".')
+                common.bprint('Host(' + str(host) + ') ut info "' + str(ut) + '": invalid value, reset it to "0".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 ut = 0
 
             item = QTableWidgetItem()
             item.setData(Qt.DisplayRole, int(ut))
 
-            if int(ut) > 90:
-                item.setForeground(QBrush(Qt.red))
+            if fatal_error or (int(ut) > 90):
+                item.setBackground(QBrush(Qt.red))
 
             self.hosts_tab_table.setItem(i, j, item)
 
@@ -1378,11 +1503,15 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             elif re.search(r'T', maxmem):
                 maxmem = float(re.sub(r'T', '', maxmem))*1024
             else:
-                common.print_warning('*Warning*: host(' + str(host) + ') maxmem info "' + str(maxmem) + '": unrecognized unit, reset it to "0".')
+                common.bprint('Host(' + str(host) + ') maxmem info "' + str(maxmem) + '": unrecognized unit, reset it to "0".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 maxmem = 0
 
             item = QTableWidgetItem()
             item.setData(Qt.DisplayRole, int(float(maxmem)))
+
+            if fatal_error or (maxmem == 0):
+                item.setBackground(QBrush(Qt.red))
+
             self.hosts_tab_table.setItem(i, j, item)
 
             # Fill "Mem" item.
@@ -1401,14 +1530,14 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             elif re.search(r'T', mem):
                 mem = float(re.sub(r'T', '', mem))*1024
             else:
-                common.print_warning('*Warning*: host(' + str(host) + ') mem info "' + str(mem) + '": unrecognized unit, reset it to "0".')
+                common.bprint('Host(' + str(host) + ') mem info "' + str(mem) + '": unrecognized unit, reset it to "0".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 mem = 0
 
             item = QTableWidgetItem()
             item.setData(Qt.DisplayRole, int(float(mem)))
 
-            if (maxmem and (float(mem)/float(maxmem) < 0.1)):
-                item.setForeground(QBrush(Qt.red))
+            if fatal_error or (maxmem and (float(mem)/float(maxmem) < 0.1)):
+                item.setBackground(QBrush(Qt.red))
 
             self.hosts_tab_table.setItem(i, j, item)
 
@@ -1427,11 +1556,15 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             elif re.search(r'T', maxswp):
                 maxswp = float(re.sub(r'T', '', maxswp))*1024
             else:
-                common.print_warning('*Warning*: host(' + str(host) + ') maxswp info "' + str(maxswp) + '": unrecognized unit, reset it to "0".')
+                common.bprint('Host(' + str(host) + ') maxswp info "' + str(maxswp) + '": unrecognized unit, reset it to "0".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 maxswp = 0
 
             item = QTableWidgetItem()
             item.setData(Qt.DisplayRole, int(float(maxswp)))
+
+            if fatal_error:
+                item.setBackground(QBrush(Qt.red))
+
             self.hosts_tab_table.setItem(i, j, item)
 
             # Fill "Swp" item.
@@ -1450,11 +1583,15 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             elif re.search(r'T', swp):
                 swp = float(re.sub(r'T', '', swp))*1024
             else:
-                common.print_warning('*Warning*: host(' + str(host) + ') swp info "' + str(swp) + '": unrecognized unit, reset it to "0".')
+                common.bprint('Host(' + str(host) + ') swp info "' + str(swp) + '": unrecognized unit, reset it to "0".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 swp = 0
 
             item = QTableWidgetItem()
             item.setData(Qt.DisplayRole, int(float(swp)))
+
+            if fatal_error:
+                item.setBackground(QBrush(Qt.red))
+
             self.hosts_tab_table.setItem(i, j, item)
 
             # Fill "Tmp" item.
@@ -1473,14 +1610,14 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             elif re.search(r'T', tmp):
                 tmp = float(re.sub(r'T', '', tmp))*1024
             else:
-                common.print_warning('*Warning*: host(' + str(host) + ') tmp info "' + str(tmp) + '": unrecognized unit, reset it to "0".')
+                common.bprint('Host(' + str(host) + ') tmp info "' + str(tmp) + '": unrecognized unit, reset it to "0".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 tmp = 0
 
             item = QTableWidgetItem()
             item.setData(Qt.DisplayRole, int(float(tmp)))
 
-            if int(float(tmp)) == 0:
-                item.setForeground(QBrush(Qt.red))
+            if fatal_error or (int(float(tmp)) == 0):
+                item.setBackground(QBrush(Qt.red))
 
             self.hosts_tab_table.setItem(i, j, item)
 
@@ -1488,53 +1625,92 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         """
         Filter host list with specified queue/status/max/maxmem/host.
         """
-        specified_status = self.hosts_tab_status_combo.currentText().strip()
-        specified_queue = self.hosts_tab_queue_combo.currentText().strip()
-        specified_max = self.hosts_tab_max_combo.currentText().strip()
-        specified_maxmem = self.hosts_tab_maxmem_combo.currentText().strip()
+        specified_status_list = self.hosts_tab_status_combo.currentText().strip().split()
+        specified_queue_list = self.hosts_tab_queue_combo.currentText().strip().split()
+        specified_max_list = self.hosts_tab_max_combo.currentText().strip().split()
+        specified_maxmem_list = self.hosts_tab_maxmem_combo.currentText().strip().split()
         specified_host = self.hosts_tab_host_line.text().strip()
-
         hosts_tab_specified_host_list = []
 
-        for host in self.host_list:
-            # Filter with specified_status.
+        # Fresh LSF bhosts/lshosts/host_queue information.
+        self.fresh_lsf_info('bhosts')
+        self.fresh_lsf_info('lshosts')
+        self.fresh_lsf_info('host_queue')
+
+        for host in self.bhosts_dic['HOST_NAME']:
+            # Filter with specified_status_list.
             index = self.bhosts_dic['HOST_NAME'].index(host)
             status = self.bhosts_dic['STATUS'][index]
 
-            if (specified_status != 'ALL') and (specified_status != status):
-                continue
+            if 'ALL' not in specified_status_list:
+                continue_mark = True
 
-            # Filter with specified_queue.
-            if (specified_queue != 'ALL') and ((host not in self.host_queue_dic) or ((host in self.host_queue_dic) and (specified_queue not in self.host_queue_dic[host]))):
-                continue
+                for specified_status in specified_status_list:
+                    if specified_status == status:
+                        continue_mark = False
+                        break
 
-            # Filter with specified_max.
+                if continue_mark:
+                    continue
+
+            # Filter with specified_queue_list.
+            if 'ALL' not in specified_queue_list:
+                continue_mark = True
+
+                for specified_queue in specified_queue_list:
+                    if (host in self.host_queue_dic) and (specified_queue in self.host_queue_dic[host]):
+                        continue_mark = False
+                        break
+
+                if continue_mark:
+                    continue
+
+            # Filter with specified_max_list.
             index = self.bhosts_dic['HOST_NAME'].index(host)
             max = self.bhosts_dic['MAX'][index]
 
             if not re.match(r'^[0-9]+$', max):
                 max = 0
 
-            if (specified_max != 'ALL') and (specified_max != str(max)):
-                continue
+            if 'ALL' not in specified_max_list:
+                continue_mark = True
 
-            # Filter with specified_maxmem.
-            index = self.lshosts_dic['HOST_NAME'].index(host)
-            maxmem = self.lshosts_dic['maxmem'][index]
+                for specified_max in specified_max_list:
+                    if specified_max == str(max):
+                        continue_mark = False
+                        break
 
-            if re.search(r'M', maxmem):
-                maxmem = int(float(re.sub(r'M', '', maxmem))/1024)
-            elif re.search(r'G', maxmem):
-                maxmem = int(float(re.sub(r'G', '', maxmem)))
-            elif re.search(r'T', maxmem):
-                maxmem = int(float(re.sub(r'T', '', maxmem))*1024)
-            else:
+                if continue_mark:
+                    continue
+
+            # Filter with specified_maxmem_list.
+            if host not in self.lshosts_dic['HOST_NAME']:
                 maxmem = 0
+            else:
+                index = self.lshosts_dic['HOST_NAME'].index(host)
+                maxmem = self.lshosts_dic['maxmem'][index]
 
-            specified_maxmem = re.sub(r'G', '', specified_maxmem)
+                if re.search(r'M', maxmem):
+                    maxmem = int(float(re.sub(r'M', '', maxmem))/1024)
+                elif re.search(r'G', maxmem):
+                    maxmem = int(float(re.sub(r'G', '', maxmem)))
+                elif re.search(r'T', maxmem):
+                    maxmem = int(float(re.sub(r'T', '', maxmem))*1024)
+                else:
+                    maxmem = 0
 
-            if (specified_maxmem != 'ALL') and (specified_maxmem != str(maxmem)):
-                continue
+            if 'ALL' not in specified_maxmem_list:
+                continue_mark = True
+
+                for specified_maxmem in specified_maxmem_list:
+                    specified_maxmem = re.sub(r'G', '', specified_maxmem)
+
+                    if specified_maxmem == str(maxmem):
+                        continue_mark = False
+                        break
+
+                if continue_mark:
+                    continue
 
             # Filter with specified_host.
             if specified_host and (not re.search(specified_host, host)):
@@ -1555,7 +1731,8 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             njobs_num = self.hosts_tab_table.item(current_row, 5).text().strip()
 
             if item.column() == 0:
-                host_list = copy.deepcopy(self.host_list)
+                self.fresh_lsf_info('bhosts')
+                host_list = copy.deepcopy(self.bhosts_dic['HOST_NAME'])
                 host_list.remove(host)
                 host_list.insert(0, host)
                 self.set_load_tab_host_combo(host_list)
@@ -1563,19 +1740,18 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                 self.main_tab.setCurrentWidget(self.load_tab)
             elif item.column() == 4:
                 if int(njobs_num) > 0:
-                    self.jobs_tab_user_line.setText('')
-                    self.set_jobs_tab_status_combo(['RUN', 'PEND', 'DONE', 'EXIT', 'ALL'])
+                    self.set_jobs_tab_status_combo()
                     self.set_jobs_tab_queue_combo()
+                    self.set_jobs_tab_host_combo()
 
-                    host_list = copy.deepcopy(self.host_list)
-                    host_list.remove(host)
-                    host_list.insert(0, host)
-                    host_list.insert(1, 'ALL')
-                    self.set_jobs_tab_started_on_combo(host_list)
+                    for (i, qBox) in enumerate(self.jobs_tab_host_combo.checkBoxList):
+                        if qBox.text() == host:
+                            self.jobs_tab_host_combo.checkBoxList[i].setChecked(True)
+                        else:
+                            self.jobs_tab_host_combo.checkBoxList[i].setChecked(False)
 
+                    self.jobs_tab_user_line.setText('')
                     self.gen_jobs_tab_table()
-                    self.main_tab.setCurrentWidget(self.jobs_tab)
-
                     self.main_tab.setCurrentWidget(self.jobs_tab)
 
     def set_hosts_tab_status_combo(self):
@@ -1583,10 +1759,11 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         Set (initialize) self.hosts_tab_status_combo.
         """
         self.hosts_tab_status_combo.clear()
+        self.fresh_lsf_info('bhosts')
 
         status_list = ['ALL', ]
 
-        for host in self.host_list:
+        for host in self.bhosts_dic['HOST_NAME']:
             index = self.bhosts_dic['HOST_NAME'].index(host)
             status = self.bhosts_dic['STATUS'][index]
 
@@ -1594,29 +1771,44 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                 status_list.append(status)
 
         for status in status_list:
-            self.hosts_tab_status_combo.addItem(status)
+            self.hosts_tab_status_combo.addCheckBoxItem(status)
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.hosts_tab_status_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.hosts_tab_status_combo.checkBoxList[i].setChecked(True)
+                break
 
     def set_hosts_tab_queue_combo(self):
         """
         Set (initialize) self.hosts_tab_queue_combo.
         """
         self.hosts_tab_queue_combo.clear()
+        self.fresh_lsf_info('queues')
 
-        queue_list = copy.deepcopy(self.queue_list)
+        queue_list = copy.deepcopy(self.queues_dic['QUEUE_NAME'])
+        queue_list.sort()
         queue_list.insert(0, 'ALL')
 
         for queue in queue_list:
-            self.hosts_tab_queue_combo.addItem(queue)
+            self.hosts_tab_queue_combo.addCheckBoxItem(queue)
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.hosts_tab_queue_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.hosts_tab_queue_combo.checkBoxList[i].setChecked(True)
+                break
 
     def set_hosts_tab_max_combo(self):
         """
         Set (initialize) self.hosts_tab_max_combo.
         """
         self.hosts_tab_max_combo.clear()
+        self.fresh_lsf_info('bhosts')
 
         max_list = []
 
-        for host in self.host_list:
+        for host in self.bhosts_dic['HOST_NAME']:
             index = self.bhosts_dic['HOST_NAME'].index(host)
             max = self.bhosts_dic['MAX'][index]
 
@@ -1630,29 +1822,40 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         max_list.insert(0, 'ALL')
 
         for max in max_list:
-            self.hosts_tab_max_combo.addItem(str(max))
+            self.hosts_tab_max_combo.addCheckBoxItem(str(max))
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.hosts_tab_max_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.hosts_tab_max_combo.checkBoxList[i].setChecked(True)
+                break
 
     def set_hosts_tab_maxmem_combo(self):
         """
         Set (initialize) self.hosts_tab_maxmem_combo.
         """
         self.hosts_tab_maxmem_combo.clear()
+        self.fresh_lsf_info('bhosts')
+        self.fresh_lsf_info('lshosts')
 
         maxmem_list = []
 
-        for host in self.host_list:
-            index = self.lshosts_dic['HOST_NAME'].index(host)
-            maxmem = self.lshosts_dic['maxmem'][index]
-
-            # Switch maxmem unit to "G".
-            if re.search(r'M', maxmem):
-                maxmem = int(float(re.sub(r'M', '', maxmem))/1024)
-            elif re.search(r'G', maxmem):
-                maxmem = int(float(re.sub(r'G', '', maxmem)))
-            elif re.search(r'T', maxmem):
-                maxmem = int(float(re.sub(r'T', '', maxmem))*1024)
-            else:
+        for host in self.bhosts_dic['HOST_NAME']:
+            if host not in self.lshosts_dic['HOST_NAME']:
                 maxmem = 0
+            else:
+                index = self.lshosts_dic['HOST_NAME'].index(host)
+                maxmem = self.lshosts_dic['maxmem'][index]
+
+                # Switch maxmem unit to "G".
+                if re.search(r'M', maxmem):
+                    maxmem = int(float(re.sub(r'M', '', maxmem))/1024)
+                elif re.search(r'G', maxmem):
+                    maxmem = int(float(re.sub(r'G', '', maxmem)))
+                elif re.search(r'T', maxmem):
+                    maxmem = int(float(re.sub(r'T', '', maxmem))*1024)
+                else:
+                    maxmem = 0
 
             if maxmem not in maxmem_list:
                 maxmem_list.append(maxmem)
@@ -1668,7 +1871,14 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         maxmem_list.insert(0, 'ALL')
 
         for maxmem in maxmem_list:
-            self.hosts_tab_maxmem_combo.addItem(maxmem)
+            self.hosts_tab_maxmem_combo.addCheckBoxItem(maxmem)
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.hosts_tab_maxmem_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.hosts_tab_maxmem_combo.checkBoxList[i].setChecked(True)
+                break
+
 # For hosts TAB (end) #
 
 # For queues TAB (start) #
@@ -1688,22 +1898,26 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.queues_tab_frame1.setFrameShadow(QFrame.Raised)
         self.queues_tab_frame1.setFrameShape(QFrame.Box)
 
+        self.queues_tab_frame2 = QFrame(self.queues_tab)
+        self.queues_tab_frame2.setFrameShadow(QFrame.Raised)
+        self.queues_tab_frame2.setFrameShape(QFrame.Box)
+
         # self.queues_tab - Grid
         queues_tab_grid = QGridLayout()
 
-        queues_tab_grid.addWidget(self.queues_tab_table, 0, 0)
+        queues_tab_grid.addWidget(self.queues_tab_table, 0, 0, 2, 1)
         queues_tab_grid.addWidget(self.queues_tab_frame0, 0, 1)
-        queues_tab_grid.addWidget(self.queues_tab_frame1, 1, 0, 1, 2)
+        queues_tab_grid.addWidget(self.queues_tab_frame1, 1, 1)
+        queues_tab_grid.addWidget(self.queues_tab_frame2, 2, 0, 1, 2)
 
-        queues_tab_grid.setRowStretch(0, 2)
-        queues_tab_grid.setRowStretch(1, 1)
+        queues_tab_grid.setRowStretch(0, 1)
+        queues_tab_grid.setRowStretch(1, 14)
+        queues_tab_grid.setRowStretch(2, 6)
+
         queues_tab_grid.setColumnStretch(0, 1)
         queues_tab_grid.setColumnStretch(1, 10)
 
-        queues_tab_grid.setRowMinimumHeight(0, 380)
-        queues_tab_grid.setRowMinimumHeight(1, 120)
-        queues_tab_grid.setColumnMinimumWidth(0, 328)
-        queues_tab_grid.setColumnMinimumWidth(1, 500)
+        queues_tab_grid.setColumnMinimumWidth(0, 330)
 
         self.queues_tab.setLayout(queues_tab_grid)
 
@@ -1711,25 +1925,34 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.gen_queues_tab_table()
         self.gen_queues_tab_frame0()
         self.gen_queues_tab_frame1()
+        self.gen_queues_tab_frame2()
 
     def gen_queues_tab_table(self):
         self.queues_tab_table.setShowGrid(True)
         self.queues_tab_table.setColumnCount(0)
-        self.queues_tab_table.setColumnCount(3)
-        self.queues_tab_table.setHorizontalHeaderLabels(['QUEUE', 'PEND', 'RUN'])
+        self.queues_tab_table.setColumnCount(4)
+        self.queues_tab_table_title_list = ['QUEUE', 'SLOTS', 'PEND', 'RUN']
+        self.queues_tab_table.setHorizontalHeaderLabels(self.queues_tab_table_title_list)
 
         self.queues_tab_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.queues_tab_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.queues_tab_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.queues_tab_table.setColumnWidth(1, 60)
+        self.queues_tab_table.setColumnWidth(2, 60)
+        self.queues_tab_table.setColumnWidth(3, 60)
+
+        # Fresh LSF bhosts/queues/queue_host information.
+        self.fresh_lsf_info('bhosts')
+        self.fresh_lsf_info('queues')
+        self.fresh_lsf_info('queue_host')
 
         # Hide the vertical header
         self.queues_tab_table.verticalHeader().setVisible(False)
 
         # Fill self.queues_tab_table items.
         self.queues_tab_table.setRowCount(0)
-        self.queues_tab_table.setRowCount(len(self.queue_list)+1)
+        self.queues_tab_table.setRowCount(len(self.queues_dic['QUEUE_NAME'])+1)
 
-        queue_list = copy.deepcopy(self.queue_list)
+        queue_list = copy.deepcopy(self.queues_dic['QUEUE_NAME'])
+        queue_list.sort()
         queue_list.append('ALL')
 
         pend_sum = 0
@@ -1745,6 +1968,32 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             # Fill "QUEUE" item.
             j = 0
             item = QTableWidgetItem(queue)
+            self.queues_tab_table.setItem(i, j, item)
+
+            # File "SLOTS" item.
+            j = j+1
+            total = 0
+
+            if queue == 'ALL':
+                for max in self.bhosts_dic['MAX']:
+                    if re.match(r'^\d+$', max):
+                        total += int(max)
+            elif queue == 'lost_and_found':
+                total = 'N/A'
+            else:
+                for queue_host in self.queue_host_dic[queue]:
+                    host_index = self.bhosts_dic['HOST_NAME'].index(queue_host)
+                    host_max = self.bhosts_dic['MAX'][host_index]
+
+                    if re.match(r'^\d+$', host_max):
+                        total += int(host_max)
+
+            item = QTableWidgetItem(str(total))
+            item.setFont(QFont('song', 9, QFont.Bold))
+
+            if queue == 'lost_and_found':
+                item.setForeground(QBrush(Qt.red))
+
             self.queues_tab_table.setItem(i, j, item)
 
             # Fill "PEND" item.
@@ -1778,24 +2027,61 @@ lsfMonitor is an open source software for LSF information data-collection, data-
             self.queues_tab_table.setItem(i, j, item)
 
     def gen_queues_tab_frame0(self):
-        # self.queues_tab_frame0
-        self.queue_tab_num_canvas = FigureCanvas()
-        self.queue_tab_num_toolbar = NavigationToolbar2QT(self.queue_tab_num_canvas, self)
+        # "Begin_Date" item.
+        queues_tab_begin_date_label = QLabel('Begin_Date', self.queues_tab_frame0)
+        queues_tab_begin_date_label.setStyleSheet("font-weight: bold;")
+        queues_tab_begin_date_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.queues_tab_begin_date_edit = QDateEdit(self.queues_tab_frame0)
+        self.queues_tab_begin_date_edit.setDisplayFormat('yyyy-MM-dd')
+        self.queues_tab_begin_date_edit.setMinimumDate(QDate.currentDate().addDays(-3652))
+        self.queues_tab_begin_date_edit.setCalendarPopup(True)
+        self.queues_tab_begin_date_edit.setDate(QDate.currentDate().addMonths(-1))
+
+        # "End_Date" item.
+        queues_tab_end_date_label = QLabel('End_Date', self.queues_tab_frame0)
+        queues_tab_end_date_label.setStyleSheet("font-weight: bold;")
+        queues_tab_end_date_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.queues_tab_end_date_edit = QDateEdit(self.queues_tab_frame0)
+        self.queues_tab_end_date_edit.setDisplayFormat('yyyy-MM-dd')
+        self.queues_tab_end_date_edit.setMinimumDate(QDate.currentDate().addDays(-3652))
+        self.queues_tab_end_date_edit.setCalendarPopup(True)
+        self.queues_tab_end_date_edit.setDate(QDate.currentDate())
 
         # self.queues_tab_frame0 - Grid
         queues_tab_frame0_grid = QGridLayout()
-        queues_tab_frame0_grid.addWidget(self.queue_tab_num_toolbar, 0, 0)
-        queues_tab_frame0_grid.addWidget(self.queue_tab_num_canvas, 1, 0)
+
+        queues_tab_frame0_grid.addWidget(queues_tab_begin_date_label, 0, 0)
+        queues_tab_frame0_grid.addWidget(self.queues_tab_begin_date_edit, 0, 1)
+        queues_tab_frame0_grid.addWidget(queues_tab_end_date_label, 0, 2)
+        queues_tab_frame0_grid.addWidget(self.queues_tab_end_date_edit, 0, 3)
+
+        queues_tab_frame0_grid.setColumnStretch(1, 1)
+        queues_tab_frame0_grid.setColumnStretch(2, 1)
+        queues_tab_frame0_grid.setColumnStretch(3, 1)
+
         self.queues_tab_frame0.setLayout(queues_tab_frame0_grid)
 
     def gen_queues_tab_frame1(self):
         # self.queues_tab_frame1
-        self.queues_tab_text = QTextEdit(self.queues_tab_frame1)
+        self.queues_tab_num_canvas = common_pyqt5.FigureCanvasQTAgg()
+        self.queues_tab_num_toolbar = common_pyqt5.NavigationToolbar2QT(self.queues_tab_num_canvas, self)
 
         # self.queues_tab_frame1 - Grid
         queues_tab_frame1_grid = QGridLayout()
-        queues_tab_frame1_grid.addWidget(self.queues_tab_text, 0, 0)
+        queues_tab_frame1_grid.addWidget(self.queues_tab_num_toolbar, 0, 0)
+        queues_tab_frame1_grid.addWidget(self.queues_tab_num_canvas, 1, 0)
         self.queues_tab_frame1.setLayout(queues_tab_frame1_grid)
+
+    def gen_queues_tab_frame2(self):
+        # self.queues_tab_frame2
+        self.queues_tab_text = QTextEdit(self.queues_tab_frame2)
+
+        # self.queues_tab_frame2 - Grid
+        queues_tab_frame2_grid = QGridLayout()
+        queues_tab_frame2_grid.addWidget(self.queues_tab_text, 0, 0)
+        self.queues_tab_frame2.setLayout(queues_tab_frame2_grid)
 
     def queues_tab_check_click(self, item=None):
         """
@@ -1806,66 +2092,75 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         if item is not None:
             current_row = self.queues_tab_table.currentRow()
             queue = self.queues_tab_table.item(current_row, 0).text().strip()
-            pend_num = self.queues_tab_table.item(current_row, 1).text().strip()
-            run_num = self.queues_tab_table.item(current_row, 2).text().strip()
+            pend_num = self.queues_tab_table.item(current_row, 2).text().strip()
+            run_num = self.queues_tab_table.item(current_row, 3).text().strip()
 
             if item.column() == 0:
-                print('* Checking queue "' + str(queue) + '".')
+                common.bprint('Checking queue "' + str(queue) + '".', date_format='%Y-%m-%d %H:%M:%S')
 
-                self.update_queue_tab_frame0(queue)
-                self.update_queue_tab_frame1(queue)
-            elif item.column() == 1:
-                if (pend_num != '') and (int(pend_num) > 0):
-                    self.jobs_tab_user_line.setText('')
-                    self.set_jobs_tab_status_combo(['PEND', 'RUN', 'DONE', 'EXIT', 'ALL'])
-
-                    if queue == 'ALL':
-                        self.set_jobs_tab_queue_combo()
-                    else:
-                        queue_list = copy.deepcopy(self.queue_list)
-                        queue_list.remove(queue)
-                        queue_list.insert(0, queue)
-                        queue_list.insert(1, 'ALL')
-                        self.set_jobs_tab_queue_combo(queue_list)
-
-                    self.set_jobs_tab_started_on_combo()
-                    self.gen_jobs_tab_table()
-                    self.main_tab.setCurrentWidget(self.jobs_tab)
+                self.update_queues_tab_frame1(queue)
+                self.update_queues_tab_frame2(queue)
             elif item.column() == 2:
-                if (run_num != '') and (int(run_num) > 0):
+                if (pend_num != '') and (int(pend_num) > 0):
+                    self.set_jobs_tab_status_combo()
+
+                    for (i, qBox) in enumerate(self.jobs_tab_status_combo.checkBoxList):
+                        if qBox.text() == 'PEND':
+                            self.jobs_tab_status_combo.checkBoxList[i].setChecked(True)
+                        else:
+                            self.jobs_tab_status_combo.checkBoxList[i].setChecked(False)
+
+                    self.set_jobs_tab_queue_combo()
+
+                    for (i, qBox) in enumerate(self.jobs_tab_queue_combo.checkBoxList):
+                        if qBox.text() == queue:
+                            self.jobs_tab_queue_combo.checkBoxList[i].setChecked(True)
+                        else:
+                            self.jobs_tab_queue_combo.checkBoxList[i].setChecked(False)
+
+                    self.set_jobs_tab_host_combo()
                     self.jobs_tab_user_line.setText('')
-                    self.set_jobs_tab_status_combo(['RUN', 'PEND', 'DONE', 'EXIT', 'ALL'])
+                    self.gen_jobs_tab_table()
+                    self.main_tab.setCurrentWidget(self.jobs_tab)
+            elif item.column() == 3:
+                if (run_num != '') and (int(run_num) > 0):
+                    self.set_jobs_tab_status_combo()
+                    self.set_jobs_tab_queue_combo()
 
-                    if queue == 'ALL':
-                        self.set_jobs_tab_queue_combo()
-                    else:
-                        queue_list = copy.deepcopy(self.queue_list)
-                        queue_list.remove(queue)
-                        queue_list.insert(0, queue)
-                        queue_list.insert(1, 'ALL')
-                        self.set_jobs_tab_queue_combo(queue_list)
+                    for (i, qBox) in enumerate(self.jobs_tab_queue_combo.checkBoxList):
+                        if qBox.text() == queue:
+                            self.jobs_tab_queue_combo.checkBoxList[i].setChecked(True)
+                        else:
+                            self.jobs_tab_queue_combo.checkBoxList[i].setChecked(False)
 
-                    self.set_jobs_tab_started_on_combo()
+                    self.set_jobs_tab_host_combo()
+                    self.jobs_tab_user_line.setText('')
                     self.gen_jobs_tab_table()
                     self.main_tab.setCurrentWidget(self.jobs_tab)
 
-    def update_queue_tab_frame0(self, queue):
-        """
-        Draw queue (PEND/RUN) job number current job on self.queues_tab_frame0.
-        """
-        fig = self.queue_tab_num_canvas.figure
-        fig.clear()
-        self.queue_tab_num_canvas.draw()
+            # Update queue information first.
+            self.gen_queues_tab_table()
 
-        (date_list, pend_list, run_list) = self.get_queue_job_num_list(queue)
+    def update_queues_tab_frame1(self, queue):
+        """
+        Draw queue (PEND/RUN) job number current job on self.queues_tab_frame1.
+        """
+        fig = self.queues_tab_num_canvas.figure
+        fig.clear()
+        self.queues_tab_num_canvas.draw()
+
+        (date_list, total_list, pend_list, run_list) = self.get_queue_job_num_list(queue)
 
         if date_list and pend_list and run_list:
             for i in range(len(date_list)):
-                date_list[i] = datetime.datetime.strptime(date_list[i], '%Y%m%d')
+                if self.enable_queue_detail:
+                    date_list[i] = datetime.datetime.strptime(date_list[i], '%Y%m%d_%H%M%S')
+                else:
+                    date_list[i] = datetime.datetime.strptime(date_list[i], '%Y%m%d')
 
-            self.draw_queue_tab_num_curve(fig, queue, date_list, pend_list, run_list)
+            self.draw_queues_tab_num_curve(fig, queue, date_list, total_list, pend_list, run_list)
 
-    def update_queue_tab_frame1(self, queue):
+    def update_queues_tab_frame2(self, queue):
         """
         Show queue detailed informations on self.queues_tab_text.
         """
@@ -1874,8 +2169,12 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         command = 'bqueues -l ' + str(queue)
         (return_code, stdout, stderr) = common.run_command(command)
 
-        for line in str(stdout, 'utf-8').split('\n'):
+        for (i, line) in enumerate(str(stdout, 'utf-8').split('\n')):
             line = line.strip()
+
+            if (not line) and (i == 0):
+                continue
+
             self.queues_tab_text.insertPlainText(str(line) + '\n')
 
         common_pyqt5.text_edit_visible_position(self.queues_tab_text, 'Start')
@@ -1885,79 +2184,100 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         Draw (PEND/RUN) job number curve for specified queueu.
         """
         date_list = []
+        total_list = []
         pend_list = []
         run_list = []
-        tmp_pend_list = []
-        tmp_run_list = []
-
-        queue_db_file = str(config.db_path) + '/monitor/queue.db'
+        queue_db_file = str(self.db_path) + '/queue.db'
 
         if not os.path.exists(queue_db_file):
-            common.print_warning('*Warning*: queue pend/run job number information is missing for "' + str(queue) + '".')
+            common.bprint('Queue pend/run job number information is missing for "' + str(queue) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
         else:
             (queue_db_file_connect_result, queue_db_conn) = common_sqlite3.connect_db_file(queue_db_file)
 
             if queue_db_file_connect_result == 'failed':
-                common.print_warning('*Warning*: Failed on connecting queue database file "' + str(self.queue_db_file) + '".')
+                common.bprint('Failed on connecting queue database file "' + str(self.queue_db_file) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
             else:
                 table_name = 'queue_' + str(queue)
-                data_dic = common_sqlite3.get_sql_table_data(queue_db_file, queue_db_conn, table_name, ['sample_time', 'PEND', 'RUN'])
+                begin_date = self.queues_tab_begin_date_edit.date().toString(Qt.ISODate)
+                begin_time = str(begin_date) + ' 00:00:00'
+                begin_second = time.mktime(time.strptime(begin_time, '%Y-%m-%d %H:%M:%S'))
+                end_date = self.queues_tab_end_date_edit.date().toString(Qt.ISODate)
+                end_time = str(end_date) + ' 23:59:59'
+                end_second = time.mktime(time.strptime(end_time, '%Y-%m-%d %H:%M:%S'))
+                select_condition = 'WHERE sample_second>=' + str(begin_second) + ' AND sample_second<=' + str(end_second)
+
+                data_dic = common_sqlite3.get_sql_table_data(queue_db_file, queue_db_conn, table_name, ['sample_time', 'TOTAL', 'PEND', 'RUN'], select_condition)
 
                 if not data_dic:
-                    common.print_warning('*Warning*: queue pend/run job number information is empty for "' + str(queue) + '".')
+                    common.bprint('Queue pend/run job number information is empty for "' + str(queue) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                 else:
-                    orig_sample_time_list = data_dic['sample_time']
-                    orig_pend_list = data_dic['PEND']
-                    orig_run_list = data_dic['RUN']
+                    if self.enable_queue_detail:
+                        date_list = data_dic['sample_time']
+                        total_list = [int(i) for i in data_dic['TOTAL']]
+                        pend_list = [int(i) for i in data_dic['PEND']]
+                        run_list = [int(i) for i in data_dic['RUN']]
+                    else:
+                        tmp_total_list = []
+                        tmp_pend_list = []
+                        tmp_run_list = []
 
-                    for i in range(len(orig_sample_time_list)):
-                        sample_time = orig_sample_time_list[i]
-                        date = re.sub(r'_.*', '', sample_time)
-                        pend_num = orig_pend_list[i]
-                        run_num = orig_run_list[i]
+                        for i in range(len(data_dic['sample_time'])):
+                            sample_time = data_dic['sample_time'][i]
+                            date = re.sub(r'_.*', '', sample_time)
+                            total_num = data_dic['TOTAL'][i]
+                            pend_num = data_dic['PEND'][i]
+                            run_num = data_dic['RUN'][i]
 
-                        if (i != 0) and ((i == len(orig_sample_time_list)-1) or (date not in date_list)):
-                            pend_avg = int(sum(tmp_pend_list)/len(tmp_pend_list))
-                            pend_list.append(pend_avg)
-                            run_avg = int(sum(tmp_run_list)/len(tmp_run_list))
-                            run_list.append(run_avg)
+                            if (i != 0) and ((i == len(data_dic['sample_time'])-1) or (date not in date_list)):
+                                total_avg = int(sum(tmp_total_list)/len(tmp_total_list))
+                                total_list.append(total_avg)
+                                pend_avg = int(sum(tmp_pend_list)/len(tmp_pend_list))
+                                pend_list.append(pend_avg)
+                                run_avg = int(sum(tmp_run_list)/len(tmp_run_list))
+                                run_list.append(run_avg)
 
-                        if date not in date_list:
-                            date_list.append(date)
-                            tmp_pend_list = []
-                            tmp_run_list = []
+                            if date not in date_list:
+                                date_list.append(date)
+                                tmp_total_list = []
+                                tmp_pend_list = []
+                                tmp_run_list = []
 
-                        tmp_pend_list.append(int(pend_num))
-                        tmp_run_list.append(int(run_num))
-
-                    # Cut date_list/pend_list/run_list, only save recent 30 days result.
-                    if len(date_list) > 30:
-                        date_list = date_list[-30:]
-                        pend_list = pend_list[-30:]
-                        run_list = run_list[-30:]
-
-                    if len(date_list) == 0:
-                        common.print_warning('*Warning*: queue pend/run job number information is empty for "' + str(queue) + '".')
+                            tmp_total_list.append(int(total_num))
+                            tmp_pend_list.append(int(pend_num))
+                            tmp_run_list.append(int(run_num))
 
                     queue_db_conn.close()
 
-        return (date_list, pend_list, run_list)
+        return date_list, total_list, pend_list, run_list
 
-    def draw_queue_tab_num_curve(self, fig, queue, date_list, pend_list, run_list):
+    def draw_queues_tab_num_curve(self, fig, queue, date_list, total_list, pend_list, run_list):
         """
         Draw RUN/PEND job num curve for specified queue.
         """
         fig.subplots_adjust(bottom=0.25)
         axes = fig.add_subplot(111)
-        axes.set_title('trends of RUN/PEND slots for queue "' + str(queue) + '"')
-        axes.set_xlabel('Sample Date')
-        axes.set_ylabel('Slots Num')
-        axes.plot(date_list, run_list, 'go-', label='RUN')
-        axes.plot(date_list, pend_list, 'ro-', label='PEND')
+        axes.set_title('Trends of RUN/PEND number for queue "' + str(queue) + '"')
+
+        if self.enable_queue_detail:
+            axes.set_xlabel('Sample Time')
+            expected_linewidth = 0.1
+            expected_markersize = 0.1
+        else:
+            axes.set_xlabel('Sample Date')
+            expected_linewidth = 1
+            expected_markersize = 1
+
+        axes.set_ylabel('Num')
+        axes.plot(date_list, total_list, 'bo-', label='SLOTS', linewidth=expected_linewidth, markersize=expected_markersize)
+        axes.fill_between(date_list, total_list, color='lightblue', alpha=0.3)
+        axes.plot(date_list, run_list, 'go-', label='RUN', linewidth=expected_linewidth, markersize=expected_markersize)
+        axes.fill_between(date_list, run_list, color='green', alpha=0.3)
+        axes.plot(date_list, pend_list, 'ro-', label='PEND', linewidth=expected_linewidth, markersize=expected_markersize)
+        axes.fill_between(date_list, pend_list, color='red', alpha=0.5)
         axes.legend(loc='upper right')
         axes.tick_params(axis='x', rotation=15)
         axes.grid()
-        self.queue_tab_num_canvas.draw()
+        self.queues_tab_num_canvas.draw()
 # For queues TAB (end) #
 
 # For load TAB (start) #
@@ -2014,7 +2334,6 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.load_tab_begin_date_edit = QDateEdit(self.load_tab_frame0)
         self.load_tab_begin_date_edit.setDisplayFormat('yyyy-MM-dd')
         self.load_tab_begin_date_edit.setMinimumDate(QDate.currentDate().addDays(-3652))
-        self.load_tab_begin_date_edit.setMaximumDate(QDate.currentDate().addDays(0))
         self.load_tab_begin_date_edit.setCalendarPopup(True)
         self.load_tab_begin_date_edit.setDate(QDate.currentDate().addDays(-7))
 
@@ -2026,7 +2345,6 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.load_tab_end_date_edit = QDateEdit(self.load_tab_frame0)
         self.load_tab_end_date_edit.setDisplayFormat('yyyy-MM-dd')
         self.load_tab_end_date_edit.setMinimumDate(QDate.currentDate().addDays(-3652))
-        self.load_tab_end_date_edit.setMaximumDate(QDate.currentDate().addDays(0))
         self.load_tab_end_date_edit.setCalendarPopup(True)
         self.load_tab_end_date_edit.setDate(QDate.currentDate())
 
@@ -2046,7 +2364,6 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         load_tab_frame0_grid.addWidget(self.load_tab_end_date_edit, 0, 5)
         load_tab_frame0_grid.addWidget(load_tab_check_button, 0, 6)
 
-        load_tab_frame0_grid.setColumnStretch(0, 1)
         load_tab_frame0_grid.setColumnStretch(1, 1)
         load_tab_frame0_grid.setColumnStretch(2, 1)
         load_tab_frame0_grid.setColumnStretch(3, 1)
@@ -2058,8 +2375,8 @@ lsfMonitor is an open source software for LSF information data-collection, data-
 
     def gen_load_tab_frame1(self):
         # self.load_tab_frame1
-        self.load_tab_ut_canvas = FigureCanvas()
-        self.host_tab_ut_toolbar = NavigationToolbar2QT(self.load_tab_ut_canvas, self)
+        self.load_tab_ut_canvas = common_pyqt5.FigureCanvasQTAgg()
+        self.host_tab_ut_toolbar = common_pyqt5.NavigationToolbar2QT(self.load_tab_ut_canvas, self)
 
         # self.load_tab_frame1 - Grid
         load_tab_frame1_grid = QGridLayout()
@@ -2069,8 +2386,8 @@ lsfMonitor is an open source software for LSF information data-collection, data-
 
     def gen_load_tab_frame2(self):
         # self.load_tab_frame2
-        self.load_tab_mem_canvas = FigureCanvas()
-        self.host_tab_mem_toolbar = NavigationToolbar2QT(self.load_tab_mem_canvas, self)
+        self.load_tab_mem_canvas = common_pyqt5.FigureCanvasQTAgg()
+        self.host_tab_mem_toolbar = common_pyqt5.NavigationToolbar2QT(self.load_tab_mem_canvas, self)
 
         # self.load_tab_frame2 - Grid
         load_tab_frame2_grid = QGridLayout()
@@ -2085,7 +2402,8 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.load_tab_host_combo.clear()
 
         if not host_list:
-            host_list = copy.deepcopy(self.host_list)
+            self.fresh_lsf_info('bhosts')
+            host_list = copy.deepcopy(self.bhosts_dic['HOST_NAME'])
             host_list.insert(0, '')
 
         for host in host_list:
@@ -2097,18 +2415,22 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         """
         specified_host = self.load_tab_host_combo.currentText().strip()
 
+        if not specified_host:
+            warning_message = '*Warning*: No host is specified.'
+            self.gui_warning(warning_message)
+            return
+
         self.update_load_tab_frame1(specified_host, [], [])
         self.update_load_tab_frame2(specified_host, [], [])
 
-        current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        print('* [' + str(current_time) + '] Loading ut/mem load information, please wait a moment ...')
+        common.bprint('Loading ut/mem load information, please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
 
         my_show_message = ShowMessage('Info', 'Loading ut/mem load information, please wait a moment ...')
         my_show_message.start()
 
         (sample_time_list, ut_list, mem_list) = self.get_load_info(specified_host)
 
+        time.sleep(0.01)
         my_show_message.terminate()
 
         if sample_time_list:
@@ -2123,15 +2445,15 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         ut_list = []
         mem_list = []
 
-        load_db_file = str(config.db_path) + '/monitor/load.db'
+        load_db_file = str(self.db_path) + '/load.db'
 
         if not os.path.exists(load_db_file):
-            common.print_warning('*Warning*: load database "' + str(load_db_file) + '" is missing.')
+            common.bprint('Load database "' + str(load_db_file) + '" is missing.', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
         else:
             (load_db_file_connect_result, load_db_conn) = common_sqlite3.connect_db_file(load_db_file)
 
             if load_db_file_connect_result == 'failed':
-                common.print_warning('*Warning*: Failed on connecting load database file "' + str(load_db_file) + '".')
+                common.bprint('Failed on connecting load database file "' + str(load_db_file) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
             else:
                 if specified_host:
                     table_name = 'load_' + str(specified_host)
@@ -2145,11 +2467,9 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                     data_dic = common_sqlite3.get_sql_table_data(load_db_file, load_db_conn, table_name, ['sample_time', 'ut', 'mem'], select_condition)
 
                     if not data_dic:
-                        common.print_warning('*Warning*: load information is empty for "' + str(specified_host) + '".')
+                        common.bprint('Load information is empty for "' + str(specified_host) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
                     else:
-                        for i in range(len(data_dic['sample_time'])-1, -1, -1):
-                            sample_time = data_dic['sample_time'][i]
-
+                        for (i, sample_time) in enumerate(data_dic['sample_time']):
                             # For sample_time
                             sample_time = datetime.datetime.strptime(data_dic['sample_time'][i], '%Y%m%d_%H%M%S')
                             sample_time_list.append(sample_time)
@@ -2181,7 +2501,7 @@ lsfMonitor is an open source software for LSF information data-collection, data-
 
                     load_db_conn.close()
 
-        return (sample_time_list, ut_list, mem_list)
+        return sample_time_list, ut_list, mem_list
 
     def update_load_tab_frame1(self, specified_host, sample_time_list, ut_list):
         """
@@ -2203,7 +2523,9 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         axes.set_title('ut curve for host "' + str(specified_host) + '"')
         axes.set_xlabel('Sample Time')
         axes.set_ylabel('Cpu Utilization (%)')
-        axes.plot(sample_time_list, ut_list, 'ro-')
+        axes.plot(sample_time_list, ut_list, 'ro-', label='CPU', linewidth=0.1, markersize=0.1)
+        axes.fill_between(sample_time_list, ut_list, color='red', alpha=0.5)
+        axes.legend(loc='upper right')
         axes.tick_params(axis='x', rotation=15)
         axes.grid()
         self.load_tab_ut_canvas.draw()
@@ -2228,7 +2550,9 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         axes.set_title('available mem curve for host "' + str(specified_host) + '"')
         axes.set_xlabel('Sample Time')
         axes.set_ylabel('Available Mem (G)')
-        axes.plot(sample_time_list, mem_list, 'go-')
+        axes.plot(sample_time_list, mem_list, 'go-', label='MEM', linewidth=0.1, markersize=0.1)
+        axes.fill_between(sample_time_list, mem_list, color='green', alpha=0.5)
+        axes.legend(loc='upper right')
         axes.tick_params(axis='x', rotation=15)
         axes.grid()
         self.load_tab_mem_canvas.draw()
@@ -2239,29 +2563,39 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         """
         Generate the utilization tab on lsfMonitor GUI, show host utilization (slot/cpu/mem) information.
         """
+        self.utilization_tab_resource_list = ['slot', 'cpu', 'mem']
+
         # self.utilization_tab
         self.utilization_tab_frame0 = QFrame(self.utilization_tab)
-        self.utilization_tab_frame1 = QFrame(self.utilization_tab)
-
         self.utilization_tab_frame0.setFrameShadow(QFrame.Raised)
         self.utilization_tab_frame0.setFrameShape(QFrame.Box)
+
+        self.utilization_tab_table = QTableWidget(self.utilization_tab)
+
+        self.utilization_tab_frame1 = QFrame(self.utilization_tab)
         self.utilization_tab_frame1.setFrameShadow(QFrame.Raised)
         self.utilization_tab_frame1.setFrameShape(QFrame.Box)
 
         # self.utilization_tab - Grid
         utilization_tab_grid = QGridLayout()
 
-        utilization_tab_grid.addWidget(self.utilization_tab_frame0, 0, 0)
-        utilization_tab_grid.addWidget(self.utilization_tab_frame1, 1, 0)
+        utilization_tab_grid.addWidget(self.utilization_tab_frame0, 0, 0, 1, 2)
+        utilization_tab_grid.addWidget(self.utilization_tab_table, 1, 0)
+        utilization_tab_grid.addWidget(self.utilization_tab_frame1, 1, 1)
 
         utilization_tab_grid.setRowStretch(0, 1)
         utilization_tab_grid.setRowStretch(1, 10)
+
+        utilization_tab_grid.setColumnStretch(0, 7)
+        utilization_tab_grid.setColumnStretch(1, 14)
 
         self.utilization_tab.setLayout(utilization_tab_grid)
 
         # Generate sub-frame
         self.gen_utilization_tab_frame0()
+        self.gen_utilization_tab_table()
         self.gen_utilization_tab_frame1()
+        self.update_utilization_tab_info()
 
     def gen_utilization_tab_frame0(self):
         # self.utilization_tab_frame0
@@ -2280,7 +2614,7 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         utilization_tab_host_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         self.utilization_tab_host_combo = common_pyqt5.QComboCheckBox(self.utilization_tab_frame0)
-        self.set_utilization_tab_host_combo()
+        self.set_utilization_tab_host_combo(select_all=True)
 
         # "Resource" item.
         utilization_tab_resource_label = QLabel('Resource', self.utilization_tab_frame0)
@@ -2293,7 +2627,7 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         # "Check" button.
         utilization_tab_check_button = QPushButton('Check', self.utilization_tab_frame0)
         utilization_tab_check_button.setStyleSheet('''QPushButton:hover{background:rgb(0, 85, 255);}''')
-        utilization_tab_check_button.clicked.connect(self.update_utilization_tab_frame1)
+        utilization_tab_check_button.clicked.connect(self.update_utilization_tab_info)
 
         # "Begin_Date" item.
         utilization_tab_begin_date_label = QLabel('Begin_Date', self.utilization_tab_frame0)
@@ -2303,7 +2637,6 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.utilization_tab_begin_date_edit = QDateEdit(self.utilization_tab_frame0)
         self.utilization_tab_begin_date_edit.setDisplayFormat('yyyy-MM-dd')
         self.utilization_tab_begin_date_edit.setMinimumDate(QDate.currentDate().addDays(-3652))
-        self.utilization_tab_begin_date_edit.setMaximumDate(QDate.currentDate().addDays(0))
         self.utilization_tab_begin_date_edit.setCalendarPopup(True)
         self.utilization_tab_begin_date_edit.setDate(QDate.currentDate().addMonths(-1))
 
@@ -2315,9 +2648,16 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.utilization_tab_end_date_edit = QDateEdit(self.utilization_tab_frame0)
         self.utilization_tab_end_date_edit.setDisplayFormat('yyyy-MM-dd')
         self.utilization_tab_end_date_edit.setMinimumDate(QDate.currentDate().addDays(-3652))
-        self.utilization_tab_end_date_edit.setMaximumDate(QDate.currentDate().addDays(0))
         self.utilization_tab_end_date_edit.setCalendarPopup(True)
         self.utilization_tab_end_date_edit.setDate(QDate.currentDate())
+
+        # empty item.
+        utilization_tab_empty_label = QLabel('', self.utilization_tab_frame0)
+
+        # Export button.
+        utilization_tab_export_button = QPushButton('Export', self.utilization_tab_frame0)
+        utilization_tab_export_button.setStyleSheet('''QPushButton:hover{background:rgb(170, 255, 127);}''')
+        utilization_tab_export_button.clicked.connect(self.export_utilization_table)
 
         # self.utilization_tab_frame0 - Grid
         utilization_tab_frame0_grid = QGridLayout()
@@ -2333,8 +2673,9 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         utilization_tab_frame0_grid.addWidget(self.utilization_tab_begin_date_edit, 1, 1)
         utilization_tab_frame0_grid.addWidget(utilization_tab_end_date_label, 1, 2)
         utilization_tab_frame0_grid.addWidget(self.utilization_tab_end_date_edit, 1, 3)
+        utilization_tab_frame0_grid.addWidget(utilization_tab_empty_label, 1, 4, 1, 2)
+        utilization_tab_frame0_grid.addWidget(utilization_tab_export_button, 1, 6)
 
-        utilization_tab_frame0_grid.setColumnStretch(0, 1)
         utilization_tab_frame0_grid.setColumnStretch(1, 1)
         utilization_tab_frame0_grid.setColumnStretch(2, 1)
         utilization_tab_frame0_grid.setColumnStretch(3, 1)
@@ -2344,30 +2685,25 @@ lsfMonitor is an open source software for LSF information data-collection, data-
 
         self.utilization_tab_frame0.setLayout(utilization_tab_frame0_grid)
 
-    def gen_utilization_tab_frame1(self):
-        # self.utilization_tab_frame1
-        self.utilization_tab_utilization_canvas = FigureCanvas()
-        self.utilization_tab_utilization_toolbar = NavigationToolbar2QT(self.utilization_tab_utilization_canvas, self)
-
-        # self.utilization_tab_frame1 - Grid
-        utilization_tab_frame1_grid = QGridLayout()
-        utilization_tab_frame1_grid.addWidget(self.utilization_tab_utilization_toolbar, 0, 0)
-        utilization_tab_frame1_grid.addWidget(self.utilization_tab_utilization_canvas, 1, 0)
-        self.utilization_tab_frame1.setLayout(utilization_tab_frame1_grid)
-
-    def set_utilization_tab_queue_combo(self, queue_list=[]):
+    def set_utilization_tab_queue_combo(self):
         """
         Set (initialize) self.utilization_tab_queue_combo.
         """
         self.utilization_tab_queue_combo.clear()
+        self.fresh_lsf_info('queues')
 
-        # "ALL" is used to select all queues/hosts.
-        if not queue_list:
-            queue_list = copy.deepcopy(self.queue_list)
-            queue_list.insert(0, 'ALL')
+        queue_list = copy.deepcopy(self.queues_dic['QUEUE_NAME'])
+        queue_list.sort()
+        queue_list.insert(0, 'ALL')
 
         for queue in queue_list:
             self.utilization_tab_queue_combo.addCheckBoxItem(queue)
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.utilization_tab_queue_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.utilization_tab_queue_combo.checkBoxList[i].setChecked(True)
+                break
 
     def set_utilization_tab_host_combo(self, host_list=[], select_all=False):
         """
@@ -2376,7 +2712,8 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.utilization_tab_host_combo.clear()
 
         if not host_list:
-            host_list = copy.deepcopy(self.host_list)
+            self.fresh_lsf_info('bhosts')
+            host_list = copy.deepcopy(self.bhosts_dic['HOST_NAME'])
 
         for host in host_list:
             self.utilization_tab_host_combo.addCheckBoxItem(host)
@@ -2390,10 +2727,11 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         """
         self.utilization_tab_resource_combo.clear()
 
-        resource_list = ['slot', 'cpu', 'mem']
-
-        for resource in resource_list:
+        for resource in self.utilization_tab_resource_list:
             self.utilization_tab_resource_combo.addCheckBoxItem(resource)
+
+        # Set all resources as checked status.
+        self.utilization_tab_resource_combo.selectAllItems()
 
     def update_utilization_tab_host_combo(self):
         """
@@ -2404,8 +2742,11 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         selected_queue_dic = self.utilization_tab_queue_combo.selectedItems()
 
         if 'ALL' in selected_queue_dic.values():
-            selected_host_list = copy.deepcopy(self.host_list)
+            self.fresh_lsf_info('bhosts')
+            selected_host_list = copy.deepcopy(self.bhosts_dic['HOST_NAME'])
         else:
+            self.fresh_lsf_info('queue_host')
+
             for selected_queue in selected_queue_dic.values():
                 host_list = self.queue_host_dic[selected_queue]
 
@@ -2419,25 +2760,45 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         else:
             self.set_utilization_tab_host_combo()
 
-    def get_utilization_info(self, selected_host_list, selected_resource_list):
+    def update_utilization_tab_info(self):
         """
-        Get sample_time/ut/mem list for specified host.
+        Update self.utilization_tab_table and self.utilization_tab_frame1.
         """
+        queue_utilization_dic = self.get_queue_utilization_info()
+
+        if queue_utilization_dic:
+            self.gen_utilization_tab_table(queue_utilization_dic)
+
+        self.update_utilization_tab_frame1()
+
+    def get_queue_utilization_info(self):
+        """
+        Get sample_time/ut/mem list for specified queues.
+        """
+        common.bprint('Loading queue utilization info, please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
+
+        my_show_message = ShowMessage('Info', 'Loading queue utilization info, please wait a moment ...')
+        my_show_message.start()
+
         utilization_dic = {}
-        utilization_db_file = str(config.db_path) + '/monitor/utilization_day.db'
+        utilization_db_file = str(self.db_path) + '/utilization_day.db'
 
         if not os.path.exists(utilization_db_file):
-            common.print_warning('*Warning*: utilization database "' + str(utilization_db_file) + '" is missing.')
+            common.bprint('Utilization database "' + str(utilization_db_file) + '" is missing.', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
         else:
             (utilization_db_file_connect_result, utilization_db_conn) = common_sqlite3.connect_db_file(utilization_db_file)
 
             if utilization_db_file_connect_result == 'failed':
-                common.print_warning('*Warning*: Failed on connecting utilization database file "' + str(utilization_db_file) + '".')
+                common.bprint('Failed on connecting utilization database file "' + str(utilization_db_file) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
             else:
-                if selected_host_list:
-                    for selected_host in selected_host_list:
-                        table_name = 'utilization_' + str(selected_host)
-                        key_list = copy.deepcopy(selected_resource_list)
+                self.fresh_lsf_info('bhosts')
+                host_list = copy.deepcopy(self.bhosts_dic['HOST_NAME'])
+
+                if host_list:
+                    for host_name in host_list:
+                        table_name = 'utilization_' + str(host_name)
+                        utilization_dic.setdefault(host_name, {})
+                        key_list = copy.deepcopy(self.utilization_tab_resource_list)
                         key_list.insert(0, 'sample_date')
                         begin_date = self.utilization_tab_begin_date_edit.date().toString(Qt.ISODate)
                         begin_date = re.sub('-', '', begin_date)
@@ -2447,15 +2808,131 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                         data_dic = common_sqlite3.get_sql_table_data(utilization_db_file, utilization_db_conn, table_name, key_list, select_condition)
 
                         if not data_dic:
-                            common.print_warning('*Warning*: utilization information is empty for "' + str(selected_host) + '".')
+                            continue
                         else:
-                            for (i, sample_date) in enumerate(data_dic['sample_date']):
-                                for selected_resource in selected_resource_list:
+                            for resource in self.utilization_tab_resource_list:
+                                utilization_dic[host_name].setdefault(resource, 0.0)
+                                utilization_list = []
 
+                                for utilization in data_dic[resource]:
+                                    utilization = float(utilization)
+
+                                    if int(utilization) >= 100:
+                                        utilization = 100.0
+
+                                    utilization_list.append(utilization)
+
+                                if utilization_list:
+                                    avg_utilization = round((sum(utilization_list)/len(utilization_list)), 1)
+                                    utilization_dic[host_name][resource] = avg_utilization
+
+            utilization_db_conn.close()
+
+        # Organize utilization info, get average utlization for every queue.
+        queue_utilization_dic = {}
+        self.fresh_lsf_info('queues')
+        queue_list = copy.deepcopy(self.queues_dic['QUEUE_NAME'])
+        queue_list.sort()
+        queue_list.append('ALL')
+
+        # Init queue_utilization_dic.
+        for queue in queue_list:
+            queue_utilization_dic.setdefault(queue, {})
+
+            for resource in self.utilization_tab_resource_list:
+                queue_utilization_dic[queue].setdefault(resource, [])
+
+        # Fill queue_utilization_dic detailed data.
+        self.fresh_lsf_info('host_queue')
+
+        for host_name in utilization_dic.keys():
+            if host_name in self.host_queue_dic:
+                for resource in self.utilization_tab_resource_list:
+                    if resource in utilization_dic[host_name]:
+                        for queue in self.host_queue_dic[host_name]:
+                            queue_utilization_dic[queue][resource].append(utilization_dic[host_name][resource])
+
+                        queue_utilization_dic['ALL'][resource].append(utilization_dic[host_name][resource])
+
+        # Get queue_utilization_dic average utilizaton data.
+        for queue in queue_utilization_dic.keys():
+            for resource in self.utilization_tab_resource_list:
+                utilization_list = queue_utilization_dic[queue][resource]
+
+                if utilization_list:
+                    queue_utilization_dic[queue][resource] = round((sum(utilization_list)/len(utilization_list)), 1)
+
+        time.sleep(0.01)
+        my_show_message.terminate()
+
+        return queue_utilization_dic
+
+    def get_utilization_info(self, selected_host_list, selected_resource_list):
+        """
+        Get sample_time/ut/mem list for specified host.
+        """
+        common.bprint('Loading resource utilization information, please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
+
+        my_show_message = ShowMessage('Info', 'Loading resource utilization information, please wait a moment ...')
+        my_show_message.start()
+
+        utilization_dic = {}
+
+        if self.enable_utilization_detail:
+            utilization_db_file = str(self.db_path) + '/utilization.db'
+        else:
+            utilization_db_file = str(self.db_path) + '/utilization_day.db'
+
+        if not os.path.exists(utilization_db_file):
+            common.bprint('Utilization database "' + str(utilization_db_file) + '" is missing.', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
+        else:
+            (utilization_db_file_connect_result, utilization_db_conn) = common_sqlite3.connect_db_file(utilization_db_file)
+
+            if utilization_db_file_connect_result == 'failed':
+                common.bprint('Failed on connecting utilization database file "' + str(utilization_db_file) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
+            else:
+                if selected_host_list:
+                    for selected_host in selected_host_list:
+                        table_name = 'utilization_' + str(selected_host)
+                        key_list = copy.deepcopy(selected_resource_list)
+
+                        if self.enable_utilization_detail:
+                            key_list.insert(0, 'sample_time')
+                            begin_date = self.utilization_tab_begin_date_edit.date().toString(Qt.ISODate)
+                            begin_time = str(begin_date) + ' 00:00:00'
+                            begin_second = time.mktime(time.strptime(begin_time, '%Y-%m-%d %H:%M:%S'))
+                            end_date = self.utilization_tab_end_date_edit.date().toString(Qt.ISODate)
+                            end_time = str(end_date) + ' 23:59:59'
+                            end_second = time.mktime(time.strptime(end_time, '%Y-%m-%d %H:%M:%S'))
+                            select_condition = 'WHERE sample_second>=' + str(begin_second) + ' AND sample_second<=' + str(end_second)
+                        else:
+                            key_list.insert(0, 'sample_date')
+                            begin_date = self.utilization_tab_begin_date_edit.date().toString(Qt.ISODate)
+                            begin_date = re.sub('-', '', begin_date)
+                            end_date = self.utilization_tab_end_date_edit.date().toString(Qt.ISODate)
+                            end_date = re.sub('-', '', end_date)
+                            select_condition = 'WHERE sample_date>=' + str(begin_date) + ' AND sample_date<=' + str(end_date)
+
+                        data_dic = common_sqlite3.get_sql_table_data(utilization_db_file, utilization_db_conn, table_name, key_list, select_condition)
+
+                        if not data_dic:
+                            common.bprint('Utilization information is empty for "' + str(selected_host) + '".', date_format='%Y-%m-%d %H:%M:%S', level='Warning')
+                        else:
+                            if self.enable_utilization_detail:
+                                key = 'sample_time'
+                            else:
+                                key = 'sample_date'
+
+                            for (i, sample_date) in enumerate(data_dic[key]):
+                                for selected_resource in selected_resource_list:
                                     if i == 0:
                                         utilization_dic.setdefault(selected_resource, {})
 
                                     utilization = float(data_dic[selected_resource][i])
+
+                                    if int(utilization) >= 100:
+                                        utilization = 100.0
+
                                     utilization_dic[selected_resource].setdefault(sample_date, {})
                                     utilization_dic[selected_resource][sample_date].setdefault(selected_host, utilization)
 
@@ -2467,7 +2944,58 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                 utilization_list = list(utilization_dic[selected_resource][sample_date].values())
                 utilization_dic[selected_resource][sample_date] = round((sum(utilization_list)/len(utilization_list)), 1)
 
+        time.sleep(0.01)
+        my_show_message.terminate()
+
         return utilization_dic
+
+    def gen_utilization_tab_table(self, queue_utilization_dic={}):
+        """
+        Generte self.utilization_tab_table.
+        """
+        self.utilization_tab_table.setShowGrid(True)
+        self.utilization_tab_table.setSortingEnabled(True)
+        self.utilization_tab_table.setColumnCount(0)
+        self.utilization_tab_table.setColumnCount(4)
+        self.utilization_tab_table.setRowCount(0)
+        self.utilization_tab_table.setRowCount(len(queue_utilization_dic))
+        self.utilization_tab_table_title_list = ['Queue', 'slot (%)', 'cpu (%)', 'mem (%)']
+        self.utilization_tab_table.setHorizontalHeaderLabels(self.utilization_tab_table_title_list)
+        self.utilization_tab_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.utilization_tab_table.setColumnWidth(1, 70)
+        self.utilization_tab_table.setColumnWidth(2, 70)
+        self.utilization_tab_table.setColumnWidth(3, 70)
+
+        # Fill self.utilization_tab_table items.
+        if queue_utilization_dic:
+            row = -1
+
+            for queue in queue_utilization_dic.keys():
+                row += 1
+
+                # Fill "Queue" item.
+                item = QTableWidgetItem(queue)
+                self.utilization_tab_table.setItem(row, 0, item)
+
+                for (i, resource) in enumerate(self.utilization_tab_resource_list):
+                    # Fill <resource> item.
+                    item = QTableWidgetItem()
+                    item.setData(Qt.DisplayRole, queue_utilization_dic[queue][resource])
+                    self.utilization_tab_table.setItem(row, i+1, item)
+
+    def gen_utilization_tab_frame1(self):
+        """
+        Generte self.utilization_tab_frame1.
+        """
+        # self.utilization_tab_frame1
+        self.utilization_tab_utilization_canvas = common_pyqt5.FigureCanvasQTAgg()
+        self.utilization_tab_utilization_toolbar = common_pyqt5.NavigationToolbar2QT(self.utilization_tab_utilization_canvas, self)
+
+        # self.utilization_tab_frame1 - Grid
+        utilization_tab_frame1_grid = QGridLayout()
+        utilization_tab_frame1_grid.addWidget(self.utilization_tab_utilization_toolbar, 0, 0)
+        utilization_tab_frame1_grid.addWidget(self.utilization_tab_utilization_canvas, 1, 0)
+        self.utilization_tab_frame1.setLayout(utilization_tab_frame1_grid)
 
     def update_utilization_tab_frame1(self):
         """
@@ -2481,20 +3009,22 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         # Update figure.
         selected_host_dic = self.utilization_tab_host_combo.selectedItems()
         selected_host_list = list(selected_host_dic.values())
+
+        if not selected_host_list:
+            warning_message = '*Warning*: No queue/host is specified.'
+            self.gui_warning(warning_message)
+            return
+
         selected_resource_dic = self.utilization_tab_resource_combo.selectedItems()
         selected_resource_list = list(selected_resource_dic.values())
 
+        if not selected_resource_list:
+            warning_message = '*Warning*: No resource is specified.'
+            self.gui_warning(warning_message)
+            return
+
         if selected_host_list and selected_resource_list:
-            current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-            print('* [' + str(current_time) + '] Loading resource utilization information, please wait a moment ...')
-
-            my_show_message = ShowMessage('Info', 'Loading resource utilization information, please wait a moment ...')
-            my_show_message.start()
-
-            (utilization_dic) = self.get_utilization_info(selected_host_list, selected_resource_list)
-
-            my_show_message.terminate()
+            utilization_dic = self.get_utilization_info(selected_host_list, selected_resource_list)
 
             if utilization_dic:
                 self.draw_utilization_tab_utilization_curve(fig, utilization_dic)
@@ -2506,6 +3036,7 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         fig.subplots_adjust(bottom=0.25)
         axes = fig.add_subplot(111)
 
+        # Set title.
         title = ''
 
         for selected_resource in utilization_dic.keys():
@@ -2519,20 +3050,96 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                 title = title_line
 
         axes.set_title(title)
-        axes.set_xlabel('Sample Date')
+
+        # set_xlabel/set_ylabel.
+        if self.enable_utilization_detail:
+            axes.set_xlabel('Sample Time')
+        else:
+            axes.set_xlabel('Sample Date')
+
         axes.set_ylabel('Utilization (%)')
 
-        color_list = ['ro-', 'bo-', 'yo-']
+        # axes.plot (sample_date_list / utilization_list)
+        selected_resource_list = ['slot', 'mem', 'cpu']
 
-        for (i, selected_resource) in enumerate(utilization_dic.keys()):
-            utilization_list = list(utilization_dic[selected_resource].values())
+        for selected_resource in selected_resource_list:
+            if selected_resource not in utilization_dic:
+                continue
+
+            if self.enable_utilization_detail:
+                common.bprint('Drawing ' + str(selected_resource) + ' curve, please wait a moment ...', date_format='%Y-%m-%d %H:%M:%S')
+
+                my_show_message = ShowMessage('Info', 'Drawing ' + str(selected_resource) + ' curve, please wait a moment ...')
+                my_show_message.start()
+
             sample_date_list = []
+            utilization_list = []
 
-            for sample_date in utilization_dic[selected_resource].keys():
-                sample_date = datetime.datetime.strptime(sample_date, '%Y%m%d')
-                sample_date_list.append(sample_date)
+            for (sample_date, utilization) in utilization_dic[selected_resource].items():
+                if int(utilization) >= 100:
+                    utilization = 100.0
 
-            axes.plot(sample_date_list, utilization_list, color_list[i], label=selected_resource)
+                if not sample_date_list:
+                    sample_date_list.append(sample_date)
+                    utilization_list.append(utilization)
+                else:
+                    if self.enable_utilization_detail:
+                        for j in range(len(sample_date_list)):
+                            sample_date_1 = re.sub(r'_', '', sample_date)
+                            sample_date_2 = re.sub(r'_', '', sample_date_list[j])
+
+                            if int(sample_date_1) > int(sample_date_2):
+                                if j == len(sample_date_list)-1:
+                                    sample_date_list.append(sample_date)
+                                    utilization_list.append(utilization)
+                                    break
+                            else:
+                                sample_date_list.insert(j, sample_date)
+                                utilization_list.insert(j, utilization)
+                                break
+                    else:
+                        for j in range(len(sample_date_list)):
+                            if int(sample_date) > int(sample_date_list[j]):
+                                if j == len(sample_date_list)-1:
+                                    sample_date_list.append(sample_date)
+                                    utilization_list.append(utilization)
+                                    break
+                            else:
+                                sample_date_list.insert(j, sample_date)
+                                utilization_list.insert(j, utilization)
+                                break
+
+            for (k, sample_date) in enumerate(sample_date_list):
+                if self.enable_utilization_detail:
+                    sample_date = datetime.datetime.strptime(sample_date, '%Y%m%d_%H%M%S')
+                    expected_linewidth = 0.1
+                    expected_markersize = 0.1
+                else:
+                    sample_date = datetime.datetime.strptime(sample_date, '%Y%m%d')
+                    expected_linewidth = 1
+                    expected_markersize = 1
+
+                sample_date_list[k] = sample_date
+
+            if selected_resource == 'slot':
+                color = 'bo-'
+                fill_color = 'lightblue'
+                fill_alpha = 0.3
+            elif selected_resource == 'cpu':
+                color = 'ro-'
+                fill_color = 'red'
+                fill_alpha = 0.5
+            elif selected_resource == 'mem':
+                color = 'go-'
+                fill_color = 'green'
+                fill_alpha = 0.3
+
+            axes.plot(sample_date_list, utilization_list, color, label=selected_resource.upper(), linewidth=expected_linewidth, markersize=expected_markersize)
+            axes.fill_between(sample_date_list, utilization_list, color=fill_color, alpha=fill_alpha)
+
+            if self.enable_utilization_detail:
+                time.sleep(0.01)
+                my_show_message.terminate()
 
         axes.legend(loc='upper right')
         axes.tick_params(axis='x', rotation=15)
@@ -2594,27 +3201,25 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         license_tab_show_label.setStyleSheet("font-weight: bold;")
         license_tab_show_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.license_tab_show_combo = QComboBox(self.license_tab_frame0)
+        self.license_tab_show_combo = common_pyqt5.QComboCheckBox(self.license_tab_frame0)
         self.set_license_tab_show_combo()
-        self.license_tab_show_combo.activated.connect(self.update_license_info)
 
         # "Server" item.
         license_tab_server_label = QLabel('Server', self.license_tab_frame0)
         license_tab_server_label.setStyleSheet("font-weight: bold;")
         license_tab_server_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.license_tab_server_combo = QComboBox(self.license_tab_frame0)
+        self.license_tab_server_combo = common_pyqt5.QComboCheckBox(self.license_tab_frame0)
         self.set_license_tab_server_combo()
-        self.license_tab_server_combo.activated.connect(self.update_license_tab_vendor_combo)
+        self.license_tab_server_combo.currentTextChanged.connect(self.update_license_tab_vendor_combo)
 
         # "Vendor" item.
         license_tab_vendor_label = QLabel('Vendor', self.license_tab_frame0)
         license_tab_vendor_label.setStyleSheet("font-weight: bold;")
         license_tab_vendor_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        self.license_tab_vendor_combo = QComboBox(self.license_tab_frame0)
+        self.license_tab_vendor_combo = common_pyqt5.QComboCheckBox(self.license_tab_frame0)
         self.set_license_tab_vendor_combo()
-        self.license_tab_vendor_combo.activated.connect(self.check_license_tab_vendor_combo)
 
         # "Feature" item.
         license_tab_feature_label = QLabel('Feature', self.license_tab_frame0)
@@ -2652,7 +3257,6 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         license_tab_frame0_grid.addWidget(self.license_tab_user_line, 0, 9)
         license_tab_frame0_grid.addWidget(license_tab_check_button, 0, 10)
 
-        license_tab_frame0_grid.setColumnStretch(0, 1)
         license_tab_frame0_grid.setColumnStretch(1, 1)
         license_tab_frame0_grid.setColumnStretch(2, 1)
         license_tab_frame0_grid.setColumnStretch(3, 1)
@@ -2668,8 +3272,17 @@ lsfMonitor is an open source software for LSF information data-collection, data-
 
     def set_license_tab_show_combo(self):
         self.license_tab_show_combo.clear()
-        self.license_tab_show_combo.addItem('ALL')
-        self.license_tab_show_combo.addItem('IN_USE')
+
+        license_status_list = ['ALL', 'IN_USE', 'NOT_USED']
+
+        for license_status in license_status_list:
+            self.license_tab_show_combo.addCheckBoxItem(license_status)
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.license_tab_show_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.license_tab_show_combo.checkBoxList[i].setChecked(True)
+                break
 
     def set_license_tab_server_combo(self):
         self.license_tab_server_combo.clear()
@@ -2678,57 +3291,78 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         license_server_list.insert(0, 'ALL')
 
         for license_server in license_server_list:
-            self.license_tab_server_combo.addItem(license_server)
+            self.license_tab_server_combo.addCheckBoxItem(license_server)
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.license_tab_server_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.license_tab_server_combo.checkBoxList[i].setChecked(True)
+                break
 
     def set_license_tab_vendor_combo(self):
         self.license_tab_vendor_combo.clear()
 
         # Get vendor_daemon list.
         vendor_daemon_list = ['ALL', ]
-        selected_license_server = self.license_tab_server_combo.currentText().strip()
+        selected_license_server_list = self.license_tab_server_combo.currentText().strip().split()
 
         for license_server in self.license_dic.keys():
-            if (selected_license_server == license_server) or (selected_license_server == 'ALL'):
-                for vendor_daemon in self.license_dic[license_server]['vendor_daemon'].keys():
-                    if vendor_daemon not in vendor_daemon_list:
-                        vendor_daemon_list.append(vendor_daemon)
+            for selected_license_server in selected_license_server_list:
+                if (selected_license_server == license_server) or (selected_license_server == 'ALL'):
+                    for vendor_daemon in self.license_dic[license_server]['vendor_daemon'].keys():
+                        if vendor_daemon not in vendor_daemon_list:
+                            vendor_daemon_list.append(vendor_daemon)
 
         # Fill self.license_tab_vendor_combo.
         for vendor_daemon in vendor_daemon_list:
-            self.license_tab_vendor_combo.addItem(vendor_daemon)
+            self.license_tab_vendor_combo.addCheckBoxItem(vendor_daemon)
+
+        # Set "ALL" as checked status.
+        for (i, qBox) in enumerate(self.license_tab_vendor_combo.checkBoxList):
+            if (qBox.text() == 'ALL') and (qBox.isChecked() is False):
+                self.license_tab_vendor_combo.checkBoxList[i].setChecked(True)
+                break
 
     def update_license_tab_vendor_combo(self):
         self.set_license_tab_vendor_combo()
-        self.update_license_info()
-
-    def check_license_tab_vendor_combo(self):
-        if self.license_tab_vendor_combo.count() > 2:
-            self.update_license_info()
 
     def update_license_info(self):
         # Get license information.
         self.get_license_dic()
 
-        if self.license_dic:
-            selected_license_server = self.license_tab_server_combo.currentText().strip()
-            selected_vendor_daemon = self.license_tab_vendor_combo.currentText().strip()
-            specified_license_feature_list = self.license_tab_feature_line.text().strip().split()
-            specified_license_user_list = self.license_tab_user_line.text().strip().split()
-            show_mode = self.license_tab_show_combo.currentText().strip()
+        if not self.license_dic:
+            warning_message = '*Warning*: Not find any license information.'
+            self.gui_warning(warning_message)
+            return
 
-            filter_license_dic_item = common_license.FilterLicenseDic()
-            filtered_license_dic = filter_license_dic_item.run(license_dic=self.license_dic, server_list=[selected_license_server, ], vendor_list=[selected_vendor_daemon, ], feature_list=specified_license_feature_list, user_list=specified_license_user_list, show_mode=show_mode)
+        selected_license_server_list = self.license_tab_server_combo.currentText().strip().split()
+        selected_vendor_daemon_list = self.license_tab_vendor_combo.currentText().strip().split()
+        specified_license_feature_list = self.license_tab_feature_line.text().strip().split()
+        specified_license_user_list = self.license_tab_user_line.text().strip().split()
+        show_mode_list = self.license_tab_show_combo.currentText().strip().split()
 
-            # Update self.license_tab_feature_table and self.license_tab_expires_table.
-            self.gen_license_tab_feature_table(filtered_license_dic)
-            self.gen_license_tab_expires_table(filtered_license_dic)
+        if show_mode_list:
+            if ('ALL' in show_mode_list) or (('IN_USE' in show_mode_list) and ('NOT_USED' in show_mode_list)):
+                show_mode = 'ALL'
+            else:
+                show_mode = show_mode_list[0]
+        else:
+            show_mode = 'ALL'
+
+        filter_license_dic_item = common_license.FilterLicenseDic()
+        filtered_license_dic = filter_license_dic_item.run(license_dic=self.license_dic, server_list=selected_license_server_list, vendor_list=selected_vendor_daemon_list, feature_list=specified_license_feature_list, user_list=specified_license_user_list, show_mode=show_mode)
+
+        # Update self.license_tab_feature_table and self.license_tab_expires_table.
+        self.gen_license_tab_feature_table(filtered_license_dic)
+        self.gen_license_tab_expires_table(filtered_license_dic)
 
     def gen_license_tab_feature_table(self, license_dic):
         self.license_tab_feature_table.setShowGrid(True)
         self.license_tab_feature_table.setSortingEnabled(True)
         self.license_tab_feature_table.setColumnCount(0)
         self.license_tab_feature_table.setColumnCount(5)
-        self.license_tab_feature_table.setHorizontalHeaderLabels(['Server', 'Vendor', 'Feature', 'Issued', 'In_Use'])
+        self.license_tab_feature_table_title_list = ['Server', 'Vendor', 'Feature', 'Issued', 'In_Use']
+        self.license_tab_feature_table.setHorizontalHeaderLabels(self.license_tab_feature_table_title_list)
 
         self.license_tab_feature_table.setColumnWidth(0, 160)
         self.license_tab_feature_table.setColumnWidth(1, 80)
@@ -2804,7 +3438,7 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                     vendor_daemon = self.license_tab_feature_table.item(current_row, 1).text().strip()
                     license_feature = self.license_tab_feature_table.item(current_row, 2).text().strip()
 
-                    print('* Getting license feature "' + str(license_feature) + '" usage on license server ' + str(license_server) + ' ...')
+                    common.bprint('Getting license feature "' + str(license_feature) + '" usage on license server ' + str(license_server) + ' ...', date_format='%Y-%m-%d %H:%M:%S')
 
                     self.my_show_license_feature_usage = ShowLicenseFeatureUsage(server=license_server, vendor=vendor_daemon, feature=license_feature)
                     self.my_show_license_feature_usage.start()
@@ -2814,7 +3448,8 @@ lsfMonitor is an open source software for LSF information data-collection, data-
         self.license_tab_expires_table.setSortingEnabled(True)
         self.license_tab_expires_table.setColumnCount(0)
         self.license_tab_expires_table.setColumnCount(4)
-        self.license_tab_expires_table.setHorizontalHeaderLabels(['License Server', 'Feature', 'Num', 'Expires'])
+        self.license_tab_expires_table_title_list = ['License Server', 'Feature', 'Num', 'Expires']
+        self.license_tab_expires_table.setHorizontalHeaderLabels(self.license_tab_expires_table_title_list)
 
         self.license_tab_expires_table.setColumnWidth(0, 160)
         self.license_tab_expires_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -2868,11 +3503,63 @@ lsfMonitor is an open source software for LSF information data-collection, data-
                         self.license_tab_expires_table.setItem(row, 3, item)
 # For license TAB (end) #
 
-    def close_event(self, QCloseEvent):
+# Export table (start) #
+    def export_jobs_table(self):
+        self.export_table('jobs', self.jobs_tab_table, self.jobs_tab_table_title_list)
+
+    def export_hosts_table(self):
+        self.export_table('hosts', self.hosts_tab_table, self.hosts_tab_table_title_list)
+
+    def export_queues_table(self):
+        self.export_table('queues', self.queues_tab_table, self.queues_tab_table_title_list)
+
+    def export_utilization_table(self):
+        self.export_table('utilization', self.utilization_tab_table, self.utilization_tab_table_title_list)
+
+    def export_license_feature_table(self):
+        self.export_table('license_feature', self.license_tab_feature_table, self.license_tab_feature_table_title_list)
+
+    def export_license_expires_table(self):
+        self.export_table('license_expires', self.license_tab_expires_table, self.license_tab_expires_table_title_list)
+
+    def export_table(self, table_type, table_item, title_list):
+        """
+        Export specified table info into an Excel.
+        """
+        current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        current_time_string = re.sub('-', '', current_time)
+        current_time_string = re.sub(':', '', current_time_string)
+        current_time_string = re.sub(' ', '_', current_time_string)
+        default_output_file = './lsfMonitor_' + str(table_type) + '_' + str(current_time_string) + '.xlsx'
+        (output_file, output_file_type) = QFileDialog.getSaveFileName(self, 'Export ' + str(table_type) + ' table', default_output_file, 'Excel (*.xlsx)')
+
+        if output_file:
+            # Get table content.
+            table_info_list = []
+            table_info_list.append(title_list)
+
+            for row in range(table_item.rowCount()):
+                row_list = []
+
+                for column in range(table_item.columnCount()):
+                    if table_item.item(row, column):
+                        row_list.append(table_item.item(row, column).text())
+                    else:
+                        row_list.append('')
+
+                table_info_list.append(row_list)
+
+            # Write excel
+            common.bprint('Writing ' + str(table_type) + ' table into "' + str(output_file) + '" ...', date_format='%Y-%m-%d %H:%M:%S')
+
+            common.write_excel(excel_file=output_file, contents_list=table_info_list, specified_sheet_name=table_type)
+# Export table (end) #
+
+    def closeEvent(self, QCloseEvent):
         """
         When window close, post-process.
         """
-        print('Bye')
+        common.bprint('Bye', date_format='%Y-%m-%d %H:%M:%S')
 
 
 class CheckIssueReason(QThread):
@@ -2939,7 +3626,6 @@ class ShowMessage(QThread):
 # Main Function #
 #################
 def main():
-    check_tool()
     (specified_job, specified_user, specified_feature, specified_tab, disable_license) = read_args()
     app = QApplication(sys.argv)
     mw = MainWindow(specified_job, specified_user, specified_feature, specified_tab, disable_license)

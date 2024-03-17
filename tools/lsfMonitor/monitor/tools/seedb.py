@@ -5,6 +5,7 @@ import sys
 import argparse
 
 sys.path.insert(0, str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/monitor')
+from common import common
 from common import common_sqlite3
 from conf import config
 
@@ -50,13 +51,13 @@ def read_args():
             if os.path.exists(database):
                 args.database = database
             else:
-                print('*Error*: ' + str(args.database) + ': No such database file.')
+                common.bprint(str(args.database) + ': No such database file.', level='Error')
                 sys.exit(1)
         else:
-            print('*Error*: ' + str(args.database) + ': No such database file.')
+            common.bprint(str(args.database) + ': No such database file.', level='Error')
             sys.exit(1)
 
-    return (args.database, args.tables, args.keys, args.number)
+    return args.database, args.tables, args.keys, args.number
 
 
 def get_length(input_list):
@@ -101,7 +102,7 @@ def seedb(db_file, table_list, key_list, number):
             key_list = list(data_dic.keys())
 
             if len(key_list) == 0:
-                print('*Error*: No valid key_list is specified.')
+                common.bprint('No valid key_list is specified.', level='Error')
             else:
                 length = get_length(key_list)
                 format_string = '%-' + str(length+10) + 's'

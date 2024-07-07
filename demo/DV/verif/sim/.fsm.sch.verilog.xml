@@ -1,0 +1,8 @@
+<Command name="schRTLInfo"  delimiter="."  >
+<RTLBlock >
+<RTLInfo   name="user_verbosity_0"  type="2"  fileName="/ic/software/synopsys/vcs/V-2023.12-1/etc/uvm/verdi/uvm_custom_install_verdi_recorder.sv"  >
+    <Seg beginLine="46"  endLine="187"  />
+  </RTLInfo>
+ <Instance name="uvm_custom_install_verdi_recording"  />
+</RTLBlock>
+ </Command>

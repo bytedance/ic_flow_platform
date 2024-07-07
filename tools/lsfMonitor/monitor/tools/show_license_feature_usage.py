@@ -107,7 +107,7 @@ class ShowLicenseFreatureUsage(QMainWindow):
         # Show main window
         self.setWindowTitle('"' + str(self.feature) + '" usage on ' + str(self.server) + '/' + str(self.vendor))
 
-        self.resize(900, 400)
+        common_pyqt5.auto_resize(self, 900, 400)
         common_pyqt5.center_window(self)
 
     def gen_main_frame(self):

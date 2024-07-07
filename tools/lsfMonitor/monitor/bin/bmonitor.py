@@ -10,7 +10,7 @@ import getpass
 import datetime
 import argparse
 
-from PyQt5.QtWidgets import QApplication, QWidget, QMainWindow, QAction, qApp, QTextEdit, QTabWidget, QFrame, QGridLayout, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox, QLineEdit, QComboBox, QHeaderView, QDateEdit, QFileDialog
+from PyQt5.QtWidgets import QApplication, QWidget, QMainWindow, QAction, qApp, QTextEdit, QTabWidget, QFrame, QGridLayout, QTableWidget, QTableWidgetItem, QPushButton, QLabel, QMessageBox, QLineEdit, QComboBox, QHeaderView, QDateEdit, QFileDialog, QMenu
 from PyQt5.QtGui import QIcon, QBrush, QFont
 from PyQt5.QtCore import Qt, QThread, QDate
 
@@ -31,7 +31,8 @@ if os.path.exists(local_config):
     import config
 
 os.environ['PYTHONUNBUFFERED'] = '1'
-VERSION = 'V1.4.2 (2024.03.15)'
+VERSION = 'V1.5'
+VERSION_DATE = '2024.06.14'
 
 # Solve some unexpected warning message.
 if 'XDG_RUNTIME_DIR' not in os.environ:
@@ -136,7 +137,8 @@ class MainWindow(QMainWindow):
         # Set self.lsf_info_dic for how to get LSF information.
         self.lsf_info_dic = {'bhosts': {'exec_cmd': 'self.bhosts_dic = common_lsf.get_bhosts_info()', 'update_second': 0},
                              'lsload': {'exec_cmd': 'self.lsload_dic = common_lsf.get_lsload_info()', 'update_second': 0},
-                             'queues': {'exec_cmd': 'self.queues_dic = common_lsf.get_bqueues_info()', 'update_second': 0},
+                             'bqueues': {'exec_cmd': 'self.queues_dic = common_lsf.get_bqueues_info()', 'update_second': 0},
+                             'busers': {'exec_cmd': 'self.users_dic = common_lsf.get_busers_info()', 'update_second': 0},
                              'lshosts': {'exec_cmd': 'self.lshosts_dic = common_lsf.get_lshosts_info()', 'update_second': 0},
                              'queue_host': {'exec_cmd': 'self.queue_host_dic = common_lsf.get_queue_host_info()', 'update_second': 0},
                              'host_queue': {'exec_cmd': 'self.host_queue_dic = common_lsf.get_host_queue_info()', 'update_second': 0},
@@ -262,7 +264,7 @@ class MainWindow(QMainWindow):
         self.gen_license_tab()
 
         # Show main window
-        self.resize(1200, 610)
+        common_pyqt5.auto_resize(self, 1200, 610)
         self.setWindowTitle('lsfMonitor ' + str(VERSION))
         self.setWindowIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/monitor.ico'))
         common_pyqt5.center_window(self)
@@ -412,7 +414,7 @@ class MainWindow(QMainWindow):
         """
         Show lsfMonitor version information.
         """
-        QMessageBox.about(self, 'lsfMonitor', 'Version: ' + str(VERSION) + '        ')
+        QMessageBox.about(self, 'lsfMonitor', 'Version: ' + str(VERSION) + ' (' + str(VERSION_DATE) + ')')
 
     def show_about(self):
         """
@@ -487,7 +489,7 @@ Please contact with liyanqing1987@163.com with any question."""
 
         if self.specified_job:
             self.job_tab_job_line.setText(str(self.specified_job))
-            self.check_job()
+            self.check_job_on_job_tab()
 
     def gen_job_tab_frame0(self):
         # self.job_tab_frame0
@@ -497,35 +499,53 @@ Please contact with liyanqing1987@163.com with any question."""
         job_tab_job_label.setText('Job')
 
         self.job_tab_job_line = QLineEdit()
-        self.job_tab_job_line.returnPressed.connect(self.check_job)
+        self.job_tab_job_line.returnPressed.connect(self.check_job_on_job_tab)
 
         # "Check" button.
         job_tab_check_button = QPushButton('Check', self.job_tab_frame0)
         job_tab_check_button.setStyleSheet('''QPushButton:hover{background:rgb(0, 85, 255);}''')
-        job_tab_check_button.clicked.connect(self.check_job)
+        job_tab_check_button.clicked.connect(self.check_job_on_job_tab)
+
+        # "Check" button.
+        job_tab_kill_button = QPushButton('Kill', self.job_tab_frame0)
+        job_tab_kill_button.setStyleSheet('''QPushButton:hover{background:rgb(0, 85, 255);}''')
+        job_tab_kill_button.clicked.connect(self.kill_job_on_job_tab)
+
+        # "Check" button.
+        job_tab_trace_button = QPushButton('Trace', self.job_tab_frame0)
+        job_tab_trace_button.setStyleSheet('''QPushButton:hover{background:rgb(0, 85, 255);}''')
+        job_tab_trace_button.clicked.connect(self.trace_job_on_job_tab)
 
         # self.job_tab_frame0 - Grid
         job_tab_frame0_grid = QGridLayout()
 
         job_tab_frame0_grid.addWidget(job_tab_job_label, 0, 0)
-        job_tab_frame0_grid.addWidget(self.job_tab_job_line, 0, 1)
-        job_tab_frame0_grid.addWidget(job_tab_check_button, 0, 2)
+        job_tab_frame0_grid.addWidget(self.job_tab_job_line, 0, 1, 1, 2)
+        job_tab_frame0_grid.addWidget(job_tab_check_button, 1, 0)
+        job_tab_frame0_grid.addWidget(job_tab_kill_button, 1, 1)
+        job_tab_frame0_grid.addWidget(job_tab_trace_button, 1, 2)
 
         self.job_tab_frame0.setLayout(job_tab_frame0_grid)
 
     def gen_job_tab_frame1(self):
         # self.job_tab_frame1
+        # "Status" item.
+        job_tab_status_label = QLabel('Status', self.job_tab_frame1)
+        job_tab_status_label.setStyleSheet("font-weight: bold;")
+
+        self.job_tab_status_line = QLineEdit()
+
         # "User" item.
         job_tab_user_label = QLabel('User', self.job_tab_frame1)
         job_tab_user_label.setStyleSheet("font-weight: bold;")
 
         self.job_tab_user_line = QLineEdit()
 
-        # "Status" item.
-        job_tab_status_label = QLabel('Status', self.job_tab_frame1)
-        job_tab_status_label.setStyleSheet("font-weight: bold;")
+        # "Project" item.
+        job_tab_project_label = QLabel('Project', self.job_tab_frame1)
+        job_tab_project_label.setStyleSheet("font-weight: bold;")
 
-        self.job_tab_status_line = QLineEdit()
+        self.job_tab_project_line = QLineEdit()
 
         # "Queue" item.
         job_tab_queue_label = QLabel('Queue', self.job_tab_frame1)
@@ -539,11 +559,17 @@ Please contact with liyanqing1987@163.com with any question."""
 
         self.job_tab_started_on_line = QLineEdit()
 
-        # "Project" item.
-        job_tab_project_label = QLabel('Project', self.job_tab_frame1)
-        job_tab_project_label.setStyleSheet("font-weight: bold;")
+        # "Start Time" item.
+        job_tab_started_time_label = QLabel('Start Time', self.job_tab_frame1)
+        job_tab_started_time_label.setStyleSheet("font-weight: bold;")
 
-        self.job_tab_project_line = QLineEdit()
+        self.job_tab_started_time_line = QLineEdit()
+
+        # "Finish Time" item.
+        job_tab_finished_time_label = QLabel('Finish Time', self.job_tab_frame1)
+        job_tab_finished_time_label.setStyleSheet("font-weight: bold;")
+
+        self.job_tab_finished_time_line = QLineEdit()
 
         # "Processors" item.
         job_tab_processors_requested_label = QLabel('Processors', self.job_tab_frame1)
@@ -557,63 +583,45 @@ Please contact with liyanqing1987@163.com with any question."""
 
         self.job_tab_rusage_mem_line = QLineEdit()
 
-        # "Mem" item.
-        job_tab_mem_label = QLabel('Mem', self.job_tab_frame1)
+        # "Mem (now)" item.
+        job_tab_mem_label = QLabel('Mem (now)', self.job_tab_frame1)
         job_tab_mem_label.setStyleSheet("font-weight: bold;")
 
         self.job_tab_mem_line = QLineEdit()
 
-        # "avg_mem" item.
-        job_tab_avg_mem_label = QLabel('avg_mem', self.job_tab_frame1)
-        job_tab_avg_mem_label.setStyleSheet("font-weight: bold;")
-
-        self.job_tab_avg_mem_line = QLineEdit()
-
-        # "max_mem" item.
-        job_tab_max_mem_label = QLabel('max_mem', self.job_tab_frame1)
+        # "Mem (max)" item.
+        job_tab_max_mem_label = QLabel('Mem (max)', self.job_tab_frame1)
         job_tab_max_mem_label.setStyleSheet("font-weight: bold;")
 
         self.job_tab_max_mem_line = QLineEdit()
 
-        # "Process Tracer" button.
-        process_tracer_button = QPushButton('Process  Tracer', self.job_tab_frame1)
-        process_tracer_button.setStyleSheet('''QPushButton:hover{background:rgb(0, 85, 255);}''')
-        process_tracer_button.clicked.connect(self.process_tracer)
-
         # self.job_tab_frame1 - Grid
         job_tab_frame1_grid = QGridLayout()
 
-        job_tab_frame1_grid.addWidget(job_tab_user_label, 0, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_user_line, 0, 1)
-        job_tab_frame1_grid.addWidget(job_tab_status_label, 1, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_status_line, 1, 1)
-        job_tab_frame1_grid.addWidget(job_tab_queue_label, 2, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_queue_line, 2, 1)
-        job_tab_frame1_grid.addWidget(job_tab_started_on_label, 3, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_started_on_line, 3, 1)
-        job_tab_frame1_grid.addWidget(job_tab_project_label, 4, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_project_line, 4, 1)
-        job_tab_frame1_grid.addWidget(job_tab_processors_requested_label, 5, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_processors_requested_line, 5, 1)
-        job_tab_frame1_grid.addWidget(job_tab_rusage_mem_label, 6, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_rusage_mem_line, 6, 1)
-        job_tab_frame1_grid.addWidget(job_tab_mem_label, 7, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_mem_line, 7, 1)
-        job_tab_frame1_grid.addWidget(job_tab_avg_mem_label, 8, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_avg_mem_line, 8, 1)
-        job_tab_frame1_grid.addWidget(job_tab_max_mem_label, 9, 0)
-        job_tab_frame1_grid.addWidget(self.job_tab_max_mem_line, 9, 1)
-        job_tab_frame1_grid.addWidget(process_tracer_button, 10, 0, 1, 2)
+        job_tab_frame1_grid.addWidget(job_tab_status_label, 0, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_status_line, 0, 1)
+        job_tab_frame1_grid.addWidget(job_tab_user_label, 1, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_user_line, 1, 1)
+        job_tab_frame1_grid.addWidget(job_tab_project_label, 2, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_project_line, 2, 1)
+        job_tab_frame1_grid.addWidget(job_tab_queue_label, 3, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_queue_line, 3, 1)
+        job_tab_frame1_grid.addWidget(job_tab_started_on_label, 4, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_started_on_line, 4, 1)
+        job_tab_frame1_grid.addWidget(job_tab_started_time_label, 5, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_started_time_line, 5, 1)
+        job_tab_frame1_grid.addWidget(job_tab_finished_time_label, 6, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_finished_time_line, 6, 1)
+        job_tab_frame1_grid.addWidget(job_tab_processors_requested_label, 7, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_processors_requested_line, 7, 1)
+        job_tab_frame1_grid.addWidget(job_tab_rusage_mem_label, 8, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_rusage_mem_line, 8, 1)
+        job_tab_frame1_grid.addWidget(job_tab_mem_label, 9, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_mem_line, 9, 1)
+        job_tab_frame1_grid.addWidget(job_tab_max_mem_label, 10, 0)
+        job_tab_frame1_grid.addWidget(self.job_tab_max_mem_line, 10, 1)
 
         self.job_tab_frame1.setLayout(job_tab_frame1_grid)
-
-    def process_tracer(self):
-        # Call script process_tracer to get job process information.
-        self.job_tab_current_job = self.job_tab_job_line.text().strip()
-
-        if self.job_tab_current_job:
-            self.my_process_tracer = ProcessTracer(self.job_tab_current_job)
-            self.my_process_tracer.start()
 
     def gen_job_tab_frame2(self):
         # self.job_tab_frame2
@@ -635,7 +643,7 @@ Please contact with liyanqing1987@163.com with any question."""
         job_tab_frame3_grid.addWidget(self.job_tab_mem_canvas, 1, 0)
         self.job_tab_frame3.setLayout(job_tab_frame3_grid)
 
-    def check_job(self):
+    def check_job_on_job_tab(self):
         """
         Get job information with "bjobs -UF <job_id>", save the infomation into dict self.job_tab_current_job_dic.
         Update self.job_tab_frame1 and self.job_tab_frame3.
@@ -679,10 +687,68 @@ Please contact with liyanqing1987@163.com with any question."""
         self.update_job_tab_frame2()
         self.update_job_tab_frame3()
 
+    def kill_job_on_job_tab(self):
+        """
+        Kill job, update self.job_tab.
+        """
+        if self.job_tab_current_job:
+            return_code = self.kill_job(self.job_tab_current_job)
+
+            if return_code == 0:
+                self.check_job_on_job_tab()
+
+    def kill_job(self, jobid=None):
+        """
+        Kill job with "bkill".
+        """
+        if jobid:
+            common.bprint('Kill job "' + str(jobid) + '".', date_format='%Y-%m-%d %H:%M:%S')
+
+            command = 'bkill ' + str(jobid)
+            (return_code, stdout, stderr) = common.run_command(command)
+
+            if return_code == 0:
+                common.bprint('Kill ' + str(jobid) + ' successfully!', date_format='%Y-%m-%d %H:%M:%S')
+                my_show_message = ShowMessage('Info', 'Kill ' + str(jobid) + ' successfully!')
+                my_show_message.start()
+                time.sleep(5)
+                my_show_message.terminate()
+            else:
+                common.bprint('Failed on killing ' + str(jobid) + '.', date_format='%Y-%m-%d %H:%M:%S')
+                common.bprint(str(stderr, 'utf-8').strip(), date_format='%Y-%m-%d %H:%M:%S')
+                my_show_message = ShowMessage('Kill ' + str(jobid) + ' fail', str(str(stderr, 'utf-8')).strip())
+                my_show_message.run()
+
+            return return_code
+
+        return -1
+
+    def trace_job_on_job_tab(self):
+        """
+        Trace job on self.job_tab.
+        """
+        if self.job_tab_current_job:
+            self.trace_job(self.job_tab_current_job)
+
+    def trace_job(self, jobid=None):
+        """
+        Trace job process with tool process_tracer.
+        """
+        if jobid:
+            self.my_process_tracer = ProcessTracer(jobid)
+            self.my_process_tracer.start()
+
     def update_job_tab_frame1(self, init=False):
         """
         Update self.job_tab_frame1 with job infos.
         """
+        # Fill "Status" item.
+        if init:
+            self.job_tab_status_line.setText('')
+        else:
+            self.job_tab_status_line.setText(self.job_tab_current_job_dic[self.job_tab_current_job]['status'])
+            self.job_tab_status_line.setCursorPosition(0)
+
         # Fill "User" item.
         if init:
             self.job_tab_user_line.setText('')
@@ -690,12 +756,12 @@ Please contact with liyanqing1987@163.com with any question."""
             self.job_tab_user_line.setText(self.job_tab_current_job_dic[self.job_tab_current_job]['user'])
             self.job_tab_user_line.setCursorPosition(0)
 
-        # Fill "Status" item.
+        # Fill "Project" item.
         if init:
-            self.job_tab_status_line.setText('')
+            self.job_tab_project_line.setText('')
         else:
-            self.job_tab_status_line.setText(self.job_tab_current_job_dic[self.job_tab_current_job]['status'])
-            self.job_tab_status_line.setCursorPosition(0)
+            self.job_tab_project_line.setText(self.job_tab_current_job_dic[self.job_tab_current_job]['project'])
+            self.job_tab_project_line.setCursorPosition(0)
 
         # Fill "Queue" item.
         if init:
@@ -711,19 +777,26 @@ Please contact with liyanqing1987@163.com with any question."""
             self.job_tab_started_on_line.setText(self.job_tab_current_job_dic[self.job_tab_current_job]['started_on'])
             self.job_tab_started_on_line.setCursorPosition(0)
 
+        # Fill "Started Time" item.
+        if init:
+            self.job_tab_started_time_line.setText('')
+        else:
+            self.job_tab_started_time_line.setText(self.job_tab_current_job_dic[self.job_tab_current_job]['started_time'])
+            self.job_tab_started_time_line.setCursorPosition(0)
+
+        # Fill "Finished Time" item.
+        if init:
+            self.job_tab_finished_time_line.setText('')
+        else:
+            self.job_tab_finished_time_line.setText(self.job_tab_current_job_dic[self.job_tab_current_job]['finished_time'])
+            self.job_tab_finished_time_line.setCursorPosition(0)
+
         # Fill "Processors" item.
         if init:
             self.job_tab_processors_requested_line.setText('')
         else:
             self.job_tab_processors_requested_line.setText(self.job_tab_current_job_dic[self.job_tab_current_job]['processors_requested'])
             self.job_tab_processors_requested_line.setCursorPosition(0)
-
-        # Fill "Project" item.
-        if init:
-            self.job_tab_project_line.setText('')
-        else:
-            self.job_tab_project_line.setText(self.job_tab_current_job_dic[self.job_tab_current_job]['project'])
-            self.job_tab_project_line.setCursorPosition(0)
 
         # Fill "Rusage" item.
         if init:
@@ -752,15 +825,6 @@ Please contact with liyanqing1987@163.com with any question."""
                 mem_value = round(float(self.job_tab_current_job_dic[self.job_tab_current_job]['mem'])/1024, 1)
                 self.job_tab_mem_line.setText(str(mem_value) + ' G')
                 self.job_tab_mem_line.setCursorPosition(0)
-
-        # Fill "avg_mem" item.
-        if init:
-            self.job_tab_avg_mem_line.setText('')
-        else:
-            if self.job_tab_current_job_dic[self.job_tab_current_job]['avg_mem'] != '':
-                avg_mem_value = round(float(self.job_tab_current_job_dic[self.job_tab_current_job]['avg_mem'])/1024, 1)
-                self.job_tab_avg_mem_line.setText(str(avg_mem_value) + ' G')
-                self.job_tab_avg_mem_line.setCursorPosition(0)
 
         # Fill "max_mem" item.
         if init:
@@ -871,6 +935,8 @@ Please contact with liyanqing1987@163.com with any question."""
 
         self.jobs_tab_table = QTableWidget(self.jobs_tab)
         self.jobs_tab_table.itemClicked.connect(self.jobs_tab_check_click)
+        self.jobs_tab_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.jobs_tab_table.customContextMenuRequested.connect(self.gen_jobs_tab_menu)
 
         # self.jobs_tab - Grid
         jobs_tab_grid = QGridLayout()
@@ -924,6 +990,10 @@ Please contact with liyanqing1987@163.com with any question."""
 
         self.jobs_tab_user_line = QLineEdit()
         self.jobs_tab_user_line.returnPressed.connect(self.gen_jobs_tab_table)
+
+        self.fresh_lsf_info('busers')
+        jobs_tab_user_line_completer = common_pyqt5.get_completer(self.users_dic['USER/GROUP'])
+        self.jobs_tab_user_line.setCompleter(jobs_tab_user_line_completer)
 
         # "Check" button.
         jobs_tab_check_button = QPushButton('Check', self.jobs_tab_frame0)
@@ -1045,6 +1115,8 @@ Please contact with liyanqing1987@163.com with any question."""
         # Fill self.jobs_tab_table items.
         self.jobs_tab_table.setRowCount(0)
         self.jobs_tab_table.setRowCount(len(job_dic.keys()))
+
+        # Don't remove below setting!!!
         job_list = list(job_dic.keys())
 
         for i in range(len(job_list)):
@@ -1138,7 +1210,40 @@ Please contact with liyanqing1987@163.com with any question."""
             item = QTableWidgetItem(job_dic[job]['command'])
             self.jobs_tab_table.setItem(i, j, item)
 
+    def gen_jobs_tab_menu(self, pos):
+        """
+        Generate right click menu on self.jobs_tab_table.
+        """
+        item = self.jobs_tab_table.itemAt(pos)
+
+        if item and (item.column() == 0):
+            menu = QMenu(self.jobs_tab_table)
+
+            kill_job_action = QAction('Kill', self)
+            kill_job_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/gun.png'))
+            kill_job_action.triggered.connect(lambda: self.kill_job_on_jobs_tab(item.text()))
+            menu.addAction(kill_job_action)
+
+            trace_job_action = QAction('Trace', self)
+            trace_job_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/trace.png'))
+            trace_job_action.triggered.connect(lambda: self.trace_job(item.text()))
+            menu.addAction(trace_job_action)
+
+            menu.exec_(self.jobs_tab_table.mapToGlobal(pos))
+
+    def kill_job_on_jobs_tab(self, jobid=None):
+        """
+        Kill job, update self.jobs_tab_table.
+        """
+        return_code = self.kill_job(jobid)
+
+        if return_code == 0:
+            self.gen_jobs_tab_table()
+
     def switch_job_start_time(self, start_time):
+        """
+        Switch start_time from "%Y %b %d %H:%M:%S" into "%Y-%m-%d %H:%M:%S".
+        """
         new_start_time = start_time
 
         if start_time and (start_time != 'N/A'):
@@ -1172,7 +1277,7 @@ Please contact with liyanqing1987@163.com with any question."""
             if item.column() == 0:
                 if job != '':
                     self.job_tab_job_line.setText(job)
-                    self.check_job()
+                    self.check_job_on_job_tab()
                     self.main_tab.setCurrentWidget(self.job_tab)
             elif item.column() == 2:
                 job_status = self.jobs_tab_table.item(current_row, 2).text().strip()
@@ -1213,7 +1318,7 @@ Please contact with liyanqing1987@163.com with any question."""
         Set (initialize) self.jobs_tab_queue_combo.
         """
         self.jobs_tab_queue_combo.clear()
-        self.fresh_lsf_info('queues')
+        self.fresh_lsf_info('bqueues')
 
         if not queue_list:
             queue_list = copy.deepcopy(self.queues_dic['QUEUE_NAME'])
@@ -1262,6 +1367,8 @@ Please contact with liyanqing1987@163.com with any question."""
 
         self.hosts_tab_table = QTableWidget(self.hosts_tab)
         self.hosts_tab_table.itemClicked.connect(self.hosts_tab_check_click)
+        self.hosts_tab_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.hosts_tab_table.customContextMenuRequested.connect(self.gen_hosts_tab_menu)
 
         # self.hosts_tab_table - Grid
         hosts_tab_grid = QGridLayout()
@@ -1319,6 +1426,9 @@ Please contact with liyanqing1987@163.com with any question."""
 
         self.hosts_tab_host_line = QLineEdit()
         self.hosts_tab_host_line.returnPressed.connect(self.gen_hosts_tab_table)
+
+        hosts_tab_host_line_completer = common_pyqt5.get_completer(self.bhosts_dic['HOST_NAME'])
+        self.hosts_tab_host_line.setCompleter(hosts_tab_host_line_completer)
 
         # "Check" button.
         hosts_tab_check_button = QPushButton('Check', self.hosts_tab_frame0)
@@ -1621,6 +1731,56 @@ Please contact with liyanqing1987@163.com with any question."""
 
             self.hosts_tab_table.setItem(i, j, item)
 
+    def gen_hosts_tab_menu(self, pos):
+        """
+        Generate right click menu on self.hosts_tab_table.
+        """
+        item = self.hosts_tab_table.itemAt(pos)
+
+        if item and (item.column() == 0):
+            menu = QMenu(self.hosts_tab_table)
+
+            open_host_action = QAction('Open', self)
+            open_host_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/open.png'))
+            open_host_action.triggered.connect(lambda: self.manage_host_on_hosts_tab(item.text(), 'open'))
+            menu.addAction(open_host_action)
+
+            close_host_action = QAction('Close', self)
+            close_host_action.setIcon(QIcon(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/data/pictures/close.png'))
+            close_host_action.triggered.connect(lambda: self.manage_host_on_hosts_tab(item.text(), 'close'))
+            menu.addAction(close_host_action)
+
+            menu.exec_(self.hosts_tab_table.mapToGlobal(pos))
+
+    def manage_host_on_hosts_tab(self, host_name, behavior):
+        """
+        Manage specified host with specified behavior(open/close).
+        """
+        if host_name:
+            command = ''
+
+            if behavior == 'open':
+                command = 'badmin hopen ' + str(host_name)
+            elif behavior == 'close':
+                command = 'badmin hclose ' + str(host_name)
+
+            if command:
+                common.bprint(command, date_format='%Y-%m-%d %H:%M:%S')
+                (return_code, stdout, stderr) = common.run_command(command)
+
+                if return_code == 0:
+                    common.bprint(str(behavior) + ' ' + str(host_name) + ' successfully!', date_format='%Y-%m-%d %H:%M:%S')
+                    my_show_message = ShowMessage('Info', str(behavior) + ' ' + str(host_name) + ' successfully!')
+                    my_show_message.start()
+                    time.sleep(5)
+                    my_show_message.terminate()
+                    self.gen_hosts_tab_table()
+                else:
+                    common.bprint('Failed on ' + str(behavior) + 'ing host "' + str(host_name) + '".', date_format='%Y-%m-%d %H:%M:%S')
+                    common.bprint(str(stderr, 'utf-8').strip(), date_format='%Y-%m-%d %H:%M:%S')
+                    my_show_message = ShowMessage(str(behavior) + ' ' + str(host_name) + ' fail', str(str(stderr, 'utf-8')).strip())
+                    my_show_message.run()
+
     def get_hosts_tab_specified_host_list(self):
         """
         Filter host list with specified queue/status/max/maxmem/host.
@@ -1784,7 +1944,7 @@ Please contact with liyanqing1987@163.com with any question."""
         Set (initialize) self.hosts_tab_queue_combo.
         """
         self.hosts_tab_queue_combo.clear()
-        self.fresh_lsf_info('queues')
+        self.fresh_lsf_info('bqueues')
 
         queue_list = copy.deepcopy(self.queues_dic['QUEUE_NAME'])
         queue_list.sort()
@@ -1941,7 +2101,7 @@ Please contact with liyanqing1987@163.com with any question."""
 
         # Fresh LSF bhosts/queues/queue_host information.
         self.fresh_lsf_info('bhosts')
-        self.fresh_lsf_info('queues')
+        self.fresh_lsf_info('bqueues')
         self.fresh_lsf_info('queue_host')
 
         # Hide the vertical header
@@ -1970,7 +2130,7 @@ Please contact with liyanqing1987@163.com with any question."""
             item = QTableWidgetItem(queue)
             self.queues_tab_table.setItem(i, j, item)
 
-            # File "SLOTS" item.
+            # Fill "SLOTS" item.
             j = j+1
             total = 0
 
@@ -2586,8 +2746,8 @@ Please contact with liyanqing1987@163.com with any question."""
         utilization_tab_grid.setRowStretch(0, 1)
         utilization_tab_grid.setRowStretch(1, 10)
 
-        utilization_tab_grid.setColumnStretch(0, 7)
-        utilization_tab_grid.setColumnStretch(1, 14)
+        utilization_tab_grid.setColumnStretch(0, 1)
+        utilization_tab_grid.setColumnStretch(1, 2)
 
         self.utilization_tab.setLayout(utilization_tab_grid)
 
@@ -2690,7 +2850,7 @@ Please contact with liyanqing1987@163.com with any question."""
         Set (initialize) self.utilization_tab_queue_combo.
         """
         self.utilization_tab_queue_combo.clear()
-        self.fresh_lsf_info('queues')
+        self.fresh_lsf_info('bqueues')
 
         queue_list = copy.deepcopy(self.queues_dic['QUEUE_NAME'])
         queue_list.sort()
@@ -2830,7 +2990,7 @@ Please contact with liyanqing1987@163.com with any question."""
 
         # Organize utilization info, get average utlization for every queue.
         queue_utilization_dic = {}
-        self.fresh_lsf_info('queues')
+        self.fresh_lsf_info('bqueues')
         queue_list = copy.deepcopy(self.queues_dic['QUEUE_NAME'])
         queue_list.sort()
         queue_list.append('ALL')
@@ -2956,15 +3116,20 @@ Please contact with liyanqing1987@163.com with any question."""
         self.utilization_tab_table.setShowGrid(True)
         self.utilization_tab_table.setSortingEnabled(True)
         self.utilization_tab_table.setColumnCount(0)
-        self.utilization_tab_table.setColumnCount(4)
+        self.utilization_tab_table.setColumnCount(5)
         self.utilization_tab_table.setRowCount(0)
         self.utilization_tab_table.setRowCount(len(queue_utilization_dic))
-        self.utilization_tab_table_title_list = ['Queue', 'slot (%)', 'cpu (%)', 'mem (%)']
+        self.utilization_tab_table_title_list = ['Queue', 'slots', 'slot(%)', 'cpu(%)', 'mem(%)']
         self.utilization_tab_table.setHorizontalHeaderLabels(self.utilization_tab_table_title_list)
         self.utilization_tab_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.utilization_tab_table.setColumnWidth(1, 70)
-        self.utilization_tab_table.setColumnWidth(2, 70)
-        self.utilization_tab_table.setColumnWidth(3, 70)
+        self.utilization_tab_table.setColumnWidth(1, 60)
+        self.utilization_tab_table.setColumnWidth(2, 60)
+        self.utilization_tab_table.setColumnWidth(3, 60)
+        self.utilization_tab_table.setColumnWidth(4, 60)
+
+        # Fresh LSF bhosts/queues/queue_host information.
+        self.fresh_lsf_info('bhosts')
+        self.fresh_lsf_info('queue_host')
 
         # Fill self.utilization_tab_table items.
         if queue_utilization_dic:
@@ -2977,11 +3142,35 @@ Please contact with liyanqing1987@163.com with any question."""
                 item = QTableWidgetItem(queue)
                 self.utilization_tab_table.setItem(row, 0, item)
 
+                # Fill "slots" item.
+                total = 0
+
+                if queue == 'ALL':
+                    for max in self.bhosts_dic['MAX']:
+                        if re.match(r'^\d+$', max):
+                            total += int(max)
+                elif queue == 'lost_and_found':
+                    total = 'N/A'
+                else:
+                    for queue_host in self.queue_host_dic[queue]:
+                        host_index = self.bhosts_dic['HOST_NAME'].index(queue_host)
+                        host_max = self.bhosts_dic['MAX'][host_index]
+
+                        if re.match(r'^\d+$', host_max):
+                            total += int(host_max)
+
+                item = QTableWidgetItem(str(total))
+
+                if queue == 'lost_and_found':
+                    item.setForeground(QBrush(Qt.red))
+
+                self.utilization_tab_table.setItem(row, 1, item)
+
                 for (i, resource) in enumerate(self.utilization_tab_resource_list):
                     # Fill <resource> item.
                     item = QTableWidgetItem()
                     item.setData(Qt.DisplayRole, queue_utilization_dic[queue][resource])
-                    self.utilization_tab_table.setItem(row, i+1, item)
+                    self.utilization_tab_table.setItem(row, i+2, item)
 
     def gen_utilization_tab_frame1(self):
         """
@@ -3229,6 +3418,10 @@ Please contact with liyanqing1987@163.com with any question."""
         self.license_tab_feature_line = QLineEdit()
         self.license_tab_feature_line.returnPressed.connect(self.update_license_info)
 
+        feature_list = self.get_license_feature_list()
+        license_tab_feature_line_completer = common_pyqt5.get_completer(feature_list)
+        self.license_tab_feature_line.setCompleter(license_tab_feature_line_completer)
+
         # "User" item.
         license_tab_user_label = QLabel('User', self.license_tab_frame0)
         license_tab_user_label.setStyleSheet("font-weight: bold;")
@@ -3236,6 +3429,9 @@ Please contact with liyanqing1987@163.com with any question."""
 
         self.license_tab_user_line = QLineEdit()
         self.license_tab_user_line.returnPressed.connect(self.update_license_info)
+
+        license_tab_user_line_completer = common_pyqt5.get_completer(self.users_dic['USER/GROUP'])
+        self.license_tab_user_line.setCompleter(license_tab_user_line_completer)
 
         # "Filter" button.
         license_tab_check_button = QPushButton('Check', self.license_tab_frame0)
@@ -3269,6 +3465,21 @@ Please contact with liyanqing1987@163.com with any question."""
         license_tab_frame0_grid.setColumnStretch(10, 1)
 
         self.license_tab_frame0.setLayout(license_tab_frame0_grid)
+
+    def get_license_feature_list(self):
+        """
+        Get all features from self.license_dic.
+        """
+        feature_list = []
+
+        for license_server in self.license_dic.keys():
+            for vendor_daemon in self.license_dic[license_server]['vendor_daemon'].keys():
+                for feature in self.license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'].keys():
+                    feature_list.append(feature)
+
+        feature_list = list(set(feature_list))
+
+        return feature_list
 
     def set_license_tab_show_combo(self):
         self.license_tab_show_combo.clear()
@@ -3524,35 +3735,36 @@ Please contact with liyanqing1987@163.com with any question."""
 
     def export_table(self, table_type, table_item, title_list):
         """
-        Export specified table info into an Excel.
+        Export specified table info into an csv file.
         """
         current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         current_time_string = re.sub('-', '', current_time)
         current_time_string = re.sub(':', '', current_time_string)
         current_time_string = re.sub(' ', '_', current_time_string)
-        default_output_file = './lsfMonitor_' + str(table_type) + '_' + str(current_time_string) + '.xlsx'
-        (output_file, output_file_type) = QFileDialog.getSaveFileName(self, 'Export ' + str(table_type) + ' table', default_output_file, 'Excel (*.xlsx)')
+        default_output_file = './lsfMonitor_' + str(table_type) + '_' + str(current_time_string) + '.csv'
+        (output_file, output_file_type) = QFileDialog.getSaveFileName(self, 'Export ' + str(table_type) + ' table', default_output_file, 'CSV Files (*.csv)')
 
         if output_file:
             # Get table content.
-            table_info_list = []
-            table_info_list.append(title_list)
+            content_dic = {}
+            row_num = table_item.rowCount()
+            column_num = table_item.columnCount()
 
-            for row in range(table_item.rowCount()):
-                row_list = []
+            for column in range(column_num):
+                column_list = []
 
-                for column in range(table_item.columnCount()):
+                for row in range(row_num):
                     if table_item.item(row, column):
-                        row_list.append(table_item.item(row, column).text())
+                        column_list.append(table_item.item(row, column).text())
                     else:
-                        row_list.append('')
+                        column_list.append('')
 
-                table_info_list.append(row_list)
+                content_dic.setdefault(title_list[column], column_list)
 
-            # Write excel
+            # Write csv
             common.bprint('Writing ' + str(table_type) + ' table into "' + str(output_file) + '" ...', date_format='%Y-%m-%d %H:%M:%S')
 
-            common.write_excel(excel_file=output_file, contents_list=table_info_list, specified_sheet_name=table_type)
+            common.write_csv(csv_file=output_file, content_dic=content_dic)
 # Export table (end) #
 
     def closeEvent(self, QCloseEvent):

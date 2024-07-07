@@ -1,0 +1,65 @@
+API:
+    PRE_IFP:
+        - LABEL: "PRE_IFP function for demo case"
+          PROJECT: 
+          GROUP:
+          PATH: ${CWD}
+          ENABLE: True
+          COMMAND: echo -e '\033[37;41;1mYou can execute some script after load ifp.cfg.yaml and before launch GUI by API(PRE_IFP) function, such as a Wrapper to assist user generate EDA environment!\033[0m' 
+          COMMENT : 'For demo case'
+    TABLE_RIGHT_KEY_MENU:
+        - LABEL: "Edit tool version"
+          PROJECT: 
+          GROUP:
+          TAB: 
+          COLUMN: BRANCH
+          PATH: ${CWD}
+          ENABLE: True
+          COMMAND: gvim ${DEFAULT_PATH}/dv/verif/sim/setup.sh
+          COMMENT : 'Edit vcs/verdi version'
+        - LABEL: "Edit make file"
+          PROJECT: 
+          GROUP:
+          TAB: 
+          COLUMN: BRANCH
+          PATH: ${CWD}
+          ENABLE: True
+          COMMAND: gvim ${DEFAULT_PATH}/dv/verif/sim/Makefile
+        - LABEL: "debug in terminal"
+          PROJECT:
+          GROUP: 
+          TAB: MAIN
+          COLUMN: TASK
+          TASK_NAME: 
+          PATH: ${CWD}
+          ENABLE: True
+          COMMAND: /bin/gnome-terminal --maximize --tab -- bash -c  "cd ${DEFAULT_PATH}/dv/verif/sim; exec bash"        
+        - LABEL: "view log"
+          PROJECT:
+          GROUP: 
+          TAB: MAIN
+          COLUMN: TASK
+          TASK_NAME: dut
+          PATH: ${CWD}
+          ENABLE: True
+          COMMAND: gvim ${DEFAULT_PATH}/dv/verif/sim/dut.log
+        - LABEL: "view log"
+          PROJECT:
+          GROUP: 
+          TAB: MAIN
+          COLUMN: TASK
+          TASK_NAME: testbench
+          PATH: ${CWD}
+          ENABLE: True
+          COMMAND: gvim ${DEFAULT_PATH}/dv/verif/sim/tb.log
+        - LABEL: "view log"
+          PROJECT:
+          GROUP: 
+          TAB: MAIN
+          COLUMN: TASK
+          TASK_NAME: elab
+          PATH: ${CWD}
+          ENABLE: True
+          COMMAND: gvim ${DEFAULT_PATH}/dv/verif/sim/elab.log
+
+

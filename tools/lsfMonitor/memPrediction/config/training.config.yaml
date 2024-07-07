@@ -1,0 +1,64 @@
+report:
+    bins:
+        - -.inf
+        - 1
+        - 2
+        - 4
+        - 8
+        - 16
+        - 32
+        - 64
+        - 128
+        - 256
+        - 512
+        - .inf
+cross_validation:
+    test_size: 0.01
+    train_size: 0.99
+base_model:                         
+    cwd:
+        word2vec: 
+            emb_size: 128
+#           cluster: 32
+        glove:
+            emb_size: 128
+#           cluster: 32
+    command:
+        word2vec:
+            emb_size: 128
+#           cluster: 32
+        glove:
+            emb_size: 128
+#           cluster: 32
+    job_name: 
+         word2vec:
+            emb_size: 128
+#           cluster: 32
+         glove:
+            emb_size: 128
+#           cluster: 32
+#Sampling:
+#    max_mem:
+#        status: True
+#        bins:
+#            - -.inf
+#            - 16
+#            - 64
+#            - 128
+#            - .inf
+#        over_sample:
+#            status: True
+#            method: SMOTE
+#            sampling_strategy: auto
+model: 
+    model_name: xgboost
+    fitting_parameter:
+        early_stopping_rounds: 25
+        eval_metric: rmse
+    training_parameter:
+        max_depth: 15
+        min_child_weight: 6
+        n_estimators: 100
+        objective: reg:tweedie
+        seed: 64
+        tweedie_variance_power: 1.2

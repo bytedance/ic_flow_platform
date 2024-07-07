@@ -186,7 +186,7 @@ class ProcessTracer(QMainWindow):
         elif self.pid:
             self.setWindowTitle('Process Tracer (pid:' + str(self.pid) + ')')
 
-        self.resize(1200, 300)
+        common_pyqt5.auto_resize(self, 1200, 300)
         common_pyqt5.center_window(self)
 
     def gen_menubar(self):

@@ -1,4 +1,4 @@
-# lsfMonitor V1.4.2
+# lsfMonitor V1.5
 
 ## Update history
 ***
@@ -24,6 +24,8 @@
 |         |           | Support exporting all tables into Excel.                               |
 |         |           | Optimize on curve displaying.                                          |
 | V1.4.2  | (2024.03) | Support multi LSF/openlava clusters on db_path.                        |
+| V1.5    | (2024.06) | Add job memory predict/analysis tool memPredict.                       |
+|         |           | Replace export file from excel to csv file.                            |
 
 
 ## Introduction

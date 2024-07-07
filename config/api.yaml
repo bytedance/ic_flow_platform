@@ -1,0 +1,74 @@
+# API for IFP user customization flows
+#
+# 1. Allowed parameters:
+#       Main category : PRE_CFG / PRE_IFP / TABLE_RIGHE_KEY_MENU
+#       LABEL : str
+#       PROJECT : str
+#       GROUP : str
+#       PATH : str with IFP allowed parameters
+#       COMMAND : str with IFP allowed parameters
+#       TAB : ENV / CONFIG / MAIN
+#       COLUMN : BLOCK / VERSION / FLOW / VENDOR / BRANCH / TASK
+#       API-2 : 2-stage menu under LABEL and the COMMAND in 1-stage menu will be disabled
+#       BLOCK_NAME : only enabled for specific BLOCK_NAME when COLUMN is BLOCK
+#       VERSION_NAME : only enabled for specific VERSION_NAME when COLUMN is VERSION
+#       FLOW_NAME : only enabled for specific FLOW_NAME when COLUMN is FLOW
+#       VENDOR_NAME : only enabled for specific VENDOR_NAME when COLUMN is VENDOR
+#       BRANCH_NAME : only enabled for specific BRANCH_NAME when COLUMN is BRANCH
+#       TASK_NAME : only enabled for specific TASK_NAME when COLUMN is TASK
+#       ENABLE : True/False
+#       COMMENT : str
+#
+#
+# 2. Example:
+# Fixed yaml format, specially pay attention to '-' which means list
+#
+# API:
+#     PRE_CFG:
+#        - LABEL: 'pre_cfg'
+#          PATH: ${CWD}
+#          COMMAND:  /ic/software/cad_tools/flows/library_characterization/tools/pre_cfg.py  
+#    PRE_IFP:
+#        - LABEL: 'pre_ifp_action_for_test'
+#          PROJECT: 
+#          GROUP: 
+#          PATH: ${CWD}
+#          COMMAND: echo 'test pre_ifp API function'                    
+#          ENABLE: True
+#          COMMENT: 'Enable this pre IFP API'
+#    TABLE_RIGHT_KEY_MENU:
+#        - LABEL: "test right key menu"
+#          PROJECT: 
+#          GROUP:
+#          TAB: CONFIG
+#          COLUMN: BLOCK
+#          PATH: ${CWD}
+#          COMMAND: echo 'test right key menu'
+#        - LABEL: "test 2-stage menu"
+#          PROJECT: 
+#          GROUP:
+#          TAB: MAIN
+#          COLUMN: TASK
+#          TASK_NAME: 'elab'
+#          PATH: ${CWD}
+#          API-2:
+#              - LABEL: 'open tcl1'
+#                COMMAND: echo 'tcl1'  
+#                ENABLE: True
+#                COMMENT: 'Enable this second-stage API'
+#              - LABEL: 'open tcl2'
+#                COMMAND: echo 'tcl2'
+#                ENABLE: False
+#                COMMENT: 'Disable this second-stage API'
+#          ENABLE: False
+#          COMMENT: 'Disable this API'
+API:
+    PRE_CFG:
+        - LABEL: "PRE_CFG function for demo case"
+          PATH: ${CWD}
+          ENABLE: True
+          COMMAND: echo -e '\033[37;41;1mYou can execute some script before load ifp.cfg.yaml by API(PRE_CFG) function, such as generate a customized ifp.cfg.yaml for user!\033[0m' 
+          COMMENT : 'For demo case'
+        - LABEL: 'pre_cfg'
+          PATH: ${CWD}
+          COMMAND:  python3 ${IFP_INSTALL_PATH}/tools/ifp_pre_cfg.py  

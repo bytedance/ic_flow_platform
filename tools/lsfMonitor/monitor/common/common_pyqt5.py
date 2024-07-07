@@ -1,9 +1,12 @@
 import re
+import math
 import datetime
+import screeninfo
 
-from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem
+from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem, QCompleter
 from PyQt5.QtGui import QTextCursor, QFont
 from PyQt5.Qt import QFontMetrics
+from PyQt5.QtCore import Qt, QEvent
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5 import NavigationToolbar2QT
@@ -18,6 +21,33 @@ def center_window(window):
     cp = QDesktopWidget().availableGeometry().center()
     qr.moveCenter(cp)
     window.move(qr.topLeft())
+
+
+def auto_resize(window, width=0, height=0):
+    """
+    Scaling down the window size if screen resolution is smaller than window resolution.
+    input:  Window: Original window; Width: window width; Height: window height
+    output: Window: Scaled window
+    """
+    # Get default width/height setting.
+    monitor = screeninfo.get_monitors()[0]
+
+    if not width:
+        width = monitor.width
+
+    if not height:
+        height = monitor.height
+
+    # If the screen size is too small, automatically obtain the appropriate length and width value.
+    if (monitor.width < width) or (monitor.height < height):
+        width_rate = math.floor((monitor.width / width) * 100)
+        height_rate = math.floor((monitor.height / height) * 100)
+        min_rate = min(width_rate, height_rate)
+        width = int((width * min_rate) / 100)
+        height = int((height * min_rate) / 100)
+
+    # Resize with auto width/height value.
+    window.resize(width, height)
 
 
 def text_edit_visible_position(text_edit_item, position='End'):
@@ -35,6 +65,47 @@ def text_edit_visible_position(text_edit_item, position='End'):
     text_edit_item.ensureCursorVisible()
 
 
+def get_completer(item_list):
+    """
+    Instantiate and config QCompleter.
+    """
+    completer_ins = QCompleter(item_list)
+
+    # Enable Qt.MatchContains mode (just like re.search()), not Qt.MatchStartsWith or Qt.MatchEndsWith.
+    completer_ins.setFilterMode(Qt.MatchContains)
+    # Match upper/lower case.
+    completer_ins.setCaseSensitivity(Qt.CaseInsensitive)
+
+    # Adjust the appropriate size of the item.
+    if item_list:
+        list_view = completer_ins.popup()
+        max_length = max(len(item) for item in item_list)
+        popup_width = list_view.fontMetrics().width('w' * max_length)
+        list_view.setFixedWidth(popup_width)
+
+    return completer_ins
+
+
+class MyCheckBox(QCheckBox):
+    """
+    Re-Write eventFilter function for QCheckBox.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        """
+        Make sure clicking on the blank section still takes effect.
+        """
+        if (watched == self) and (event.type() == QEvent.MouseButtonPress):
+            if self.rect().contains(event.pos()):
+                self.toggle()
+                return True
+
+        return super().eventFilter(watched, event)
+
+
 class QComboCheckBox(QComboBox):
     """
     QComboCheckBox is a QComboBox with checkbox.
@@ -49,6 +120,7 @@ class QComboCheckBox(QComboBox):
 
         # self.qLineEdit is used to show selected items on QLineEdit.
         self.qLineEdit = QLineEdit()
+        self.qLineEdit.textChanged.connect(self.validQLineEditValue)
         self.qLineEdit.setReadOnly(True)
         self.setLineEdit(self.qLineEdit)
 
@@ -57,6 +129,15 @@ class QComboCheckBox(QComboBox):
 
         # Adjust width for new item.
         self.dropDownBoxWidthPixel = self.width()
+
+    def validQLineEditValue(self):
+        """
+        Make sure value of self.qLineEdit always match selected items.
+        """
+        selectedItemString = ' '.join(self.selectedItems().values())
+
+        if self.qLineEdit.text() != selectedItemString:
+            self.updateLineEdit()
 
     def addCheckBoxItems(self, text_list):
         """
@@ -70,7 +151,7 @@ class QComboCheckBox(QComboBox):
         Add QCheckBox format item into QListWidget(QComboCheckBox).
         """
         qItem = QListWidgetItem(self.qListWidget)
-        qBox = QCheckBox(text)
+        qBox = MyCheckBox(text)
         qBox.stateChanged.connect(self.qBoxStateChanged)
         self.checkBoxList.append(qBox)
         self.qListWidget.setItemWidget(qItem, qBox)

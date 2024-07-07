@@ -241,7 +241,7 @@ def get_lsid_info():
             if re.match(r'^.*\s+([\d\.]+),.*$', line):
                 my_match = re.match(r'^.*\s+([\d\.]+),.*$', line)
                 tool_version = my_match.group(1)
-        elif re.search(r'Open_lava', line) or re.search(r'openlava', line):
+        elif re.search(r'Open_lava', line) or re.search(r'openlava', line) or re.search(r'Openlava', line) or re.search(r'OpenLava', line):
             tool = 'openlava'
 
             if re.match(r'^.*\s+([\d\.]+),.*$', line):

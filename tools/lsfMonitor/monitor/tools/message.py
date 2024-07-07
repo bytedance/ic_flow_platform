@@ -59,7 +59,7 @@ class ShowMessage(QMainWindow):
 
         # Show main window
         self.setWindowTitle(self.title)
-        self.resize(400, 50)
+        common_pyqt5.auto_resize(self, 400, 50)
         common_pyqt5.center_window(self)
 
     def gen_main_frame(self):

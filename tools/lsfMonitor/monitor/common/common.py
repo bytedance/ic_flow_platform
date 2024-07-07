@@ -1,5 +1,5 @@
 import re
-import xlwt
+import pandas
 import datetime
 import subprocess
 
@@ -322,44 +322,14 @@ def get_job_range_dic(job_list):
     return job_range_dic
 
 
-def write_excel(excel_file, contents_list, specified_sheet_name='default'):
+def write_csv(csv_file, content_dic):
     """
-    Open Excel for write.
-    Input contents_list is a 2-dimentional list.
-
-    contents_list = [
-                     row_1_list,
-                     row_2_list,
-                     ...
-                    ]
+    Write csv with content_dic.
+    content_dic = {
+        'title_1': [column1_1, columne1_2, ...],
+        'title_2': [column2_1, columne2_2, ...],
+        ...
+    }
     """
-    workbook = xlwt.Workbook(encoding='utf-8')
-
-    # create worksheet
-    worksheet = workbook.add_sheet(specified_sheet_name)
-
-    # Set title style
-    title_style = xlwt.XFStyle()
-    font = xlwt.Font()
-    font.bold = True
-    title_style.font = font
-
-    # write excel
-    for (row, content_list) in enumerate(contents_list):
-        for (column, content_string) in enumerate(content_list):
-            if row == 0:
-                worksheet.write(row, column, content_string, title_style)
-            else:
-                worksheet.write(row, column, content_string)
-
-            # auto-width
-            column_width = len(str(content_string)) * 256
-
-            if column_width > worksheet.col(column).width:
-                if column_width > 65536:
-                    column_width = 65536
-                else:
-                    worksheet.col(column).width = column_width
-
-    # save excel
-    workbook.save(excel_file)
+    df = pandas.DataFrame(content_dic)
+    df.to_csv(csv_file, index=False)

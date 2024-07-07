@@ -539,11 +539,12 @@ def switch_expires_date(expires_date):
     return new_expires_date
 
 
-def check_long_runtime(start_time, second_threshold=259200):
+def switch_start_time_to_seconds(start_time):
     """
-    Runtime is more than second_threshold (default is 3 days), return True.
-    Runtime is less than second_threshold (default is 3 days), return False.
+    Switch start_time (on lmstat output) into seconds format from 1970.
     """
+    start_seconds = 0
+
     if start_time and (start_time != 'N/A') and (start_time != 'RESERVATION'):
         current_year = datetime.date.today().year
         start_time_with_year = str(current_year) + ' ' + str(start_time)
@@ -555,10 +556,21 @@ def check_long_runtime(start_time, second_threshold=259200):
             start_time_with_year = str(current_year) + ' ' + str(start_time)
             start_seconds = int(time.mktime(time.strptime(start_time_with_year, '%Y %a %m/%d %H:%M')))
 
-        if current_seconds - start_seconds >= second_threshold:
-            return True
+    return start_seconds
 
-    return False
+
+def check_long_runtime(start_time, second_threshold=259200):
+    """
+    Runtime is more than second_threshold (default is 3 days), return True.
+    Runtime is less than second_threshold (default is 3 days), return False.
+    """
+    current_seconds = int(time.time())
+    start_seconds = switch_start_time_to_seconds(start_time)
+
+    if current_seconds - start_seconds >= second_threshold:
+        return True
+    else:
+        return False
 
 
 def check_expire_date(expire_date, second_threshold=1209600):

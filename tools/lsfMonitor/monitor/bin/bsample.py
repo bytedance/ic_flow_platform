@@ -32,22 +32,28 @@ def read_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("-j", "--job",
-                        action="store_true", default=False,
+                        action="store_true",
+                        default=False,
                         help='Sample running job info with command "bjobs -u all -r -UF".')
     parser.add_argument("-q", "--queue",
-                        action="store_true", default=False,
+                        action="store_true",
+                        default=False,
                         help='Sample queue info with command "bqueues".')
     parser.add_argument("-H", "--host",
-                        action="store_true", default=False,
+                        action="store_true",
+                        default=False,
                         help='Sample host info with command "bhosts".')
     parser.add_argument("-l", "--load",
-                        action="store_true", default=False,
+                        action="store_true",
+                        default=False,
                         help='Sample host load (ut/tmp/swp/mem) info with command "lsload".')
     parser.add_argument("-u", "--user",
-                        action="store_true", default=False,
+                        action="store_true",
+                        default=False,
                         help='Sample user info with command "busers".')
     parser.add_argument("-U", "--utilization",
-                        action="store_true", default=False,
+                        action="store_true",
+                        default=False,
                         help='Sample utilization (slot/cpu/mem) info with command "lsload/bhosts/lshosts".')
 
     args = parser.parse_args()

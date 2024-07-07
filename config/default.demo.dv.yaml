@@ -64,35 +64,32 @@ VAR:
     DEFAULT_PATH: ${CWD}/${BLOCK}/${VERSION}_${BRANCH}
 TASK:
     initial:common:prepare_database:
-        BUILD:
-            PATH: ${CWD}
-            COMMAND: mkdir -p ${DEFAULT_PATH}/dv
         RUN:
             PATH: ${DEFAULT_PATH}/dv
-            COMMAND: cp -r ${DEMO_PATH}/project_setting/demo/dv/* ${DEFAULT_PATH}/dv
-    analysis:synopsys:dut:
+            COMMAND: mkdir -p ${DEFAULT_PATH}/dv;cp -r ${DEMO_PATH}/DV/* ${DEFAULT_PATH}/dv
+    analysis(RUN_AFTER=initial):synopsys:dut:
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
-            COMMAND: export PROJ_PATH=${DEFAULT_PATH}/dv;make dut
+            COMMAND:  source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make dut
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-    analysis:synopsys:uvm:
+    analysis(RUN_AFTER=initial):synopsys:uvm(RUN_AFTER=dut):
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
-            COMMAND: export PROJ_PATH=${DEFAULT_PATH}/dv;make uvm
+            COMMAND: source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make uvm
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-    analysis:synopsys:testbench:
+    analysis(RUN_AFTER=initial):synopsys:testbench(RUN_AFTER=uvm):
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
-            COMMAND: export PROJ_PATH=${DEFAULT_PATH}/dv;make testbench
+            COMMAND: source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make testbench
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-    elaboration:synopsys:elab:
+    elaboration(RUN_AFTER=analysis):synopsys:elab:
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
-            COMMAND: export PROJ_PATH=${DEFAULT_PATH}/dv;make elab
+            COMMAND: source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make elab
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-    simulation:synopsys:simv:
+    simulation(RUN_AFTER=elaboration):synopsys:simv:
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
-            COMMAND: export PROJ_PATH=${DEFAULT_PATH}/dv;make simv
+            COMMAND: source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make simv
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
                 

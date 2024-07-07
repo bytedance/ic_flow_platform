@@ -1,6 +1,7 @@
 import os
 import sys
 import stat
+import subprocess
 
 CWD = os.getcwd()
 PYTHON_PATH = os.path.dirname(os.path.abspath(sys.executable))
@@ -102,6 +103,19 @@ lmstat_bsub_command = ""
             sys.exit(1)
 
 
+def install_memPrediction():
+    print('>>> Install tool "memPrediction" ...')
+
+    command = 'cd memPrediction; ' + str(sys.executable) + ' install.py'
+    SP = subprocess.Popen(command, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (stdout, stderr) = SP.communicate()
+    return_code = SP.returncode
+
+    if return_code != 0:
+        print('*Error*: Failed on installing tool "memPrediction": ' + str(stdout, 'utf-8'))
+        sys.exit(1)
+
+
 ################
 # Main Process #
 ################
@@ -109,6 +123,7 @@ def main():
     check_python_version()
     gen_shell_tools()
     gen_config_file()
+    install_memPrediction()
 
     print('')
     print('Done, Please enjoy it.')

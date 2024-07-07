@@ -3,7 +3,7 @@
 #     key: value
 #
 # TASK:
-#     flow:vendor:task:
+#     flow(RUN_AFTER=):vendor:task(RUN_AFTER=):
 #         action:
 #             attribute: value
 #    
@@ -30,32 +30,21 @@
 ## Example ##
 # VAR:
 #     BSUB_QUEUE: ai_syn
-#     DEFAULT_PATH: ${CWD}/${BLOCK}/<VERSION>/<FLOW>/<VENDOR>/<BRANCH>
+#     DEFAULT_PATH: ${CWD}/${BLOCK}/${VERSION}/${FLOW}/${VENDOR}/${BRANCH}
 #
 # TASK:
-#     synthesis:synopsys:intopt:
-#         BUILD:
-#             PATH: $DEFAULT_PATH
-#             COMMAND: make build
-#         RUN:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: make run_initopt
-#             RUN_METHOD: bsub -q $BSUB_QUEUE -n 8 -R "rusage[mem=50000]"
-#         CHECK:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: ${IFP_INSTALL_PATH}/action/check/syn/synopsys/syn_synopsys.syn_dc.py -b ${BLOCK}
-#             VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report.py -i
-#             REPORT_FILE: file_check/file_check.rpt
-#         SUMMARIZE:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: ${IFP_INSTALL_PATH}/action/summary/collect_syn_qor.py
-#             VIEWER: /bin/soffice
-#             REPORT_FILE: syn_qor.xlsx
-#         POST_RUN:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: make post_run
-#             RUN_METHOD: bsub -q $BSUB_QUEUE -n 8 -R "rusage[mem=50000]"
-#         RELEASE:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: make release
+#    k_lib:cadence:setup:
+#        RUN:
+#            PATH: ${DEFAULT_PATH}
+#            COMMAND: ${LIBRARY_CHARACTERIZATION}/tools/gen_setup_file.py -i ${DEFAULT_PATH}/customized_ip_spec_${BLOCK}_${VERSION}_kg_${BRANCH}.xlsx -s kg
+#            RUN_METHOD: bsub -q ${BSUB_QUEUE}
+#        CHECK:
+#            PATH: ${DEFAULT_PATH}
+#            COMMAND: ${LIBRARY_CHARACTERIZATION}/tools/pre_check.py -i ${DEFAULT_PATH}/kitgen_setup.txt -s kg
+#            RUN_METHOD: bsub -q ${BSUB_QUEUE}
+#    k_lib:cadence:lpe(RUN_AFTER=setup):
+#        RUN:
+#            PATH: ${DEFAULT_PATH}
+#            COMMAND: ${LIBRARY_CHARACTERIZATION}/tools/gen_lpe.py -i ${DEFAULT_PATH}/kitgen_setup.txt -s kg
+#            RUN_METHOD: bsub -q ${BSUB_QUEUE}
 

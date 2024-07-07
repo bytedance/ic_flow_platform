@@ -1,0 +1,73 @@
+#!/usr/bin/bash
+mem_predict::append_alloc_memory_user() {
+    local LSB_SUB_JOB_DESCRIPTION_NEW="${LSB_SUB_JOB_DESCRIPTION}"
+
+    if [ -z "$LSB_SUB_JOB_DESCRIPTION_NEW" ]; then
+        LSB_SUB_JOB_DESCRIPTION_NEW="ALLOC_MEMORY_USER=$1"
+    fi
+
+    echo LSB_SUB_JOB_DESCRIPTION=\"$LSB_SUB_JOB_DESCRIPTION_NEW\" >> $LSB_SUB_MODIFY_FILE
+}
+
+
+mem_predict::memory_predict(){
+    # 从用户指定的Job参数中，获取用户为该Job指定的内存值，该值将被lsf自动转换为MB，
+    # 但如果用户配置了默认单位为GB，该值将被lsf自动转换为GB，这时我们需要将该值手动转换为MB
+    if [ ! -z "$LSB_SUB_RES_REQ" ] && [[ "$LSB_SUB_RES_REQ" =~ .+mem=([0-9.]+).+ ]]; then
+        return 0
+    else
+        JOB_REQUIRE_MEMORY=0
+    fi
+    
+    # 判断用户是否配置了LSF_UNIT_FOR_LIMITS，如果该参数不是MB，则将Job内存值转换为MB
+    USER_JOB_MEMORY_UNIT=$(grep LSF_UNIT_FOR_LIMITS $LSF_ENVDIR/lsf.conf | awk -F '=' '{print $2}' | tr '[a-z]' '[A-Z]')
+
+    if [ "$USER_JOB_MEMORY_UNIT" = GB ] || [ "$USER_JOB_MEMORY_UNIT" = G ]; then
+        JOB_REQUIRE_MEMORY=$(("$JOB_REQUIRE_MEMORY" * 1024))
+    fi
+
+    LSB_SUB3_CWD=${LSB_SUB3_CWD:-$(pwd)}
+    LSB_SUB_QUEUE=${LSB_SUB_QUEUE:-normal}
+    LSB_SUB_PROJECT_NAME=${LSB_SUB_PROJECT_NAME:-default}
+    LSB_SUB_JOB_NAME=${LSB_SUB_JOB_NAME:-None}
+    LSB_SUB_COMMAND_LINE=${LSB_SUB_COMMAND_LINE:-None}
+    USER=${USER:-None}
+    timestamp=$(date +"%a %b %d %H:%M:%S")
+
+    JOB_PREDICT_MEMORY_CONTENT=$(curl -m 3 http://$IP:$PORT/memPrediction -s -X POST --data-urlencode strated_time="$timestamp" --data-urlencode job_name="$LSB_SUB_PROJECT_NAME" --data-urlencode command="$LSB_SUB_COMMAND_LINE" --data-urlencode cwd="$LSB_SUB3_CWD" --data-urlencode user="$USER" --data-urlencode queue="$LSB_SUB_QUEUE" --data-urlencode project="$LSB_SUB_PROJECT_NAME")
+    exit_code=$?
+    JOB_PREDICT_MEMORY=$(echo "$JOB_PREDICT_MEMORY_CONTENT" | tail -n1)
+                            
+    if [ $exit_code -ne 0 ]; then
+       return 0
+    fi
+        
+    if ! [ $(grep '^[[:digit:]]*$' <<< "$JOB_PREDICT_MEMORY") ]; then
+        return 0
+    fi 
+        
+    if [ $JOB_REQUIRE_MEMORY -eq 0 ]; then
+        if [ "$USER_JOB_MEMORY_UNIT" = MB ] || [ "$USER_JOB_MEMORY_UNIT" = M ]; then
+            JOB_PREDICT_MEMORY_GB=$(echo "$JOB_PREDICT_MEMORY" | awk '{printf("%.5f", $1 / 1024)}')
+        else
+            JOB_PREDICT_MEMORY_GB=$JOB_PREDICT_MEMORY
+    fi
+
+    echo "memPrediction: The recommended rusage memory value is: ${JOB_PREDICT_MEMORY}${USER_JOB_MEMORY_UNIT}." >&2
+        result_rusage=$(echo $LSB_SUB_RES_REQ | grep "rusage")
+
+        if [[ "$result_rusage" != "" ]]; then
+            LSB_SUB_RES_REQ_NEW=${LSB_SUB_RES_REQ/rusage\[/rusage[mem=${JOB_PREDICT_MEMORY}:}
+        else
+            LSB_SUB_RES_REQ_NEW=$(echo "$LSB_SUB_RES_REQ $(echo "rusage[mem=$JOB_PREDICT_MEMORY]")" )
+        fi
+
+    echo LSB_SUB_RES_REQ=\"$LSB_SUB_RES_REQ_NEW\" >> $LSB_SUB_MODIFY_FILE
+    mem_predict::append_alloc_memory_user "memPrediction(reset=$JOB_PREDICT_MEMORY$USER_JOB_MEMORY_UNIT)"
+
+    fi
+} 
+
+unset LSB_SUB_RES_REQ
+. $LSB_SUB_PARM_FILE
+mem_predict::memory_predict || exit $LSB_SUB_ABORT_VALUE       

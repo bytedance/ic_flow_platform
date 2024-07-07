@@ -645,6 +645,7 @@ class TaskObject(QThread):
         self.is_checking_license = False
         self.rerun_command_before_view = None
         self.run_all_steps = False
+        self.skipped = False
 
     def receive_view_action(self, action_name):
         self.view_action = action_name
@@ -692,6 +693,7 @@ class TaskObject(QThread):
         self.update_debug_info_signal.emit(self)
 
     def launch(self):
+
         if self.action == common.action.kill:
             pass
         # If pre-task is A|B for C, must avoid A and B emit C to run twice
@@ -789,14 +791,15 @@ class TaskObject(QThread):
                 run_method = run_method + ' -I'
 
         if re.search('xterm', run_method) and (not re.search('-T', run_method)):
-          run_method = re.sub(r'xterm', f'xterm -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"', run_method)
+            run_method = re.sub(r'xterm', f'xterm -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"', run_method)
 
         return run_method
 
     def check_license(self):
 
         license_check_result = True
-        run_action = self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(common.action.run.upper(), None)
+        run_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(common.action.run.upper(), None),
+                                     {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'VENDOR': self.vendor, 'BRANCH': self.branch, 'TASK': self.task})
 
         if not run_action:
             return license_check_result
@@ -815,12 +818,12 @@ class TaskObject(QThread):
             if len(list(required_feature.keys())) > 0:
 
                 self.msg_signal.emit({'message': '*Info*: Check required license {} for {} {} {} {} {} {}'.format(', '.join(list(required_feature.keys())),
-                                                                                                                    self.block,
-                                                                                                                    self.version,
-                                                                                                                    self.flow,
-                                                                                                                    self.vendor,
-                                                                                                                    self.branch,
-                                                                                                                    self.task),
+                                                                                                                  self.block,
+                                                                                                                  self.version,
+                                                                                                                  self.flow,
+                                                                                                                  self.vendor,
+                                                                                                                  self.branch,
+                                                                                                                  self.task),
                                       'color': 'black'})
 
                 run_method = self.get_run_method(run_action)
@@ -846,15 +849,15 @@ class TaskObject(QThread):
                         pass
                     else:
                         self.msg_signal.emit({'message': '*Info*: waiting for {} (Required : {}, Total issued : {}, Total in used : {}) for {} {} {} {} {} {}'.format(specified_feature,
-                                                                                                                                                                        required_feature[specified_feature],
-                                                                                                                                                                        total_issued,
-                                                                                                                                                                        total_in_use,
-                                                                                                                                                                        self.block,
-                                                                                                                                                                        self.version,
-                                                                                                                                                                        self.flow,
-                                                                                                                                                                        self.vendor,
-                                                                                                                                                                        self.branch,
-                                                                                                                                                                        self.task),
+                                                                                                                                                                      required_feature[specified_feature],
+                                                                                                                                                                      total_issued,
+                                                                                                                                                                      total_in_use,
+                                                                                                                                                                      self.block,
+                                                                                                                                                                      self.version,
+                                                                                                                                                                      self.flow,
+                                                                                                                                                                      self.vendor,
+                                                                                                                                                                      self.branch,
+                                                                                                                                                                      self.task),
                                               'color': 'black'})
                         license_check_result = False
                         break
@@ -865,6 +868,21 @@ class TaskObject(QThread):
 
         return license_check_result
 
+    def expand_var(self, action_dict, task_dict):
+        if not action_dict:
+            return None
+
+        new_action = {}
+        ifp_var_dic = {}
+
+        for attr in self.ifp_obj.config_obj.var_dic.keys():
+            ifp_var_dic[attr] = common.expand_var(self.ifp_obj.config_obj.var_dic[attr], ifp_var_dic=self.ifp_obj.config_obj.var_dic, **task_dict)
+
+        for attr in action_dict.keys():
+            new_action[attr] = common.expand_var(action_dict[attr], ifp_var_dic=ifp_var_dic, **task_dict)
+
+        return new_action
+
     def execute_action(self, action):
         """
         Execute action for BUILD/RUN/CHECK/SUMMARIZE/RELEASE
@@ -874,7 +892,8 @@ class TaskObject(QThread):
         if action == common.action.kill:
             return
 
-        run_action = self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(action.upper(), None)
+        run_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(action.upper(), None),
+                                     {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'VENDOR': self.vendor, 'BRANCH': self.branch, 'TASK': self.task})
 
         self.status = None
 
@@ -884,6 +903,12 @@ class TaskObject(QThread):
 
         self.update_debug_info_signal.emit(self)
 
+        if self.skipped:
+            self.status = '{} {}'.format(action, common.status.skipped)
+            self.update_status_signal.emit(self, action, self.status)
+            self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Job', '')
+            return
+
         if (not run_action) or (not run_action.get('COMMAND')):
             self.status = '{} {}'.format(action, common.status.undefined)
         else:
@@ -891,17 +916,7 @@ class TaskObject(QThread):
             self.status = common.status_ing[action]
             self.update_status_signal.emit(self, self.action, self.status)
             self.update_debug_info_signal.emit(self)
-            self.msg_signal.emit({'message': '*Info*: {} {} "{}" under {} for {} {} {} {} {} {}\n'.format(self.status,
-                                                                                                          run_method,
-                                                                                                          run_action['COMMAND'],
-                                                                                                          run_action['PATH'],
-                                                                                                          self.block,
-                                                                                                          self.version,
-                                                                                                          self.flow,
-                                                                                                          self.vendor,
-                                                                                                          self.branch,
-                                                                                                          self.task),
-                                  'color': 'black'})
+            self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s : %s "%s"' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, self.status, run_method, run_action['COMMAND']), 'color': 'black'})
 
             # Get command
             command = run_action['COMMAND']
@@ -945,7 +960,8 @@ class TaskObject(QThread):
                         time.sleep(1)
                 else:
                     self.job_id = 'submit fail'
-                    self.msg_signal.emit({'message': 'Submit fail for {}, please check command {}'.format(self.task, command) + str(self.task) + '.', 'color': 'red'})
+                    self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s submit fail : %s "%s"' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, action, run_method, run_action['COMMAND']),
+                                          'color': 'red'})
 
             else:
                 process = common.spawn_process(command)
@@ -969,11 +985,11 @@ class TaskObject(QThread):
             else:
                 if return_code == 0:
                     self.status = '{} {}'.format(action, common.status.passed)
-                    self.msg_signal.emit({'message': '{} done for {} {} {} {} {} {}\n'.format(action, self.block, self.version, self.flow, self.vendor, self.branch, self.task), 'color': 'black'})
+                    self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s done' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, action), 'color': 'green'})
                 else:
                     self.status = '{} {}'.format(action, common.status.failed)
-                    self.msg_signal.emit({'message': '{} failed for {} {} {} {} {} {}.\n{}'.format(action, self.block, self.version, self.flow, self.vendor, self.branch, self.task, stdout + stderr), 'color': 'red'})
-                    self.msg_signal.emit({'message': 'You can press the Xterm button to debug', 'color': 'red'})
+                    self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s failed: %s "%s"' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, action, run_method, run_action['COMMAND']), 'color': 'red'})
+                    self.msg_signal.emit({'message': stderr, 'color': 'red'})
 
             if action in [common.action.check, common.action.check_view]:
                 self.check_status = self.status
@@ -986,9 +1002,8 @@ class TaskObject(QThread):
         """
         Manage action for BUILD/RUN/CHECK/SUMMARIZE/RELEASE
         """
-
         # Check license for RUN action
-        if self.action in [common.action.run]:
+        if self.action in [common.action.run] and not self.skipped:
             if not self.check_license():
                 self.current_formula_id = None
                 self.current_formula = None
@@ -998,7 +1013,7 @@ class TaskObject(QThread):
         if not self.action:
             return
 
-        if self.run_all_steps:
+        if self.run_all_steps and not self.skipped:
             self.execute_action(common.action.build)
 
         # Execute action
@@ -1009,8 +1024,10 @@ class TaskObject(QThread):
         if self.action == common.action.run or (self.action == common.action.kill and self.killed_action == common.action.run):
 
             # Force execute CHECK after RUN
-            if self.action == common.action.run:
-                check_action = self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(common.action.check.upper(), None)
+            if self.action == common.action.run and not self.skipped:
+                check_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(common.action.check.upper(), None),
+                                               {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'VENDOR': self.vendor, 'BRANCH': self.branch, 'TASK': self.task})
+
                 if (not check_action) or (not check_action.get('COMMAND')):
                     pass
                 else:
@@ -1026,7 +1043,9 @@ class TaskObject(QThread):
                         all_finished_flag = False
 
             # If status is PASSED or user set ignore fail tasks, set TRUE for dependency state in self.child
-            if (self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed)]) or self.ifp_obj.ignore_fail:
+            if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed), '{} {}'.format(common.action.run, common.status.skipped)] or \
+                    (self.ifp_obj.ignore_fail and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
+
                 if all_finished_flag:
                     self.action = None
 
@@ -1072,8 +1091,9 @@ class TaskObject(QThread):
         self.job_id = None
 
         # If user defined run_all_steps and all run times have finished which means RUN action has finished and need to execute CHECK and SUMMARIZE
-        if self.run_all_steps and all_finished_flag:
-            if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed)] or self.ifp_obj.ignore_fail:
+        if self.run_all_steps and all_finished_flag and not self.skipped:
+            if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed)] or \
+                    (self.ifp_obj.ignore_fail and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
                 self.action = common.action.summarize
                 self.execute_action(common.action.summarize)
                 self.action = None
@@ -1088,7 +1108,7 @@ class TaskObject(QThread):
         """
 
         self.status = common.status.killing
-        self.msg_signal.emit({'message': '{} {} {} {} {} {} {}'.format(common.status.killing, self.block, self.version, self.flow, self.vendor, self.branch, self.task), 'color': 'black'})
+        self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] is %s' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, common.status.killing), 'color': 'red'})
         self.update_status_signal.emit(self, self.killed_action, common.status.killing)
 
         while self.killed_action and not self.job_id:
@@ -1102,7 +1122,7 @@ class TaskObject(QThread):
 
             try:
                 common.kill_pid_tree(jobid)
-            except Exception as error:
+            except Exception:
                 pass
 
         self.status = common.status.killed
@@ -1113,7 +1133,9 @@ class TaskObject(QThread):
             self.execute_action(self.rerun_command_before_view)
 
         # Run viewer command under task check directory.
-        action = self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(self.view_action.split()[0].upper(), None)
+        action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(self.view_action.split()[0].upper(), None),
+                                 {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'VENDOR': self.vendor, 'BRANCH': self.branch, 'TASK': self.task})
+
         command = ''
 
         if action:
@@ -1145,7 +1167,10 @@ class TaskObject(QThread):
     def set_cancel_for_child_tasks(self):
         for child_task in self.child:
             if child_task.parent[self] == 'False':
-                child_task.parent[self] = 'Cancel'
+                if child_task.action:
+                    child_task.parent[self] = 'Cancel'
+                else:
+                    child_task.parent[self] = 'True'
                 self.update_debug_info_signal.emit(child_task)
 
     def print_output(self, block, version, flow, vendor, branch, task, result, output):

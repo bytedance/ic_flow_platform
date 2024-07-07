@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 ################################
-# File Name   : config.py
-# Author      : qushengrui
+# File Name   : parse_config.py
+# Author      : jingfuyi
 # Created On  : 2022-05-27 13:48:57
 # Description :
 ################################
+import copy
 import os
 import re
 import sys
 import yaml
 import pickle
-import copy
-from string import Template
 
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 import common
@@ -68,7 +67,8 @@ class Config:
     def __init__(self, config_file):
         self.get_config_obj(config_file)
 
-    def parse_config_file(self, config_file, kind='user'):
+    @staticmethod
+    def parse_config_file(config_file, kind='user'):
         config_dic = {}
 
         if os.path.exists(config_file):
@@ -91,32 +91,14 @@ class Config:
                     if ('BLOCK' not in config_dic) or (not config_dic['BLOCK']):
                         config_dic['BLOCK'] = {}
 
-        return (config_dic)
-
-    def expand_var(self, setting_str, **kwargs):
-        """
-        Expand variable settings on 'setting_str'.
-        """
-        if type(setting_str) is str:
-            if setting_str.find('$') >= 0:
-                # Merge IFP_INSTALL_PATH/CWD and **kwargs into var_dic.
-                var_dic = copy.deepcopy(self.var_dic)
-                var_dic.update(**kwargs)
-
-                # Replease variables with var_dic on setting_str.
-                try:
-                    tpl = Template(setting_str)
-                    setting_str = tpl.substitute(var_dic)
-                except Exception as warning:
-                    common.print_warning('*Warning*: Failed on expanding variable for "' + str(setting_str) + '" : ' + str(warning))
-
-        return (setting_str)
+        return config_dic
 
     def get_config_obj(self, config_file):
         # self.PROJECT saves project information from user config file.
         self.PROJECT = ''
         self.GROUP = ''
         self.default_config_file = ''
+        self.api_yaml = ''
         # self.var_dic saves all VAR settings from user config file.
         self.var_dic = {'IFP_INSTALL_PATH': os.environ['IFP_INSTALL_PATH'],
                         'CWD': CWD}
@@ -138,11 +120,19 @@ class Config:
             if 'DEFAULT_YAML' in user_config_dic:
                 self.default_config_file = user_config_dic['DEFAULT_YAML']
 
+            if 'API_YAML' in user_config_dic:
+                self.api_yaml = user_config_dic['API_YAML']
+
         # Parse default config file.
         if self.default_config_file:
             pass
         else:
             self.default_config_file = common.get_default_yaml_path(self.PROJECT, self.GROUP)
+
+        if self.api_yaml:
+            pass
+        else:
+            self.api_yaml = common.get_default_yaml_path(self.PROJECT, self.GROUP, key_word='api')
 
         # self.var_dic saves all VAR settings from env VAR
         self.env_dic = common.get_env_dic(project=self.PROJECT, group=self.GROUP)
@@ -151,6 +141,7 @@ class Config:
         default_config_dic = {}
         if os.path.exists(self.default_config_file):
             default_config_dic = self.parse_config_file(self.default_config_file, kind='default')
+            default_config_dic = self.filter_dependency(default_config_dic)
 
             if ('VAR' in default_config_dic) and isinstance(default_config_dic['VAR'], dict):
                 for (key, value) in default_config_dic['VAR'].items():
@@ -168,49 +159,30 @@ class Config:
 
             if ('BLOCK' in user_config_dic) and user_config_dic['BLOCK']:
                 for block in user_config_dic['BLOCK'].keys():
-                    block_expand = self.expand_var(block)
-                    block_obj = Block(block_expand)
+                    block_obj = Block(block)
 
                     if user_config_dic['BLOCK'][block]:
                         for version in user_config_dic['BLOCK'][block].keys():
-                            version_expand = self.expand_var(version)
-                            version_obj = Version(version_expand)
+                            version_obj = Version(version)
                             flows = []
 
                             if user_config_dic['BLOCK'][block][version]:
                                 for flow in user_config_dic['BLOCK'][block][version].keys():
-                                    flow_expand = self.expand_var(flow)
                                     flows.append(flow)
-                                    flow_obj = Flow(flow_expand)
+                                    flow_obj = Flow(flow)
 
                                     if user_config_dic['BLOCK'][block][version][flow]:
                                         for vendor in user_config_dic['BLOCK'][block][version][flow].keys():
-                                            vendor_expand = self.expand_var(vendor)
-                                            vendor_obj = Vendor(vendor_expand)
+                                            vendor_obj = Vendor(vendor)
 
                                             if user_config_dic['BLOCK'][block][version][flow][vendor]:
                                                 for branch in user_config_dic['BLOCK'][block][version][flow][vendor].keys():
-                                                    branch_expand = self.expand_var(branch)
-                                                    branch_obj = Branch(branch_expand)
+                                                    branch_obj = Branch(branch)
 
                                                     if user_config_dic['BLOCK'][block][version][flow][vendor][branch]:
                                                         for task in user_config_dic['BLOCK'][block][version][flow][vendor][branch].keys():
-                                                            task_expand = self.expand_var(task)
-                                                            task_obj = Task(task_expand)
+                                                            task_obj = Task(task)
                                                             user_task_dic = user_config_dic['BLOCK'][block][version][flow][vendor][branch][task]
-
-                                                            # Get task_var_dic, which contains variables from ifp.cfg.yaml/default.yaml and task BLOCK/VERSION/FLOW/VENDOR/BRACH/TASK information.
-                                                            task_var_dic = {'BLOCK': block_obj.NAME,
-                                                                            'VERSION': version_obj.NAME,
-                                                                            'FLOW': flow_obj.NAME,
-                                                                            'VENDOR': vendor_obj.NAME,
-                                                                            'BRANCH': branch_obj.NAME,
-                                                                            'TASK': task_obj.NAME}
-
-                                                            for (key, value) in self.var_dic.items():
-                                                                if isinstance(value, str):
-                                                                    task_var_dic[key] = self.expand_var(value, **task_var_dic)
-
                                                             # Update task_obj task attribute with default config file settings.
                                                             if default_config_dic:
                                                                 # Get task information from default.yaml.
@@ -226,7 +198,7 @@ class Config:
                                                                                     for action_attr in ['XTERM_COMMAND', 'PATH', 'COMMAND', 'RUN_METHOD', 'VIEWER', 'REPORT_FILE', 'REQUIRED_LICENSE']:
                                                                                         if (action_attr in default_action_dic) and (default_action_dic[action_attr]):
                                                                                             task_obj.ACTION.setdefault(action, {})
-                                                                                            task_obj.ACTION[action][action_attr] = self.expand_var(default_action_dic[action_attr], **task_var_dic)
+                                                                                            task_obj.ACTION[action][action_attr] = default_action_dic[action_attr]
                                                                             else:
                                                                                 common.print_warning('*Warning*: invalid action "' + str(action) + '" on ' + str(self.default_config_file) + '.')
 
@@ -237,7 +209,7 @@ class Config:
                                                                         for action_attr in ['XTERM_COMMAND', 'PATH', 'COMMAND', 'RUN_METHOD', 'VIEWER', 'REPORT_FILE', 'REQUIRED_LICENSE']:
                                                                             if (action_attr in user_task_dic[action]) and user_task_dic[action][action_attr]:
                                                                                 task_obj.ACTION.setdefault(action, {})
-                                                                                task_obj.ACTION[action][action_attr] = self.expand_var(user_task_dic[action][action_attr], **task_var_dic)
+                                                                                task_obj.ACTION[action][action_attr] = user_task_dic[action][action_attr]
                                                                     else:
                                                                         common.print_warning('*Warning*: invalid action "' + str(action) + '" on ' + str(config_file) + '.')
 
@@ -267,11 +239,11 @@ class Config:
                                                                             common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "COMMAND" is not defined.')
 
                                                                     # For 'CHECK' and 'SUMMARY', make sure 'VIEWER' and 'REPORT_FILE' are defined.
-                                                                    if action in ['CHECK', 'SUMMARY']:
-                                                                        if ('VIEWER' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['VIEWER']):
-                                                                            common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "VIEWER" is not defined.')
-                                                                        elif ('REPORT_FILE' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['REPORT_FILE']):
-                                                                            common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "REPORT_FILE" is not defined.')
+                                                                    # if action in ['CHECK', 'SUMMARY']:
+                                                                    #     if ('VIEWER' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['VIEWER']):
+                                                                    #         common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "VIEWER" is not defined.')
+                                                                    #     elif ('REPORT_FILE' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['REPORT_FILE']):
+                                                                    #         common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "REPORT_FILE" is not defined.')
 
                                                             # Update self.taks_dic.
                                                             self.task_dic.update({'{} {} {} {} {} {}'.format(block_obj.NAME,
@@ -292,6 +264,21 @@ class Config:
                                 block_obj.update_field(version_obj)
 
                         self.block_dic.update({block: block_obj})
+
+    def filter_dependency(self, default_config_dic):
+        new_default_config_dic = copy.deepcopy(default_config_dic)
+
+        if 'TASK' in default_config_dic.keys():
+            for item in default_config_dic['TASK'].keys():
+                if re.search(r'\(RUN_AFTER=(.*)\)', item):
+                    flow = re.sub(r'\(RUN_AFTER=(.*)\)', '', item.split(':')[0])
+                    vendor = item.split(':')[1]
+                    task = re.sub(r'\(RUN_AFTER=(.*)\)', '', item.split(':')[2])
+                    new_item = '%s:%s:%s' % (flow, vendor, task)
+                    new_default_config_dic['TASK'][new_item] = copy.deepcopy(new_default_config_dic['TASK'][item])
+                    del new_default_config_dic['TASK'][item]
+
+        return new_default_config_dic
 
     @property
     def main_table_info_list(self):

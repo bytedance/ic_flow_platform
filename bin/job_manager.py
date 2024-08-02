@@ -11,6 +11,7 @@ import re
 import sys
 import threading
 import time
+import random
 
 from PyQt5.QtCore import pyqtSignal, QThread, Qt, QTimer
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QColor, QBrush
@@ -953,7 +954,7 @@ class TaskObject(QThread):
 
                             if job_status in ["RUN", 'EXIT']:
                                 if action in [common.action.run]:
-                                    self.set_run_time_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Runtime', "00:00:00")
+                                    self.set_run_time_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
 
                                 break
 

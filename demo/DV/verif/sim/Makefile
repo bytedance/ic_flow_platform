@@ -98,23 +98,28 @@ all_xprop : comp  elab_xprop simv
 comp : dut uvm testbench
 
 dut :
+	sleep 10;\
 	vlogan ${CMP_OPTS} \
 	-f ${PROJ_PATH}/design/dut.f \
 	-l dut.log
 
 uvm : 
+	sleep 10;\
 	vlogan  ${CMP_OPTS} 
 
 testbench :
+	sleep 5;\
 	vlogan ${CMP_OPTS} \
 	-f ${PROJ_PATH}/verif/tb/tb.f \
 	-l tb.log
 
 elab :
+	sleep 5;\
 	vcs  ${ELAB_OPTS} -top tb_top -o simv -l elab.log
 
 
 simv : 
+	sleep 20;\
 	./simv ${SIM_OPTS}  +UVM_TESTNAME=${TEST_NAME} +svt_enable_pa=FSDB  -l sim.log +factor=1 +NO_EQ +TEST_TYPE=${TEST_TYPE}
 
 

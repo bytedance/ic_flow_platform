@@ -107,8 +107,8 @@ class GenScripts():
 
                 # Check, "MESSAGE" must be empty with "check_file_exists" or "review_file", cannot be empty on other condition.
                 if (item_dic['TYPE'] == 'check_file_exist') or (item_dic['TYPE'] == 'review_file'):
-                    if item_dic['MESSAGE']:
-                        print('*Error*: for below line, MESSAGE must be empty.')
+                    if item_dic['MESSAGE'] or item_dic['WAIVE_MESSAGE']:
+                        print('*Error*: for below line, MESSAGE and WAIVE_MESSAGE must be empty.')
                         print('         ' + str(' | '.join(item_dic.values())))
                         sys.exit(1)
                 else:
@@ -130,7 +130,7 @@ class GenScripts():
             print('*Error*: Cannot include "," on FILE line.')
             sys.exit(1)
 
-        file_list = file_string.split()
+        file_list = [item.strip() for item in file_string.split('\n') if item.strip()]
 
         for (i, file_name) in enumerate(file_list):
             if re.search('<TASK>', file_name) or re.search('<BLOCK>', file_name) or re.search('<CORNER>', file_name):
@@ -170,20 +170,32 @@ class GenScripts():
 
             return (files)
 
-    def process_message_setting(self, message_string):
+    def process_message_setting(self, message_string, waive_string):
         """
-        Read in message strings, return message_list.
+        Read in message/waive strings, return message_list/waive_message_list.
         """
         message_list = []
+        waive_message_list = []
 
         if not re.match(r'^\s*$', message_string):
-            message_string_list = message_string.split(',')
+            message_string_list = message_string.split('\n')
 
             for item in message_string_list:
                 item = item.strip()
-                message_list.append(item)
 
-        return (message_list)
+                if item:
+                    message_list.append(item)
+
+        if not re.match(r'^\s*$', waive_string):
+            waive_string_list = waive_string.split('\n')
+
+            for item in waive_string_list:
+                item = item.strip()
+
+                if item:
+                    waive_message_list.append(item)
+
+        return (message_list, waive_message_list)
 
     def write_task_script(self, task):
         """
@@ -236,9 +248,13 @@ def file_check(block, task, corner):
 
                 files = self.process_file_setting(task, item_dic['FILE'], 'file_list')
                 FL.write('    file_list = [' + str(files) + ']\n')
-                message_list = self.process_message_setting(item_dic['MESSAGE'])
+                (message_list, waive_message_list) = self.process_message_setting(item_dic['MESSAGE'], item_dic['WAIVE_MESSAGE'])
 
-                if message_list:
+                if message_list and waive_message_list:
+                    FL.write('    message_list = ' + str(message_list) + '\n')
+                    FL.write('    waive_message_list = ' + str(waive_message_list) + '\n')
+                    FL.write('    my_file_check.' + str(item_dic['TYPE']) + '(description, file_list, message_list, waive_message_list)\n')
+                elif message_list:
                     FL.write('    message_list = ' + str(message_list) + '\n')
                     FL.write('    my_file_check.' + str(item_dic['TYPE']) + '(description, file_list, message_list)\n')
                 else:

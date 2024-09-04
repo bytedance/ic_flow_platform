@@ -1,14 +1,15 @@
-# IC Flow Platform V1.3 (2024.07.15)
+# IC Flow Platform V1.3.1 (2024.09.04)
 
 ## Update history
 ***
-|Version |Date            | Update content      |
-| :-----------| :-----------| :-----------------  |
-| V1.3   |(2024.07.15)    | Brand new user configuration interface and API function to support customized daily work scenarios |
-| V1.2   |(2023.12.31)    | Support more complex logic control and centrally manage user settings |
-| V1.1.1 |(2023.08.31)    | Optimize menu bar functions and interface operations |
-| V1.1   |(2023.07.14)    | Fix some operation bugs and optimize CONFIG TAB operation mode |
-| V1.0   |(2023.02.02)    | Open source and the first official version is released |
+| Version | Date         | Update content                                                                                     |
+|:--------|:-------------|:---------------------------------------------------------------------------------------------------|
+| V1.3.1  | (2024.09.04) | Support edit and export default.yaml / api.yaml from GUI<br/> Add syn demo case in user guidance   |
+| V1.3    | (2024.07.15) | Brand new user configuration interface and API function to support customized daily work scenarios |
+| V1.2    | (2023.12.31) | Support more complex logic control and centrally manage user settings                              |
+| V1.1.1  | (2023.08.31) | Optimize menu bar functions and interface operations                                               |
+| V1.1    | (2023.07.14) | Fix some operation bugs and optimize CONFIG TAB operation mode                                     |
+| V1.0    | (2023.02.02) | Open source and the first official version is released                                             |
 
 
 ## Introduction

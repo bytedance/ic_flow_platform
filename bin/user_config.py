@@ -5,23 +5,25 @@
 # Created On  : 2022-09-20 17:46:15
 # Description :
 ################################
-import copy
+
 import os
 import re
-import time
-import yaml
 import sys
-import functools
-import graphviz
+import yaml
+import time
+import copy
 import shutil
-import datetime
 import getpass
+import datetime
+import graphviz
+import functools
+from typing import Tuple
 from screeninfo import get_monitors
 
 from PyQt5.QtWidgets import QWidget, QMainWindow, QAction, QPushButton, QLabel, QHeaderView, QVBoxLayout, QHBoxLayout, QLineEdit, QTableView, QAbstractItemView, QMenu, QToolTip, QDesktopWidget, QMessageBox, QComboBox, QFileDialog, QApplication, QGridLayout, QTreeWidget, QTreeWidgetItem, \
-    QTableWidget, QTableWidgetItem, QCompleter, QCheckBox, QStyledItemDelegate
+    QTableWidget, QTableWidgetItem, QCompleter, QCheckBox, QStyledItemDelegate, QFormLayout, QScrollArea
 from PyQt5.QtGui import QBrush, QFont, QColor, QStandardItem, QStandardItemModel, QCursor, QPalette, QPixmap
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QSize
 
 import common
 import common_pyqt5
@@ -1299,7 +1301,6 @@ class UserConfig(QMainWindow):
     def remove_dependency_specific_item(dependency, remove_item):
         if dependency.find(remove_item) == -1:
             new_dependency = dependency
-            print("dependecy item:", dependency, "remove:", remove_item)
         else:
             first_dependency_list = dependency.split(',')
             new_first_dependency_list = []
@@ -1900,23 +1901,25 @@ class WindowForAddItems(QMainWindow):
                 Dialog('Error', "You add one repeated task %s" % task, QMessageBox.Critical)
                 return
 
-            if self.auto_import_tasks:
-                if block not in self.dependency_dic:
-                    self.dependency_dic.setdefault(block, {})
+            if block not in self.dependency_dic:
+                self.dependency_dic.setdefault(block, {})
 
-                if version not in self.dependency_dic[block]:
-                    self.dependency_dic[block].setdefault(version, {})
-                    self.dependency_dic[block][version].setdefault('flow_dependency', {})
-                    self.dependency_dic[block][version].setdefault('task_dependency', {})
+            if version not in self.dependency_dic[block]:
+                self.dependency_dic[block].setdefault(version, {})
+                self.dependency_dic[block][version].setdefault('flow_dependency', {})
+                self.dependency_dic[block][version].setdefault('task_dependency', {})
 
-                if flow not in self.dependency_dic[block][version]['flow_dependency']:
-                    self.dependency_dic[block][version]['task_dependency'].setdefault(flow, {})
+            if flow not in self.dependency_dic[block][version]['flow_dependency']:
+                self.dependency_dic[block][version]['task_dependency'].setdefault(flow, {})
 
-                if vendor not in self.dependency_dic[block][version]['task_dependency'][flow]:
-                    self.dependency_dic[block][version]['task_dependency'][flow].setdefault(vendor, {})
+            if vendor not in self.dependency_dic[block][version]['task_dependency'][flow]:
+                self.dependency_dic[block][version]['task_dependency'][flow].setdefault(vendor, {})
 
-                if branch not in self.dependency_dic[block][version]['task_dependency'][flow][vendor]:
-                    self.dependency_dic[block][version]['task_dependency'][flow][vendor].setdefault(branch, {})
+            if branch not in self.dependency_dic[block][version]['task_dependency'][flow][vendor]:
+                self.dependency_dic[block][version]['task_dependency'][flow][vendor].setdefault(branch, {})
+
+            if task not in self.dependency_dic[block][version]['task_dependency'][flow][vendor][branch]:
+                self.dependency_dic[block][version]['task_dependency'][flow][vendor][branch].setdefault(task, '')
 
             if self.item == 'task':
                 all_tasks = list(self.user_input['BLOCK'][block][version][flow][vendor][branch].keys())
@@ -1928,7 +1931,9 @@ class WindowForAddItems(QMainWindow):
                     self.user_input['BLOCK'][block][version][flow][vendor][branch][k] = ''
 
                 # Update dependency
-                if self.auto_import_tasks:
+                if not self.auto_import_tasks:
+                    self.dependency_dic[block][version]['task_dependency'][flow][vendor][branch][task] = ''
+                else:
                     if task not in self.dependency_dic[block][version]['task_dependency'][flow][vendor][branch]:
                         try:
                             dependency = self.default_dependency_dic['task_dependency'][flow][vendor][task]
@@ -1951,16 +1956,6 @@ class WindowForAddItems(QMainWindow):
                         valid_dependency = self.clean_dependency(item_list=flow_list, item=flow, dependency=self.default_dependency_dic['flow_dependency'][flow])
                         self.dependency_dic[block][version]['flow_dependency'][flow] = valid_dependency
                         self.dependency_dic[block][version]['task_dependency'].setdefault(flow, {})
-
-                    if task not in self.dependency_dic[block][version]['task_dependency'][flow][vendor][branch]:
-                        try:
-                            dependency = self.default_dependency_dic['task_dependency'][flow][vendor][task]
-                        except Exception:
-                            dependency = ''
-
-                        task_list = list(self.user_input['BLOCK'][block][version][flow][vendor][branch].keys())
-                        valid_dependency = self.clean_dependency(item_list=task_list, item=task, dependency=dependency)
-                        self.dependency_dic[block][version]['task_dependency'][flow][vendor][branch][task] = valid_dependency
 
                 self.user_input['BLOCK'][block][version][flow][vendor][branch][task] = ''
 
@@ -2862,6 +2857,7 @@ class WindowForDependency(QMainWindow):
         self.mode = mode
         self.modify_item_set = set()
         self.gui_enable_flag = True
+        self.current_table = None
         self.init_ui()
 
         self.update_flag = 'dependency'
@@ -2914,11 +2910,13 @@ class WindowForDependency(QMainWindow):
         self.tree.clicked.connect(self.generate_selection)
         self.main_layout.addWidget(self.tree, 1)
 
-        self.gen_main_tab()
+        self.gen_selection_button()
 
-        self.gen_dependency_chart(chart_name='flow_chart', dependency_dic=self.current_dependency_priority_dic['flow_dependency'])
-
-        self.current_table = self.tables['flow_dependency']
+        if 'task_dependency' in self.current_dependency_priority_dic and 'flow_dependency' in self.current_dependency_priority_dic:
+            self.gen_tree()
+            self.gen_tables()
+            self.gen_dependency_chart(chart_name='flow_chart', dependency_dic=self.current_dependency_priority_dic['flow_dependency'])
+            self.current_table = self.tables['flow_dependency']
 
         self.save_button = QPushButton('SAVE')
         self.save_button.clicked.connect(self.save)
@@ -2947,14 +2945,11 @@ class WindowForDependency(QMainWindow):
         self.top_layout.addWidget(self.button_widget, 2)
 
         center_window(self)
-        self.current_table.show()
+
+        if self.current_table:
+            self.current_table.show()
 
         return self
-
-    def gen_main_tab(self):
-        self.gen_selection_button()
-        self.gen_tree()
-        self.gen_tables()
 
     def gen_selection_button(self):
         """
@@ -3010,6 +3005,9 @@ class WindowForDependency(QMainWindow):
             flow_parent.setFont(0, QFont('Calibri', 10))
             flow_parent.setSelected(False)
             flow_parent.setExpanded(True)
+
+            if flow not in self.current_dependency_priority_dic['task_dependency']:
+                continue
 
             for vendor in list(self.current_dependency_priority_dic['task_dependency'][flow].keys()):
                 for branch in list(self.current_dependency_priority_dic['task_dependency'][flow][vendor].keys()):
@@ -4191,8 +4189,16 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
 
         if self.mode == 'user':
             for key, value in self.default_var.items():
-                if key in self.common_var_set:
-                    continue
+                value = str(value)
+
+                # if key in self.common_var_set:
+                #    continue
+
+                if key not in self.common_var_set:
+                    comment = 'Default variables set by admin,  can be edited for yourself but cannot be deleted'
+                else:
+                    comment = 'User redefined variables, different from default variable, it could be edited.'
+                    value = self.user_var[key]
 
                 key_item = QTableWidgetItem(key)
                 key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
@@ -4200,7 +4206,8 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
                 value_item = QTableWidgetItem(value)
 
                 if self.window == 'config':
-                    comment_item = QTableWidgetItem('Default variables set by admin,  can be edited for yourself but cannot be deleted')
+                    # comment_item = QTableWidgetItem('Default variables set by admin,  can be edited for yourself but cannot be deleted')
+                    comment_item = QTableWidgetItem(comment)
                     comment_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
                     comment_item.setForeground(QBrush(QColor(192, 192, 192)))
 
@@ -4210,6 +4217,8 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
                         key_item.setForeground(QBrush(QColor(125, 125, 125)))
                         value_item.setForeground(QBrush(QColor(125, 125, 125)))
                         comment_item = QTableWidgetItem('Modify BSUB_QUEUE in Setting -> Cluster Managerment')
+                        comment_item.setFlags(comment_item.flags() & ~Qt.ItemIsEditable)
+                        comment_item.setForeground(QBrush(QColor(192, 192, 192)))
 
                     self.table.setItem(row, 2, comment_item)
                 elif self.window == 'edit_task':
@@ -4220,6 +4229,10 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
                 row += 1
 
             for key, value in self.user_var.items():
+                if key in self.common_var_set:
+                    continue
+
+                value = str(value)
                 key_item = QTableWidgetItem(key)
                 value_item = QTableWidgetItem(value)
 
@@ -4230,7 +4243,7 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
                     value_item.setForeground(QBrush(QColor(125, 125, 125)))
                     comment_item = QTableWidgetItem('Modify BSUB_QUEUE in Setting -> Cluster Managerment')
                 else:
-                    comment_item = QTableWidgetItem('User customized variables, you can editable/added/deleted')
+                    comment_item = QTableWidgetItem('User customized variables, it could be edited/added/deleted')
 
                 comment_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
                 comment_item.setForeground(QBrush(QColor(192, 192, 192)))
@@ -4245,6 +4258,7 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
                 row += 1
         elif self.mode == 'advance':
             for key, value in self.default_var.items():
+                value = str(value)
                 key_item = QTableWidgetItem(key)
                 value_item = QTableWidgetItem(value)
                 comment_item = QTableWidgetItem('IFP Default Variables, editable/added/deleted for administrators')
@@ -4264,6 +4278,7 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
         self.main_layout.addWidget(self.table)
 
         env_dic = common.get_env_dic()
+        env_dic = {k: env_dic[k] for k in sorted(env_dic)}
         self.env_table.clear()
         self.env_table.setMouseTracking(True)
         self.env_table.setSortingEnabled(True)
@@ -4286,6 +4301,7 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
         self.env_table.setRowCount(len(env_dic.keys()))
 
         for key, value in env_dic.items():
+            value = str(value)
             key_item = QTableWidgetItem(key)
             key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
             key_item.setForeground(QBrush(QColor(125, 125, 125)))
@@ -4393,6 +4409,10 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
         self.save_button.setEnabled(True)
         self.update.emit(True, self.update_flag)
 
+    def return_table_dic(self):
+        self.read_table()
+        return self.table_dic
+
     def save(self):
         self.read_table()
         self.update.emit(False, self.update_flag)
@@ -4435,6 +4455,7 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
         self.table.itemChanged.connect(self.on_item_changes)
         self.save_button.setStyleSheet("")
         self.update.emit(False, self.update_flag)
+        self.save_button.setEnabled(False)
 
     def advance_mode(self):
         try:
@@ -4503,80 +4524,118 @@ class WindowForAPI(QMainWindow):
     def __init__(self, api_yaml=None):
         super().__init__()
 
+        self.gui_enable_signal = True
         self.api_dic = common.parse_user_api(api_yaml)
 
         self.title = 'API Setting'
         self.update_flag = 'API'
         self.user_api_yaml = os.path.join(common.get_user_ifp_config_path(), os.path.basename(api_yaml))
-        self.table_column_list = ['Enable', 'Tab', 'Project', 'Group', 'Label', 'Comment', 'Command']
-
-    def init_ui(self):
-        self.setWindowTitle(self.title)
+        self.api_item_list = ['Enable', 'Type', 'Label', 'Project', 'Group', 'Tab', 'Column', 'Path', 'Comment', 'Command',
+                              'Block Name', 'Version Name', 'Vendor Name', 'Branch Name', 'Flow Name', 'Task Name']
+        self.api_item_button_dic = {}
+        self.default_item_list = ['Enable', 'Type', 'Label', 'Project', 'Group']
+        # self.table_column_list = ['Enable', 'Type', 'Label', 'Project', 'Group']
+        self.table_column_list = ['Enable', 'Type', 'Label', 'Project', 'Group', 'Tab', 'Column', 'Path', 'Command', 'Comment', 'Task_name',
+                                  'Block_name', 'Vendor_name', 'Flow_name', 'Version_name', 'Block_name']
+        self.column_button_count = 9
 
         self.top_widget = QWidget()
         self.top_layout = QVBoxLayout()
-        self.top_widget.setLayout(self.top_layout)
-        self.setCentralWidget(self.top_widget)
-
         self.main_widget = QWidget()
         self.main_layout = QVBoxLayout()
-        self.main_widget.setLayout(self.main_layout)
-        self.main_layout.setAlignment(Qt.AlignLeft)
-
-        self.table = QTableWidget()
-        self.main_label = QLabel()
-        self.api_table = QTableWidget()
-        self.api_label = QLabel()
-
-        self.gen_main_tab()
-
-        self.save_button = QPushButton('SAVE')
-        self.save_button.clicked.connect(self.save)
-        self.save_button.setEnabled(False)
-        self.reset_button = QPushButton('RESET')
-        self.reset_button.clicked.connect(self.reset)
-
         self.button_widget = QWidget()
         self.button_layout = QHBoxLayout()
 
-        self.button_widget.setLayout(self.button_layout)
+        self.table = QTableWidget()
+        self.table_button = QWidget()
+        self.save_button = QPushButton('SAVE')
+        self.reset_button = QPushButton('RESET')
 
-        self.button_layout.addStretch(1)
-        self.button_layout.addWidget(self.save_button)
-        self.button_layout.addWidget(self.reset_button)
+        self.api_edit_window = None
 
+    def init_ui(self):
+        # Top Layout
+        self.setWindowTitle(self.title)
+        self.top_widget.setLayout(self.top_layout)
+        self.setCentralWidget(self.top_widget)
         self.top_layout.addWidget(self.main_widget)
         self.top_layout.addWidget(self.button_widget)
         self.top_layout.setStretch(0, 10)
         self.top_layout.setStretch(1, 1)
 
-        center_window(self)
+        # Main Layout
+        self.main_widget.setLayout(self.main_layout)
+        self.main_layout.setAlignment(Qt.AlignLeft)
+        # self.main_layout.addWidget(self.table_button, 1)
+        self.main_layout.addWidget(self.table, 10)
 
-        return self
+        # API table button
+        for item in self.api_item_list:
+            item = item.title()
+            check_box = QCheckBox(item)
+            check_box.clicked.connect(functools.partial(self.update_api_table, reset=False))
 
-    def gen_main_tab(self):
-        self.table.clear()
+            if item in self.default_item_list:
+                check_box.setCheckState(Qt.Checked)
+                check_box.setEnabled(False)
+
+            self.api_item_button_dic[item] = check_box
+
+        row, column = 0, 0
+        button_layout = QGridLayout(self.table_button)
+
+        for item in self.api_item_button_dic:
+            if column == self.column_button_count - 1:
+                row += 1
+                column = 0
+
+            button_layout.addWidget(self.api_item_button_dic[item], row, column, Qt.AlignLeft)
+
+            column += 1
+
+        # API table
         self.table.setMouseTracking(True)
         self.table.setSortingEnabled(True)
         self.table.verticalHeader().setVisible(True)
         self.table.horizontalHeader().setVisible(True)
+        self.update_api_table()
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.generate_table_menu)
+
+        # Button Layout
+        self.save_button.clicked.connect(self.save)
+        self.save_button.setEnabled(False)
+        self.reset_button.clicked.connect(self.reset)
+        self.button_widget.setLayout(self.button_layout)
+        self.button_layout.addStretch(1)
+        self.button_layout.addWidget(self.save_button)
+        self.button_layout.addWidget(self.reset_button)
+
+        center_window(self)
+
+        return self
+
+    def update_api_table(self, reset: bool = True):
+        self.table.clear()
+        # self.table_column_list = []
+        """
+        for item in self.api_item_button_dic:
+            check_box = self.api_item_button_dic[item]
+            status = check_box.checkState()
+
+            if status == Qt.Checked:
+                self.table_column_list.append(item)
+        """
 
         self.table.setColumnCount(len(self.table_column_list))
         self.table.setHorizontalHeaderLabels(self.table_column_list)
+        api_list = self.analysis_api(total_api_dic=self.api_dic)
 
         row = 0
-        api_list = self.analysis_api(total_api_dic=self.api_dic)
         self.table.setRowCount(len(api_list))
 
         for api_dic in api_list:
             api_content = self.gen_api_content(api_dic)
-            label_item = QTableWidgetItem(api_dic['LABEL'])
-            project_item = QTableWidgetItem(api_dic['PROJECT'])
-            group_item = QTableWidgetItem(api_dic['GROUP'])
-            tab_item = QTableWidgetItem(api_dic['TAB'])
-            label_item.setToolTip(api_content)
-            comment_item = QTableWidgetItem(api_dic['COMMENT'])
-            command_item = QTableWidgetItem(api_dic['COMMAND'])
 
             if api_dic['ENABLE']:
                 status_item = QCheckBox()
@@ -4586,23 +4645,158 @@ class WindowForAPI(QMainWindow):
                 status_item.setCheckState(Qt.Unchecked)
 
             status_item.setStyleSheet("margin-left:25%;")
+            status_item.setToolTip(api_content)
 
             self.table.setCellWidget(row, 0, status_item)
             status_item.stateChanged.connect(lambda state, row=row: self.table_status_changed(state, row))
             column = 1
 
-            for item in [tab_item, project_item, group_item, label_item, comment_item, command_item]:
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            for item in self.table_column_list:
+                item = item.upper()
+
+                if item in api_dic:
+                    table_item = QTableWidgetItem(api_dic[item])
+                else:
+                    table_item = QTableWidgetItem('')
+
+                if item == 'ENABLE':
+                    continue
 
                 if not api_dic['ENABLE']:
-                    item.setForeground(QBrush(QColor('grey')))
+                    table_item.setForeground(QBrush(QColor('grey')))
 
-                self.table.setItem(row, column, item)
+                table_item.setFlags(table_item.flags() & ~Qt.ItemIsEditable)
+                table_item.setToolTip(api_content)
+
+                self.table.setItem(row, column, table_item)
                 column += 1
+
             row += 1
 
         self.table.resizeColumnsToContents()
-        self.main_layout.addWidget(self.table)
+
+    def generate_table_menu(self, pos):
+        if not self.gui_enable_signal:
+            return
+
+        current_selected_row = self.table.currentIndex().row()
+        current_selected_column = self.table.currentIndex().column()
+
+        if self.table.item(current_selected_row, current_selected_column):
+            current_selected_item_row = self.table.item(current_selected_row, current_selected_column).row()
+
+            menu = QMenu()
+            edit_action = menu.addAction('Add API')
+            edit_action.triggered.connect(self.add_api)
+            edit_action = menu.addAction('Edit API')
+            edit_action.triggered.connect(functools.partial(self.edit_api, current_selected_item_row))
+            delete_action = menu.addAction('Delete API')
+            delete_action.triggered.connect(functools.partial(self.delete_api, current_selected_item_row))
+
+            menu.exec_(self.table.mapToGlobal(pos))
+
+    def add_api(self):
+        self.api_edit_window = WindowForAPIEdit(title='ADD API')
+        self.api_edit_window.save_signal.connect(self.update_api_dic_after_edit)
+        self.api_edit_window.show()
+
+    def edit_api(self, row):
+        api_dic, api_type = self._get_api_dic_from_row(row=row)
+        self.api_edit_window = WindowForAPIEdit('EDIT API', api_dic, api_type)
+        self.api_edit_window.save_signal.connect(self.update_api_dic_after_edit)
+        self.api_edit_window.show()
+
+    def update_api_dic_after_edit(self, old_api_dic: dict, new_api_dic: dict, api_type: str):
+        if not old_api_dic:
+            self.api_dic['API'].setdefault(api_type, [])
+            self.api_dic['API'][api_type].append(new_api_dic)
+        else:
+            if api_type in self.api_dic['API']:
+                old_api_label = old_api_dic['LABEL']
+                temp_index = None
+
+                for i, api_dic in enumerate(self.api_dic['API'][api_type]):
+                    if api_dic['LABEL'] == old_api_label:
+                        temp_index = i
+                        break
+
+                if temp_index is not None:
+                    self.api_dic['API'][api_type][temp_index] = new_api_dic
+                else:
+                    self.api_dic['API'][api_type].append(new_api_dic)
+
+        self.update_api_table()
+        self.save()
+
+    def _get_api_dic_from_row(self, row: int) -> Tuple[dict, str]:
+        result_dic = {}
+        result_type = ''
+        api_label, api_type = '', ''
+        # api label
+
+        for index in range(self.table.columnCount()):
+            column_name = self.table.horizontalHeaderItem(index).text()
+
+            if column_name == 'Label':
+                api_label = self.table.item(row, index).text().strip()
+            elif column_name == 'Type':
+                api_type = self.table.item(row, index).text().strip()
+
+        if api_type == 'API-2':
+            while not result_dic:
+                for index, api_dic in enumerate(self.api_dic['API']['TABLE_RIGHT_KEY_MENU']):
+                    if 'API-2' not in api_dic:
+                        continue
+
+                    for api_2_dic in api_dic['API-2']:
+                        if api_2_dic['LABEL'] == api_label:
+                            result_dic = api_dic
+                            result_type = 'TABLE_RIGHT_KEY_MENU'
+        else:
+            if api_type in self.api_dic['API']:
+                for index, api_dic in enumerate(self.api_dic['API'][api_type]):
+                    if api_dic['LABEL'] == api_label:
+                        result_dic = api_dic
+                        result_type = api_type
+                        break
+
+        return result_dic, result_type
+
+    def delete_api(self, row: int):
+        del_api_dic, del_api_type = self._get_api_dic_from_row(row=row)
+        del_api_label = del_api_dic['LABEL']
+
+        if del_api_type in self.api_dic['API']:
+            del_api_index = None
+
+            for index, api_dic in enumerate(self.api_dic['API'][del_api_type]):
+                if api_dic['LABEL'] == del_api_label:
+                    del_api_index = index
+                    break
+
+            if del_api_index is not None:
+                if 'API-2' not in del_api_dic or not del_api_dic['API-2']:
+                    self.api_dic['API'][del_api_type].pop(del_api_index)
+                else:
+                    api_2_label = None
+                    del_api_2_index = None
+
+                    for index in range(self.table.columnCount()):
+                        column_name = self.table.horizontalHeaderItem(index).text()
+
+                        if column_name == 'Label':
+                            api_2_label = self.table.item(row, index).text().strip()
+                            break
+
+                    for api_2_index, api_2_dic in enumerate(self.api_dic['API'][del_api_type][del_api_index]['API-2']):
+                        if api_2_dic['LABEL'] == api_2_label:
+                            del_api_2_index = api_2_index
+                            break
+
+                    if api_2_label is not None and del_api_2_index is not None:
+                        self.api_dic['API'][del_api_type][del_api_index]['API-2'].pop(del_api_2_index)
+
+        self.save()
 
     @staticmethod
     def gen_api_content(api_dic=None):
@@ -4612,24 +4806,30 @@ class WindowForAPI(QMainWindow):
         content = '<table>'
 
         for key, value in api_dic.items():
-            content += '<tr><td><b>%s</b></td><td>%s</td></tr>' % (str(key), str(value))
+            if value:
+                content += '<tr><td><b>%s</b></td><td>%s</td></tr>' % (str(key), str(value))
 
         content += '</table>'
 
         return content
 
-    def save(self):
-        self.update_api_dic()
-        self.message.emit(self.update_flag, self.api_dic, self.user_api_yaml)
-        self.update.emit(False, self.update_flag)
-        self.init_ui()
+    def save(self, api_yaml: str = ''):
+        if api_yaml:
+            self.update_api_dic()
+            self.message.emit(self.update_flag, self.api_dic, api_yaml)
+        else:
+            self.update_api_dic()
+            self.message.emit(self.update_flag, self.api_dic, self.user_api_yaml)
+            self.update.emit(False, self.update_flag)
+            self.update_api_table()
 
-        self.save_button.setEnabled(False)
+            self.save_button.setEnabled(False)
 
     def reset(self):
-        self.gen_main_tab()
+        self.update_api_table()
         self.save_button.setStyleSheet("")
         self.update.emit(False, self.update_flag)
+        self.save_button.setEnabled(False)
 
     @staticmethod
     def analysis_api(total_api_dic=None):
@@ -4641,6 +4841,7 @@ class WindowForAPI(QMainWindow):
         if 'TABLE_RIGHT_KEY_MENU' in total_api_dic['API']:
             for api_dic in total_api_dic['API']['TABLE_RIGHT_KEY_MENU']:
                 if 'API-2' not in api_dic:
+                    api_dic['TYPE'] = 'TABLE_RIGHT_KEY_MENU'
                     api_list.append(api_dic)
                 else:
                     api_2_item_dic = copy.deepcopy(api_dic)
@@ -4649,10 +4850,12 @@ class WindowForAPI(QMainWindow):
                     for api_2_dic in api_dic['API-2']:
                         final_dic = copy.deepcopy(api_2_item_dic)
                         final_dic.update(api_2_dic)
+                        final_dic['TYPE'] = 'API-2'
                         api_list.append(final_dic)
 
-        if 'PRE_API' in total_api_dic['API']:
-            for api_dic in total_api_dic['API']['PRE_API']:
+        if 'PRE_IFP' in total_api_dic['API']:
+            for api_dic in total_api_dic['API']['PRE_IFP']:
+                api_dic['TYPE'] = 'PRE_IFP'
                 api_list.append(api_dic)
 
         return api_list
@@ -4673,7 +4876,10 @@ class WindowForAPI(QMainWindow):
                 if j == 0:
                     continue
 
-                name_list.append(self.table.item(i, j).text().strip())
+                column_name = self.table.horizontalHeaderItem(j).text().title()
+
+                if column_name in self.default_item_list:
+                    name_list.append(self.table.item(i, j).text().strip())
 
             label = '_'.join(name_list)
             api_status_dic[label] = status
@@ -4683,10 +4889,14 @@ class WindowForAPI(QMainWindow):
                 if 'API-2' not in self.api_dic['API']['TABLE_RIGHT_KEY_MENU'][i]:
                     name_list = []
 
-                    for name in self.table_column_list:
+                    for name in self.default_item_list:
                         name = name.upper()
 
                         if name == 'ENABLE':
+                            continue
+
+                        if name == 'TYPE':
+                            name_list.append('TABLE_RIGHT_KEY_MENU')
                             continue
 
                         if self.api_dic['API']['TABLE_RIGHT_KEY_MENU'][i][name]:
@@ -4702,10 +4912,14 @@ class WindowForAPI(QMainWindow):
                     for j in range(len(self.api_dic['API']['TABLE_RIGHT_KEY_MENU'][i]['API-2'])):
                         name_list = []
 
-                        for name in self.table_column_list:
+                        for name in self.default_item_list:
                             name = name.upper()
 
                             if name == 'ENABLE':
+                                continue
+
+                            if name == 'TYPE':
+                                name_list.append('API-2')
                                 continue
 
                             if name in self.api_dic['API']['TABLE_RIGHT_KEY_MENU'][i]['API-2'][j]:
@@ -4724,25 +4938,29 @@ class WindowForAPI(QMainWindow):
                         if label in api_status_dic:
                             self.api_dic['API']['TABLE_RIGHT_KEY_MENU'][i]['API-2'][j]['ENABLE'] = api_status_dic[label]
 
-        if 'PRE_API' in self.api_dic['API']:
-            for i in range(len(self.api_dic['API']['PRE_API'])):
+        if 'PRE_IFP' in self.api_dic['API']:
+            for i in range(len(self.api_dic['API']['PRE_IFP'])):
                 name_list = []
 
-                for name in self.table_column_list:
+                for name in self.default_item_list:
                     name = name.upper()
 
                     if name == 'ENABLE':
                         continue
 
-                    if self.api_dic['API']['PRE_API'][i][name]:
-                        name_list.append(str(self.api_dic['API']['PRE_API'][i][name]).strip())
+                    if name == 'TYPE':
+                        name_list.append('PRE_IFP')
+                        continue
+
+                    if self.api_dic['API']['PRE_IFP'][i][name]:
+                        name_list.append(str(self.api_dic['API']['PRE_IFP'][i][name]).strip())
                     else:
                         name_list.append('')
 
                 label = '_'.join(name_list)
 
                 if label in api_status_dic:
-                    self.api_dic['API']['PRE_API'][i]['ENABLE'] = api_status_dic[label]
+                    self.api_dic['API']['PRE_IFP'][i]['ENABLE'] = api_status_dic[label]
 
     def table_status_changed(self, state, item_row):
         if not self.save_button.isEnabled():
@@ -4767,6 +4985,7 @@ class WindowForAPI(QMainWindow):
         """
         Disable status_item in table
         """
+        self.gui_enable_signal = False
         row_count = self.table.rowCount()
 
         for row in range(row_count):
@@ -4777,11 +4996,315 @@ class WindowForAPI(QMainWindow):
         """
         Enable status_item in table
         """
+        self.gui_enable_signal = False
         row_count = self.table.rowCount()
 
         for row in range(row_count):
             status_item = self.table.cellWidget(row, 0)
             status_item.setEnabled(True)
+
+
+class WindowForAPIEdit(QMainWindow):
+    save_signal = pyqtSignal(dict, dict, str)
+
+    def __init__(self, title: str, api_dic: dict = None, api_type: str = None):
+        super().__init__()
+
+        self.title = title
+        self.old_api_dic = {} if not api_dic else api_dic
+        self.old_api_type = '' if not api_type else api_type
+        self.temp_api_dic = copy.deepcopy(self.old_api_dic) if self.old_api_dic else {}
+
+        if self.old_api_type == 'TABLE_RIGHT_KEY_MENU':
+            if 'API-2' not in self.old_api_dic:
+                self.temp_api_dic['API-2'] = []
+
+            column_name = None
+
+            for key in self.temp_api_dic.keys():
+                if re.match(r'(\S+)_NAME', key):
+                    column_name = key
+
+            if column_name is None:
+                column = self.temp_api_dic['COLUMN']
+                self.temp_api_dic['{}_NAME'.format(column)] = ''
+
+        self.current_api_type = self.old_api_type
+        self.top_widget = QWidget()
+        self.top_layout = QVBoxLayout()
+
+        self.main_widget = QWidget()
+        self.main_layout = QFormLayout()
+        self.type_widget = None
+        self.api_type_dic = {'PRE_IFP': ['LABEL', 'PROJECT', 'GROUP', 'PATH', 'COMMAND', 'ENABLE', 'COMMENT'],
+                             'TABLE_RIGHT_KEY_MENU': ['LABEL', 'TAB', 'PROJECT', 'GROUP', 'PATH', 'COLUMN', 'ENABLE', 'COMMAND', 'COMMENT', 'API-2'],
+                             }
+        self.api_2_type_list = ['LABEL', 'ENABLE', 'COMMAND', 'COMMENT']
+        self.column_name_list = ['TASK', 'BRANCH', 'VENDOR', 'FLOW', 'VERSION', 'BLOCK']
+        self.tab_name_list = ['MAIN', 'CONFIG']
+        self.enable_name_list = ['True', 'False']
+        self.key_order_list = ['LABEL', 'TAB', 'PROJECT', 'GROUP', 'ENABLE', 'COLUMN', 'PATH', 'COMMAND', 'COMMENT', 'TASK_NAME', 'API-2',
+                               'BRANCH_NAME', 'VENDOR_NAME', 'FLOW_NAME', 'VERSION_NAME', 'BLOCK_NAME']
+        self.api_widget_dic = {}
+
+        self.button_widget = QWidget()
+        self.button_layout = QHBoxLayout()
+        self.save_button = QPushButton('SAVE')
+        self.cancel_button = QPushButton('CANCEL')
+
+        self._init_ui()
+
+    def _ordered_api_dic(self):
+        ordered_dic = {}
+
+        for key in self.key_order_list:
+            if key in self.temp_api_dic:
+                if key != 'API-2':
+                    ordered_dic[key] = self.temp_api_dic[key]
+                else:
+                    ordered_dic[key] = []
+
+                    for api_2_dic in self.temp_api_dic['API-2']:
+                        new_api_2_dic = {}
+
+                        for api_2_key in self.api_2_type_list:
+                            if api_2_key in api_2_dic:
+                                new_api_2_dic[api_2_key] = api_2_dic[api_2_key]
+
+                        ordered_dic[key].append(new_api_2_dic)
+
+        self.temp_api_dic = ordered_dic
+
+    def _init_ui(self):
+        self._ordered_api_dic()
+        self.setMinimumSize(QSize(800, 500))
+        self.setCentralWidget(self.top_widget)
+        self.setWindowTitle(self.title)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(self.main_widget)
+        scroll_area.setWidgetResizable(True)
+
+        # Top widget
+        self.top_widget.setLayout(self.top_layout)
+        self.top_layout.addWidget(scroll_area, 10)
+        self.top_layout.addWidget(self.button_widget, 1)
+
+        # Setting
+        self.main_widget.setLayout(self.main_layout)
+
+        if self.old_api_type:
+            self.type_widget = QLabel(self.old_api_type)
+            self.current_api_type = self.old_api_type
+        else:
+            self.type_widget = QComboBox()
+            self.type_widget.addItems(list(self.api_type_dic.keys()))
+            self.type_widget.currentTextChanged.connect(self._update_main_widget)
+            self.current_api_type = self.type_widget.currentText().strip()
+
+        self.main_layout.addRow('API Type', self.type_widget)
+        self._update_main_widget()
+
+        # Button
+        self.button_widget.setLayout(self.button_layout)
+        self.save_button.clicked.connect(self.save)
+        self.cancel_button.clicked.connect(self.close)
+        self.button_layout.addStretch(1)
+        self.button_layout.addWidget(self.save_button)
+        self.button_layout.addWidget(self.cancel_button)
+
+        center_window(self)
+
+    def _update_main_widget(self):
+        while self.main_layout.rowCount() > 1:
+            self.main_layout.removeRow(1)
+
+        self.api_widget_dic = {'API Type': self.type_widget}
+
+        if isinstance(self.type_widget, QComboBox):
+            api_type = self.type_widget.currentText().strip()
+
+            if api_type != self.current_api_type and api_type in self.api_type_dic:
+                self.temp_api_dic = {key: '' for key in self.api_type_dic[api_type]}
+
+                if api_type != 'PRE_IFP':
+                    self.temp_api_dic['{}_NAME'.format(self.column_name_list[0])] = ''
+
+                self.current_api_type = api_type
+
+        if not self.temp_api_dic:
+            self._update_main_widget_for_init()
+        else:
+            self._update_main_widget_for_edit()
+
+    def _update_main_widget_for_init(self):
+        api_type = self.type_widget.currentText().strip()
+
+        if api_type not in self.api_type_dic:
+            return
+        else:
+            self.temp_api_dic = {key: '' for key in self.api_type_dic[api_type]}
+            self._update_basic_main_widget()
+
+    def _update_main_widget_for_edit(self):
+        self._update_basic_main_widget()
+
+        if 'API-2' in self.temp_api_dic:
+            self.api_widget_dic.setdefault('API-2-DICT', {})
+
+            for index, api_2_dic in enumerate(self.temp_api_dic['API-2']):
+                api_2_label = api_2_dic['LABEL']
+                self.api_widget_dic['API-2-DICT'].setdefault(api_2_label, {})
+                delete_button = QPushButton('DELETE')
+                delete_button.setMaximumSize(100, 40)
+                delete_button.clicked.connect(functools.partial(self._delete_api_2, label=api_2_label))
+                self.main_layout.addRow(r'API-2 [{}]'.format(str(index)), delete_button)
+                self.api_widget_dic['API-2-DICT'][api_2_label]['DELETE'] = delete_button
+
+                for api_2_item in api_2_dic:
+                    api_2_widget = QLineEdit(str(api_2_dic[api_2_item]))
+
+                    self.main_layout.addRow(api_2_item, api_2_widget)
+                    self.api_widget_dic['API-2-DICT'][api_2_label][api_2_item] = api_2_widget
+
+    def _update_basic_main_widget(self):
+        column = ''
+
+        for api_item in self.temp_api_dic:
+            if api_item == 'API-2':
+                api_widget = QPushButton('ADD API-2')
+                api_widget.setMaximumSize(100, 40)
+                api_widget.clicked.connect(self._add_api_2)
+            elif api_item == 'COLUMN':
+                api_widget = QComboBox2()
+                api_widget.addItems(self.column_name_list)
+            elif api_item == 'TAB':
+                api_widget = QComboBox2()
+                api_widget.addItems(self.tab_name_list)
+            elif api_item == 'ENABLE':
+                api_widget = QComboBox2()
+                api_widget.addItems(self.enable_name_list)
+            else:
+                if my_match := re.match(r'(\S+)_NAME', api_item):
+                    column = my_match.group(1)
+
+                api_widget = QLineEdit(str(self.temp_api_dic[api_item]))
+
+            self.main_layout.addRow(api_item, api_widget)
+            self.api_widget_dic[api_item] = api_widget
+
+        if 'COLUMN' in self.temp_api_dic:
+            if column:
+                self.api_widget_dic['COLUMN'].setCurrentText(column)
+
+            self.api_widget_dic['COLUMN'].currentTextChanged.connect(self._change_column_name)
+
+    def _read_temp_api(self):
+        self.temp_api_dic = {}
+
+        for api_item in self.api_widget_dic:
+            api_value = self.api_widget_dic[api_item]
+
+            if isinstance(api_value, QLineEdit):
+                self.temp_api_dic[api_item] = api_value.text().strip() if api_value.text() else ''
+            elif isinstance(api_value, QComboBox):
+                self.temp_api_dic[api_item] = api_value.currentText().strip() if api_value.currentText() else ''
+            elif api_item == 'API-2-DICT':
+                self.temp_api_dic.setdefault('API-2', [])
+
+                for api_2_label in self.api_widget_dic['API-2-DICT']:
+                    api_2_dic = {}
+
+                    for api_2_item in self.api_widget_dic['API-2-DICT'][api_2_label]:
+                        api_2_value = self.api_widget_dic['API-2-DICT'][api_2_label][api_2_item]
+
+                        if isinstance(api_2_value, QLineEdit):
+                            api_2_dic[api_2_item] = api_2_value.text()
+
+                    self.temp_api_dic['API-2'].append(api_2_dic)
+        self._ordered_api_dic()
+
+    def _delete_api_2(self, label: str):
+        self._read_temp_api()
+        api_2_list = []
+
+        if 'API-2' in self.temp_api_dic:
+
+            for api_2_dic in self.temp_api_dic['API-2']:
+                api_label = api_2_dic['LABEL']
+
+                if api_label != label:
+                    api_2_list.append(api_2_dic)
+
+            self.temp_api_dic['API-2'] = api_2_list
+
+        if not api_2_list:
+            for key in list(self.temp_api_dic.keys()):
+                if re.match(r'\S+_NAME', key):
+                    del self.temp_api_dic[key]
+
+        self._update_main_widget()
+
+    def _add_api_2(self):
+        self._read_temp_api()
+        api_2_new_dic = {item: '' for item in self.api_2_type_list}
+
+        if 'API-2' in self.temp_api_dic and self.temp_api_dic['API-2']:
+            api_2_count = len(self.temp_api_dic['API-2'])
+            api_2_new_dic['LABEL'] = self._generate_new_label(api_dic=self.temp_api_dic, count=api_2_count)
+            self.temp_api_dic['API-2'].append(api_2_new_dic)
+        else:
+            api_2_new_dic['LABEL'] = 'API-2 [0]'
+            self.temp_api_dic['API-2'] = [api_2_new_dic, ]
+
+            column = self.api_widget_dic['COLUMN'].currentText().strip()
+            column_name = '{}_NAME'.format(column)
+            self.temp_api_dic[column_name] = ''
+
+        self._update_main_widget()
+
+    def _change_column_name(self):
+        column = self.api_widget_dic['COLUMN'].currentText().strip()
+        column_name = '{}_NAME'.format(column)
+        self._read_temp_api()
+
+        if column_name in self.temp_api_dic:
+            return
+
+        column_value = ''
+
+        for key in list(self.temp_api_dic.keys()):
+            if re.match(r'\S+_NAME', key):
+                column_value = self.temp_api_dic[key]
+                del self.temp_api_dic[key]
+
+        self.temp_api_dic[column_name] = column_value
+
+        for row in range(self.main_layout.rowCount()):
+            label = self.main_layout.itemAt(row, QFormLayout.LabelRole).widget()
+
+            if re.match(r'\S+_NAME', label.text()) and column_name != label:
+                label.setText(column_name)
+
+    def _generate_new_label(self, api_dic: dict, count: int = 0) -> str:
+        api_new_label = r'API-2[{}]'.format(str(count))
+
+        for api_2_dic in self.temp_api_dic['API-2']:
+            api_2_label = api_2_dic['LABEL']
+
+            if api_2_label == api_new_label:
+                self._generate_new_label(api_dic=api_dic, count=count+1)
+
+        return api_new_label
+
+    def save(self):
+        self._read_temp_api()
+
+        if 'API-2' in self.temp_api_dic and not self.temp_api_dic['API-2']:
+            del self.temp_api_dic['API-2']
+
+        self.save_signal.emit(self.old_api_dic, self.temp_api_dic, self.current_api_type)
+        self.close()
 
 
 class DefaultConfig(QMainWindow):

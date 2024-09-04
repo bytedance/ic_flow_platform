@@ -793,6 +793,8 @@ class TaskObject(QThread):
 
         if re.search('xterm', run_method) and (not re.search('-T', run_method)):
             run_method = re.sub(r'xterm', f'xterm -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"', run_method)
+        elif re.search('gnome-terminal --', run_method) and (not re.search('-c', run_method)):
+            run_method = re.sub(r'gnome-terminal --', f'gnome-terminal -t "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"' + f" --wait -- {str(os.environ['SHELL'])} -c '", run_method)
 
         return run_method
 
@@ -915,6 +917,7 @@ class TaskObject(QThread):
         else:
             run_method = self.get_run_method(run_action)
             self.status = common.status_ing[action]
+            self.update_status_signal.emit(self, common.action.check, None)
             self.update_status_signal.emit(self, self.action, self.status)
             self.update_debug_info_signal.emit(self)
             self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s : %s "%s"' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, self.status, run_method, run_action['COMMAND']), 'color': 'black'})
@@ -924,6 +927,10 @@ class TaskObject(QThread):
 
             if (not re.search(r'^\s*$', run_method)) and (not re.search(r'^\s*local\s*$', run_method, re.I)):
                 command = str(run_method) + ' "' + str(command) + '"'
+
+            if re.search(r'gnome-terminal', run_method):
+                command = str(command) + "; exit'"
+                # command = str(command) + f"; exec {str(os.environ['SHELL'])}" + "'"
 
             if ('PATH' in run_action) and run_action['PATH']:
                 if os.path.exists(run_action['PATH']):
@@ -952,7 +959,7 @@ class TaskObject(QThread):
                         if current_job_dic:
                             job_status = current_job_dic[current_job]['status']
 
-                            if job_status in ["RUN", 'EXIT']:
+                            if job_status in ['RUN', 'EXIT', 'DONE']:
                                 if action in [common.action.run]:
                                     self.set_run_time_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
 
@@ -984,6 +991,7 @@ class TaskObject(QThread):
             if self.status == common.status.killed:
                 pass
             else:
+
                 if return_code == 0:
                     self.status = '{} {}'.format(action, common.status.passed)
                     self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s done' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, action), 'color': 'green'})

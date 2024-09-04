@@ -71,6 +71,9 @@ class Config:
     def parse_config_file(config_file, kind='user'):
         config_dic = {}
 
+        if not config_file:
+            return config_dic
+
         if os.path.exists(config_file):
             with open(config_file, 'r') as fh:
                 config_dic = yaml.load(fh, Loader=yaml.FullLoader)
@@ -145,7 +148,7 @@ class Config:
 
             if ('VAR' in default_config_dic) and isinstance(default_config_dic['VAR'], dict):
                 for (key, value) in default_config_dic['VAR'].items():
-                    if isinstance(value, str):
+                    if isinstance(value, str) or isinstance(value, int) or isinstance(value, float):
                         self.var_dic[key] = value
 
         if user_config_dic:
@@ -154,7 +157,7 @@ class Config:
 
             if ('VAR' in user_config_dic) and isinstance(user_config_dic['VAR'], dict):
                 for (key, value) in user_config_dic['VAR'].items():
-                    if isinstance(value, str):
+                    if isinstance(value, str) or isinstance(value, int) or isinstance(value, float):
                         self.var_dic[key] = value
 
             if ('BLOCK' in user_config_dic) and user_config_dic['BLOCK']:

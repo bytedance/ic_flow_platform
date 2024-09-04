@@ -37,7 +37,7 @@ QT_DEVICE_PIXEL_RATIO = 1
 os.environ['PYTHONUNBUFFERED'] = '1'
 CWD = os.getcwd()
 USER = getpass.getuser()
-IFP_VERSION = 'V1.3 (2024.06.17)'
+IFP_VERSION = 'V1.3.1 (2024.08.14)'
 
 # Solve some unexpected warning message.
 if 'XDG_RUNTIME_DIR' not in os.environ:
@@ -247,7 +247,7 @@ class MainWindow(QMainWindow):
         self.gui_width = 1200
         self.gui_height = 650
         self.resize(self.gui_width, self.gui_height)
-        self.setWindowTitle('IC FLow Platform %s' % IFP_VERSION)
+        self.setWindowTitle('IC Flow Platform %s' % IFP_VERSION)
         self.setWindowIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/logo/ifp.png'))
         common_pyqt5.center_window(self)
 
@@ -271,6 +271,14 @@ class MainWindow(QMainWindow):
         load_config_file_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/add_file.png'))
         load_config_file_action.triggered.connect(self.load)
 
+        save_default_yaml_action = QAction('Save Default Yaml', self)
+        save_default_yaml_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/red/save_file.png'))
+        save_default_yaml_action.triggered.connect(self.save_default_yaml)
+
+        save_api_yaml_action = QAction('Save API Yaml', self)
+        save_api_yaml_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/red/save_file.png'))
+        save_api_yaml_action.triggered.connect(self.save_api_yaml)
+
         exit_action = QAction('&Exit', self)
         exit_action.setShortcut('Ctrl+E')
         exit_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/exit.png'))
@@ -280,8 +288,13 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(save_status_file_action)
         file_menu.addAction(load_status_file_action)
+        file_menu.addSeparator()
         file_menu.addAction(save_config_file_action)
         file_menu.addAction(load_config_file_action)
+        file_menu.addSeparator()
+        file_menu.addAction(save_default_yaml_action)
+        file_menu.addAction(save_api_yaml_action)
+        file_menu.addSeparator()
         file_menu.addAction(exit_action)
 
         # View
@@ -913,7 +926,6 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.update_message_text({'message': 'Load config file "' + str(config_file) + '".', 'color': 'black'})
             # Update self.config_dic and self.main_table_info_list with new config_file.
             self.update_dict_by_load_config_file(config_file)
-            self.task_window.load()
             # Update related GUI parts.
             self.update_sidebar_tree()
             self.update_status_table()
@@ -922,6 +934,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.task_window.config_path_edit.setText(self.ifp_config_file)
             self.update_main_table()
             self.load_status_file('./.ifp.status.yaml')
+            self.task_window.load()
 
         progress_dialog.close()
 
@@ -1075,6 +1088,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     def update_config_tab(self):
         self.config_tab.currentChanged.disconnect()
+        current_index = self.config_tab.currentIndex()
 
         # setting tab -> ifp setting
         self.setting_window = SettingWindow(self, self.ifp_env_setting, mode='widget')
@@ -1134,6 +1148,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.config_tab.removeTab(self.tab_label_dic['API'])
             self.config_tab.insertTab(self.tab_label_dic['API'], self.api_widget, 'API')
 
+        self.config_tab.setCurrentIndex(current_index)
         self.config_tab.currentChanged.connect(self.check_config_unsaved_tab)
 
     def hide_config_tab(self, widget):
@@ -1571,7 +1586,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     def open_file(self, item):
         task = self.config_dic['BLOCK'][item.Block][item.Version][item.Flow][item.Vendor][item.Branch][item.Task]
 
-        (log_file, file_type) = QFileDialog.getOpenFileName(self, 'Open file', str(task.PATH), 'LOG (*.log)')
+        (log_file, file_type) = QFileDialog.getOpenFileName(self, 'Open file', str(task.PATH), 'LOG (*.log *.log[0-9]*)')
 
         if log_file:
             command = 'gvim ' + str(os.path.realpath(log_file))
@@ -1882,11 +1897,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
         check_status = main_table_info['CheckStatus']
 
-        if check_status in [common.status.checking, "{} {}".format(common.action.check, common.status.passed), "{} {}".format(common.action.check, common.status.failed)]:
+        if check_status in [common.status.checking, common.status.passed, common.status.failed] and row_status != common.status.running:
             row_status = check_status
 
-        if status == "" or status == "Total" or (status == "Run" and row_status == common.status.running) or (status == "Passed" and row_status == common.status.passed) or (status == "Failed" and row_status == common.status.failed) or (
-                status == "Others" and row_status != common.status.running and row_status != common.status.passed and row_status != common.status.failed):
+        if status == "" or status == "Total" or (status == "Run" and row_status == common.status.running) or (status == "Passed" and row_status == common.status.passed) or (status == "Failed" and row_status == common.status.failed) or (status == "Others" and row_status != common.status.running and row_status != common.status.passed and row_status != common.status.failed):
             return 1
         else:
             return 0
@@ -2144,7 +2158,8 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             check = message_box.checkBox()
 
             if check.isChecked():
-                self.rerun_flag = False
+                self.setting_window.ifp_env_setting['System settings']['Process management']['Confirm rerun tasks']['widget'].setChecked(False)
+                self.setting_window.save()
 
             if choice == QMessageBox.Cancel:
                 task_dic_list = []
@@ -2306,6 +2321,115 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         jobid = self.sender().property('jobid')
         self.monitor_list.remove(jobid)
     # execute_action (end)
+
+    def save_default_yaml(self, default_yaml=''):
+        '''
+        Save the current Task, Var and Dependency configurations as default yaml
+        '''
+        # Check if have exactly one block/version/branch
+        if not self.save_default_yaml_validity():
+            QMessageBox.warning(self, 'Can\'t save.', 'Please ensure there is exactly one block/version/branch.')
+            return
+
+        # Check if var_window and dependency window have been saved
+        if self.var_window.save_button.isEnabled() or self.dependency_window.save_button.isEnabled():
+            QMessageBox.warning(self, 'Can\'t save.', 'Please save changes in Variable/Dependency config tab.')
+            return
+
+        # User select files to dump
+        if not default_yaml:
+            (default_yaml, file_type) = QFileDialog.getSaveFileName(self, 'Save default yaml', './default.yaml', 'YAML (*.yaml)')
+
+        if default_yaml:
+            self.update_message_text({'message': 'Save default yaml into file "' + str(default_yaml) + '".', 'color': 'black'})
+            # convert current configuration to a dic
+            yaml_dic = self.gen_default_yaml_dic()
+
+            # dump to local file
+            with open(default_yaml, 'w') as f:
+                f.write(yaml.dump(yaml_dic, allow_unicode=True, sort_keys=False))
+
+            QMessageBox.information(self, 'Done', 'Sucessfully save default yaml to %s.' % default_yaml)
+
+    def save_default_yaml_validity(self):
+        '''
+        Check if have exactly one block/version/branch
+        Block/Version/Branch of each row must be the same with first row
+        '''
+        model = self.task_window.setup_model
+        row_count = model.rowCount()
+
+        if row_count == 0:
+            return False
+
+        block = model.item(0, 0).text()
+        version = model.item(0, 1).text()
+        branch = model.item(0, 4).text()
+
+        for row in range(row_count):
+            block_row = model.item(row, 0).text()
+            version_row = model.item(row, 1).text()
+            branch_row = model.item(row, 4).text()
+
+            if block_row != block or version_row != version or branch_row != branch:
+                return False
+
+        return True
+
+    def gen_default_yaml_dic(self):
+        '''
+        Get data from config tabs and generate a dic for default yaml
+        '''
+        var_dic = self.var_window.return_table_dic()
+        task_dic = self.config_dic['BLOCK']
+        flow_denp_dic = self.config_dic['RUN_AFTER_FLOW']
+        task_denp_dic = self.config_dic['RUN_AFTER_TASK']
+        yaml_dic = {}
+
+        # write var info
+        yaml_dic.setdefault('VAR', var_dic)
+
+        # write task info
+        yaml_dic.setdefault('TASK', {})
+        for block in task_dic:
+            for version in task_dic[block]:
+                for flow in task_dic[block][version]:
+                    for vendor in task_dic[block][version][flow]:
+                        for branch in task_dic[block][version][flow][vendor]:
+                            for task in task_dic[block][version][flow][vendor][branch]:
+                                default_flow = flow
+                                default_vendor = vendor
+                                default_task = task
+
+                                if flow_denp_dic.get('%s:%s:%s' % (block, version, flow)):
+                                    default_flow = '%s(RUN_AFTER=%s)' % (flow, flow_denp_dic.get('%s:%s:%s' % (block, version, flow)))
+
+                                if task_denp_dic.get('%s.%s.%s.%s.%s.%s' % (block, version, flow, vendor, branch, task)):
+                                    default_task = '%s(RUN_AFTER=%s)' % (task, task_denp_dic.get('%s.%s.%s.%s.%s.%s' % (block, version, flow, vendor, branch, task)))
+                                task_key = '%s:%s:%s' % (default_flow, default_vendor, default_task)
+                                yaml_dic['TASK'][task_key] = task_dic[block][version][flow][vendor][branch][task]['ACTION']
+
+        return yaml_dic
+
+    def save_api_yaml(self, api_yaml=''):
+        '''
+        Save the current API configurations as api yaml
+        '''
+        # API tab must be saved before dump
+        if self.api_window.save_button.isEnabled():
+            QMessageBox.Warning(self, 'Can\'t save.', 'You have unsaved changes in API configuration tab.')
+            return
+
+        # User select file to dump
+        if not api_yaml:
+            (api_yaml, file_type) = QFileDialog.getSaveFileName(self, 'Save api yaml', './api.yaml', 'YAML (*.yaml)')
+
+        if api_yaml:
+            self.update_message_text({'message': 'Save api yaml into file "' + str(api_yaml) + '".', 'color': 'black'})
+            # call save interface in self.api_window
+            self.api_window.save(api_yaml)
+
+            QMessageBox.information(self, 'Done', 'Sucessfully save api yaml to %s.' % api_yaml)
 
 
 class MultipleSelectWindow(QDialog):
@@ -2937,11 +3061,14 @@ class TabWidget(QTabWidget):
 
 def execute_action_for_pre_cfg():
     user_api = common.parse_user_api(str(os.environ['IFP_INSTALL_PATH']) + '/config/api.yaml')
+    env_dic = common.get_env_dic()
+
+    for (key, value) in env_dic.items():
+        os.environ[key] = value
 
     if 'PRE_CFG' in user_api['API'].keys():
         var_dic = {'IFP_INSTALL_PATH': os.environ['IFP_INSTALL_PATH'],
                    'CWD': CWD}
-        env_dic = common.get_env_dic()
         var_dic.update(env_dic)
 
         for item in user_api['API']['PRE_CFG']:

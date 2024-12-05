@@ -10,6 +10,7 @@ TASK:
       PATH: ${DEFAULT_PATH}
       COMMAND: make syn_dc
       RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
+      LOG: ${DEFAULT_PATH}/dc/logs/log.dc.${BLOCK}
     CHECK:
       PATH: ${DEFAULT_PATH}/dc
       COMMAND: python3 ${DEMO_PATH}/project_setting/check/syn/synopsys/syn_synopsys.syn_dc.py
@@ -34,6 +35,7 @@ TASK:
       PATH: ${DEFAULT_PATH}
       COMMAND: make fm_rtl2gate
       RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
+      LOG: ${DEFAULT_PATH}/fm/logs/log.fm.${BLOCK}_rtl2gate
     CHECK:
       PATH: ${DEFAULT_PATH}/fm
       COMMAND: python3 ${DEMO_PATH}/project_setting/check/fv/synopsys/fv_synopsys.rtl2gate.py
@@ -53,6 +55,7 @@ TASK:
       PATH: ${DEFAULT_PATH}
       COMMAND: make fm_rtl2pg
       RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
+      LOG: ${DEFAULT_PATH}/fm/logs/log.fm.${BLOCK}_rtl2pg
     CHECK:
       PATH: ${DEFAULT_PATH}
       COMMAND: python3 ${DEMO_PATH}/project_setting/check/fv/synopsys/fv_synopsys.rtl2pg.py
@@ -72,6 +75,7 @@ TASK:
       PATH: ${DEFAULT_PATH}
       COMMAND: make presta
       RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
+      LOG: ${DEFAULT_PATH}/pt/logs/log.pt.${BLOCK}
     CHECK:
       PATH: ${DEFAULT_PATH}/pt
       COMMAND: python3 ${DEMO_PATH}/project_setting/check/sta/synopsys/sta_synopsys.presta.py

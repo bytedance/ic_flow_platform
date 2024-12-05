@@ -150,7 +150,7 @@ class QComboCheckBox(QComboBox):
 
         if textPixel > self.dropDownBoxWidthPixel:
             self.dropDownBoxWidthPixel = textPixel
-            self.view().setMinimumWidth(self.dropDownBoxWidthPixel + indicatorPixel)
+            self.view().setMinimumWidth(self.dropDownBoxWidthPixel + int(indicatorPixel))
 
     def updateItemSelectedState(self, itemText, checkState):
         """

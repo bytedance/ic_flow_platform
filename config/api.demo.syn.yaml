@@ -1,0 +1,67 @@
+API:
+  PRE_IFP: []
+  TABLE_RIGHT_KEY_MENU:
+  - LABEL: Check task log
+    ENABLE: true
+    TYPE: TABLE_RIGHT_KEY_MENU
+    PROJECT: ''
+    GROUP: ''
+    TAB: MAIN
+    COLUMN: TASK
+    PATH: ${CWD}
+    COMMAND: gvim ${CWD}/${BLOCK}/${VERSION}/dc/logs/log.dc.${BLOCK}
+    COMMENT: ''
+    TASK_NAME: syn_dc
+  - LABEL: Edit Makefile
+    ENABLE: true
+    TYPE: TABLE_RIGHT_KEY_MENU
+    PROJECT: ''
+    GROUP: ''
+    TAB: MAIN
+    COLUMN: TASK
+    PATH: ${CWD}
+    COMMAND: gvim  ${CWD}/${BLOCK}/${VERSION}/Makefile
+    COMMENT: ''
+    TASK_NAME: ''
+  - LABEL: Edit Tcl
+    ENABLE: true
+    TYPE: TABLE_RIGHT_KEY_MENU
+    PROJECT: ''
+    GROUP: ''
+    TAB: MAIN
+    COLUMN: TASK
+    PATH: ${CWD}
+    COMMAND: ''
+    COMMENT: ''
+    TASK_NAME: syn_dc
+    API-2:
+    - LABEL: Edit syn tcl
+      ENABLE: 'True'
+      COMMAND: gvim ${CWD}/${BLOCK}/${VERSION}/dc/scripts/go_dc_${BLOCK}.tcl
+      COMMENT: ''
+    - LABEL: Edit restore tcl
+      ENABLE: 'True'
+      COMMAND: gvim ${CWD}/${BLOCK}/${VERSION}/dc/scripts/debug_dc_${BLOCK}.tcl
+      COMMENT: ''
+  - LABEL: Check fm_rtl2pg log
+    ENABLE: true
+    TYPE: TABLE_RIGHT_KEY_MENU
+    PROJECT: ''
+    GROUP: ''
+    TAB: MAIN
+    COLUMN: TASK
+    PATH: ${CWD}
+    COMMAND: gvim ${CWD}/${BLOCK}/${VERSION}/fm/logs/log.fm.${BLOCK}_rtl2pg
+    COMMENT: ''
+    TASK_NAME: fm_rtl2pg
+  - LABEL: Check fm_rtl2gate log
+    ENABLE: true
+    TYPE: TABLE_RIGHT_KEY_MENU
+    PROJECT: ''
+    GROUP: ''
+    TAB: MAIN
+    COLUMN: TASK
+    PATH: ${CWD}
+    COMMAND: gvim ${CWD}/${BLOCK}/${VERSION}/fm/logs/log.fm.${BLOCK}_rtl2gate
+    COMMENT: ''
+    TASK_NAME: fm_rtl2gate

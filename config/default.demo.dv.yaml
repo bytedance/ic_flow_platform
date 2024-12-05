@@ -1,95 +1,52 @@
-## Format ##
-# VAR:
-#     key: value
-#
-# TASK:
-#     flow:vendor:task:
-#         action:
-#             attribute: value
-#    
-#
-## Supported Variables (default) ##
-# CWD: <ifp start directory>
-# IFP_INSTALL_PATH: <ifp install path>
-# BLOCK: <block name>
-# VERSION: <version name>
-# FLOW: <flow name>
-# VENDOR: <vendor name>
-# BRANCH: <branch name>
-# TASK: <task name>
-#
-#
-## Supported action ##
-# BUILD/RUN/CHECK/SUMMARIZE/POST_RUN/RELEASE
-# 
-# 
-## Supportedd action attribute ##
-# PATH/COMMAND/RUN_METHOD/VIEWER/REPORT_FILE
-#
-#
-## Example ##
-# VAR:
-#     BSUB_QUEUE: ai_syn
-#     DEFAULT_PATH: ${CWD}/${BLOCK}/<VERSION>/<FLOW>/<VENDOR>/<BRANCH>
-#
-# TASK:
-#     synthesis:synopsys:intopt:
-#         BUILD:
-#             PATH: $DEFAULT_PATH
-#             COMMAND: make build
-#         RUN:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: make run_initopt
-#             RUN_METHOD: bsub -q $BSUB_QUEUE -n 8 -R "rusage[mem=50000]"
-#         CHECK:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: ${IFP_INSTALL_PATH}/action/check/syn/synopsys/syn_synopsys.syn_dc.py -b ${BLOCK}
-#             VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report.py -i
-#             REPORT_FILE: file_check/file_check.rpt
-#         SUMMARIZE:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: ${IFP_INSTALL_PATH}/action/summary/collect_syn_qor.py
-#             VIEWER: /bin/soffice
-#             REPORT_FILE: syn_qor.xlsx
-#         POST_RUN:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: make post_run
-#             RUN_METHOD: bsub -q $BSUB_QUEUE -n 8 -R "rusage[mem=50000]"
-#         RELEASE:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: make release
-
 VAR:    
     BSUB_QUEUE: normal
-    DEFAULT_PATH: ${CWD}/${BLOCK}/${VERSION}_${BRANCH}
+    DEFAULT_PATH: ${CWD}/${BLOCK}/${VERSION}
 TASK:
-    initial:common:prepare_database:
+    prepare_database:
         RUN:
             PATH: ${DEFAULT_PATH}/dv
             COMMAND: mkdir -p ${DEFAULT_PATH}/dv;cp -r ${DEMO_PATH}/DV/* ${DEFAULT_PATH}/dv
-    analysis(RUN_AFTER=initial):synopsys:dut:
+    dut:
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
             COMMAND:  source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make dut
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-    analysis(RUN_AFTER=initial):synopsys:uvm(RUN_AFTER=dut):
+        RUN_AFTER:
+            TASK: prepare_database
+        DEPENDENCY:
+            FILE:
+                - ${DEFAULT_PATH}/dv/verif/sim/setup.sh
+    uvm:
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
             COMMAND: source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make uvm
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-    analysis(RUN_AFTER=initial):synopsys:testbench(RUN_AFTER=uvm):
+        RUN_AFTER:
+            TASK: dut
+    testbench:
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
             COMMAND: source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make testbench
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-    elaboration(RUN_AFTER=analysis):synopsys:elab:
+        RUN_AFTER:
+            TASK: uvm
+    elab:
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
             COMMAND: source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make elab
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-    simulation(RUN_AFTER=elaboration):synopsys:simv:
+        RUN_AFTER:
+            TASK: testbench
+    simv:
         RUN:
             PATH: ${DEFAULT_PATH}/dv/verif/sim/
             COMMAND: source ${DEFAULT_PATH}/dv/verif/sim/setup.sh;make simv
             RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-                
+        RUN_AFTER:
+            TASK: elab
+
+FLOW:
+    initial: [prepare_database]
+    analysis: [dut, uvm, testbench]
+    elaboration: [elab]
+    simulation: [simv]

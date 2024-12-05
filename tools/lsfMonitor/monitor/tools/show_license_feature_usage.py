@@ -2,6 +2,8 @@
 import os
 import re
 import sys
+import time
+import datetime
 import argparse
 
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QFrame, QGridLayout, QTableWidget, QTableWidgetItem, QHeaderView
@@ -12,7 +14,6 @@ sys.path.insert(0, str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/monitor')
 from common import common_pyqt5
 from common import common_license
 from common import common_lsf
-from conf import config
 
 # Import local config file if exists.
 local_config_dir = str(os.environ['HOME']) + '/.lsfMonitor/conf'
@@ -21,6 +22,8 @@ local_config = str(local_config_dir) + '/config.py'
 if os.path.exists(local_config):
     sys.path.append(local_config_dir)
     import config
+else:
+    from conf import config
 
 os.environ['PYTHONUNBUFFERED'] = '1'
 
@@ -120,13 +123,46 @@ class ShowLicenseFreatureUsage(QMainWindow):
 
         self.gen_main_table()
 
+    def switch_bjobs_submit_time(self, submit_time, compare_second='', format=''):
+        """
+        Switch submit_time format from "%a %m/%d %H:%M" to specified format (or start_second by default).
+        """
+        new_submit_time = submit_time
+
+        if submit_time and (submit_time != 'N/A') and (submit_time != 'RESERVATION'):
+            # Switch submit_time to start_second.
+            current_year = datetime.date.today().year
+            submit_time_with_year = str(current_year) + ' ' + str(submit_time)
+            submit_time_with_year = re.sub('  ', ' ', submit_time_with_year)
+
+            try:
+                start_second = time.mktime(time.strptime(submit_time_with_year, '%Y %b %d %H:%M'))
+            except Exception:
+                print('*Warning*: Variable "submit_time_with_year", value is "' + str(submit_time_with_year) + '", not follow the time format "%Y %b %d %H:%M".')
+
+            if not compare_second:
+                compare_second = time.time()
+
+            if int(start_second) > int(compare_second):
+                current_year = int(datetime.date.today().year) - 1
+                submit_time_with_year = str(current_year) + ' ' + str(submit_time)
+                start_second = time.mktime(time.strptime(submit_time_with_year, '%Y %b %d %H:%M'))
+
+            # Switch start_second to expected time format.
+            if format:
+                new_submit_time = time.strftime(format, time.localtime(start_second))
+            else:
+                new_submit_time = start_second
+
+        return new_submit_time
+
     def get_job_info(self, user, submit_host, execute_host, start_time):
         jobid_list = []
 
         for (i, jobid) in enumerate(self.job_dic['JOBID']):
             if (user == self.job_dic['USER'][i]) and ((submit_host == self.job_dic['FROM_HOST'][i]) or (submit_host == 'N/A')) and re.search(execute_host, self.job_dic['EXEC_HOST'][i]):
                 license_start_time = common_license.switch_start_time(start_time)
-                job_submit_time = common_lsf.switch_submit_time(self.job_dic['SUBMIT_TIME'][i])
+                job_submit_time = self.switch_bjobs_submit_time(self.job_dic['SUBMIT_TIME'][i])
 
                 if int(license_start_time) >= int(job_submit_time):
                     jobid_list.append(jobid)

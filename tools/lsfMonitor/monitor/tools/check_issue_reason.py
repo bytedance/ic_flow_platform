@@ -43,6 +43,7 @@ class MainWindow(QMainWindow):
         self.job = job
         self.issue = issue
         self.exit_code_dic = self.get_exit_code_info()
+        self.term_signal_dic = self.get_term_signal_info()
 
         self.init_ui()
         self.process_args()
@@ -59,6 +60,19 @@ class MainWindow(QMainWindow):
                 exit_code_dic = yaml.load(ECF, Loader=yaml.FullLoader)
 
         return exit_code_dic
+
+    def get_term_signal_info(self):
+        """
+        Get term_signal&term_reason from config/term_signal.yaml.
+        """
+        term_signal_dic = {}
+        term_signal_file = str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/monitor/conf/term_signal.yaml'
+
+        if os.path.exists(term_signal_file):
+            with open(term_signal_file, 'r') as TSF:
+                term_signal_dic = yaml.load(TSF, Loader=yaml.FullLoader)
+
+        return term_signal_dic
 
     def init_ui(self):
         """
@@ -258,23 +272,16 @@ class MainWindow(QMainWindow):
             self.info_text.append('The issue should be from your command, please check your command log.')
         elif job_dic[job]['status'] == 'EXIT':
             if job_dic[job]['exit_code']:
-                self.info_text.append('Exit Code: ' + str(job_dic[job]['exit_code']))
-
                 if job_dic[job]['exit_code'] in self.exit_code_dic:
-                    self.info_text.append('Exit Reason: ' + str(self.exit_code_dic[job_dic[job]['exit_code']]))
+                    self.info_text.append('Exit Code: ' + str(job_dic[job]['exit_code']) + '  (' + str(self.exit_code_dic[job_dic[job]['exit_code']]) + ')')
+                else:
+                    self.info_text.append('Exit Code: ' + str(job_dic[job]['exit_code']))
 
-            self.info_text.append('')
-
-            if job_dic[job]['exit_code'] and (int(job_dic[job]['exit_code']) <= 127):
-                self.info_text.append('* Exit code <= 127, LSF job command run fail, please check command log.')
-            elif job_dic[job]['exit_code'] and (int(job_dic[job]['exit_code']) > 127):
-                self.info_text.append('* Exit code > 127, possible fail for system or LSF reason.')
-
-            if job_dic[job]['term_owner']:
-                self.info_text.append('* Find message "' + str(job_dic[job]['term_owner']) + '".')
-
-            if job_dic[job]['lsf_signal']:
-                self.info_text.append('* Find message "Exited by LSF signal ' + str(job_dic[job]['lsf_signal']) + '".')
+            if job_dic[job]['term_signal']:
+                if job_dic[job]['term_signal'] in self.term_signal_dic:
+                    self.info_text.append('Term Signal: ' + str(job_dic[job]['term_signal']) + '  (' + str(self.term_signal_dic[job_dic[job]['term_signal']]) + ')')
+                else:
+                    self.info_text.append('Term Signal: ' + str(job_dic[job]['term_signal']))
         else:
             self.info_text.append('<font color="#FF0000">*Error*: Job is not finished!</font>')
 

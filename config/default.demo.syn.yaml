@@ -1,122 +1,93 @@
-## Format ##
-# VAR:
-#     key: value
-#
-# TASK:
-#     flow:vendor:task:
-#         action:
-#             attribute: value
-#    
-#
-## Supported Variables (default) ##
-# CWD: <ifp start directory>
-# IFP_INSTALL_PATH: <ifp install path>
-# BLOCK: <block name>
-# VERSION: <version name>
-# FLOW: <flow name>
-# VENDOR: <vendor name>
-# BRANCH: <branch name>
-# TASK: <task name>
-#
-#
-## Supported action ##
-# BUILD/RUN/CHECK/SUMMARIZE/POST_RUN/RELEASE
-# 
-# 
-## Supportedd action attribute ##
-# PATH/COMMAND/RUN_METHOD/VIEWER/REPORT_FILE
-#
-#
-## Example ##
-# VAR:
-#     BSUB_QUEUE: ai_syn
-#     DEFAULT_PATH: ${CWD}/${BLOCK}/<VERSION>/<FLOW>/<VENDOR>/<BRANCH>
-#
-# TASK:
-#     synthesis:synopsys:intopt:
-#         BUILD:
-#             PATH: $DEFAULT_PATH
-#             COMMAND: make build
-#         RUN:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: make run_initopt
-#             RUN_METHOD: bsub -q $BSUB_QUEUE -n 8 -R "rusage[mem=50000]"
-#         CHECK:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: ${IFP_INSTALL_PATH}/action/check/syn/synopsys/syn_synopsys.syn_dc.py -b ${BLOCK}
-#             VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report.py -i
-#             REPORT_FILE: file_check/file_check.rpt
-#         SUMMARIZE:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: ${IFP_INSTALL_PATH}/action/summary/collect_syn_qor.py
-#             VIEWER: /bin/soffice
-#             REPORT_FILE: syn_qor.xlsx
-#         POST_RUN:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: make post_run
-#             RUN_METHOD: bsub -q $BSUB_QUEUE -n 8 -R "rusage[mem=50000]"
-#         RELEASE:
-#             PATH: ${DEFAULT_PATH}/dc
-#             COMMAND: make release
-
-VAR:    
-    BSUB_QUEUE: normal
-    DEFAULT_PATH: ${CWD}/${BLOCK}/${VERSION}_${BRANCH}
+VAR:
+  BSUB_QUEUE: normal
+  DEFAULT_PATH: ${CWD}/${BLOCK}/${VERSION}
 TASK:
-    syn:synopsys:syn_dc:
-        BUILD:
-            PATH: ${CWD}
-            COMMAND: python3 ${DEMO_PATH}/setup/build.py -f ${FLOW} -d ${BLOCK} -v ${VERSION} -b ${BRANCH}
-        RUN:
-            PATH: ${DEFAULT_PATH}
-            COMMAND: make syn_dc
-            RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-        CHECK:
-            PATH: ${DEFAULT_PATH}/dc
-            COMMAND: python3 ${DEMO_PATH}/project_setting/check/syn/synopsys/syn_synopsys.syn_dc.py -b ${BLOCK}
-            VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
-            REPORT_FILE: ${DEFAULT_PATH}/dc/file_check/file_check.rpt
-        SUMMARIZE:
-            PATH: ${DEFAULT_PATH}/dc
-            COMMAND: python3 ${DEMO_PATH}/project_setting/summary/collect_syn_qor.py
-            VIEWER: /bin/soffice
-            REPORT_FILE: ${DEFAULT_PATH}/dc/syn_qor.xlsx
-    fv:synopsys:fm_rtl2gate:
-        BUILD:
-            PATH: ${CWD}
-            COMMAND: python3 ${DEMO_PATH}/setup/build.py -f ${FLOW} -d ${BLOCK} -v ${VERSION} -b ${BRANCH}
-        RUN:
-            PATH: ${DEFAULT_PATH}
-            COMMAND: make fm_rtl2gate
-            RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-        CHECK:
-            PATH: ${DEFAULT_PATH}/fm
-            COMMAND: python3 ${DEMO_PATH}/project_setting/check/fv/synopsys/fv_synopsys.rtl2gate.py -t rtl2gate -b ${BLOCK}
-            VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
-            REPORT_FILE: ${DEFAULT_PATH}/fm/file_check/file_check.rpt
-    fv:synopsys:fm_rtl2pg:
-        BUILD:
-            PATH: ${CWD}
-            COMMAND: python3 ${DEMO_PATH}/setup/build.py -f ${FLOW} -d ${BLOCK} -v ${VERSION} -b ${BRANCH}
-        RUN:
-            PATH: ${DEFAULT_PATH}
-            COMMAND: make fm_rtl2pg
-            RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-        CHECK:
-            PATH: ${DEFAULT_PATH}/fm
-            COMMAND: python3 ${DEMO_PATH}/project_setting/check/fv/synopsys/fv_synopsys.rtl2pg.py -t rtl2pg -b ${BLOCK}
-            VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
-            REPORT_FILE: ${DEFAULT_PATH}/fm/file_check/file_check.rpt
-    sta:synopsys:presta:
-        BUILD:
-            PATH: ${CWD}
-            COMMAND: python3 ${DEMO_PATH}/setup/build.py -f ${FLOW} -d ${BLOCK} -v ${VERSION} -b ${BRANCH}
-        RUN:
-            PATH: ${DEFAULT_PATH}
-            COMMAND: make presta
-            RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
-        CHECK:
-            PATH: ${DEFAULT_PATH}/pt
-            COMMAND: python3 ${DEMO_PATH}/project_setting/check/sta/synopsys/sta_synopsys.presta.py -b ${BLOCK}
-            VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
-            REPORT_FILE: ${DEFAULT_PATH}/pt/file_check/file_check.rpt
+  syn_dc:
+    BUILD:
+      PATH: ${CWD}
+      COMMAND: python3 ${DEMO_PATH}/setup/build.py -f ${FLOW} -d ${BLOCK} -v ${VERSION}
+    RUN:
+      PATH: ${DEFAULT_PATH}
+      COMMAND: make syn_dc
+      RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
+    CHECK:
+      PATH: ${DEFAULT_PATH}/dc
+      COMMAND: python3 ${DEMO_PATH}/project_setting/check/syn/synopsys/syn_synopsys.syn_dc.py
+        -b ${BLOCK}
+      VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
+      REPORT_FILE: ${DEFAULT_PATH}/dc/file_check/file_check.rpt
+    SUMMARIZE:
+      PATH: ${DEFAULT_PATH}/dc
+      COMMAND: python3 ${DEMO_PATH}/project_setting/summary/collect_syn_qor.py
+      VIEWER: /bin/soffice
+      REPORT_FILE: ${DEFAULT_PATH}/dc/syn_qor.xlsx
+    RUN_AFTER:
+      TASK: ''
+    DEPENDENCY:
+      LICENSE: ''
+      FILE: ''
+  fm_rtl2gate:
+    BUILD:
+      PATH: ${CWD}
+      COMMAND: python3 ${DEMO_PATH}/setup/build.py -f ${FLOW} -d ${BLOCK} -v ${VERSION}
+    RUN:
+      PATH: ${DEFAULT_PATH}
+      COMMAND: make fm_rtl2gate
+      RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
+    CHECK:
+      PATH: ${DEFAULT_PATH}/fm
+      COMMAND: python3 ${DEMO_PATH}/project_setting/check/fv/synopsys/fv_synopsys.rtl2gate.py
+        -t rtl2gate -b ${BLOCK}
+      VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
+      REPORT_FILE: ${DEFAULT_PATH}/fm/file_check/file_check.rpt
+    RUN_AFTER:
+      TASK: syn_dc
+    DEPENDENCY:
+      LICENSE: ''
+      FILE: ''
+  fm_rtl2pg:
+    BUILD:
+      PATH: ${CWD}
+      COMMAND: python3 ${DEMO_PATH}/setup/build.py -f ${FLOW} -d ${BLOCK} -v ${VERSION}
+    RUN:
+      PATH: ${DEFAULT_PATH}
+      COMMAND: make fm_rtl2pg
+      RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
+    CHECK:
+      PATH: ${DEFAULT_PATH}
+      COMMAND: python3 ${DEMO_PATH}/project_setting/check/fv/synopsys/fv_synopsys.rtl2pg.py
+        -t rtl2pg -b ${BLOCK}
+      VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
+      REPORT_FILE: ${DEFAULT_PATH}/file_check/file_check.rpt
+    RUN_AFTER:
+      TASK: syn_dc
+    DEPENDENCY:
+      LICENSE: ''
+      FILE: ''
+  presta:
+    BUILD:
+      PATH: ${CWD}
+      COMMAND: python3 ${DEMO_PATH}/setup/build.py -f ${FLOW} -d ${BLOCK} -v ${VERSION}
+    RUN:
+      PATH: ${DEFAULT_PATH}
+      COMMAND: make presta
+      RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
+    CHECK:
+      PATH: ${DEFAULT_PATH}/pt
+      COMMAND: python3 ${DEMO_PATH}/project_setting/check/sta/synopsys/sta_synopsys.presta.py
+        -b ${BLOCK}
+      VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
+      REPORT_FILE: ${DEFAULT_PATH}/pt/file_check/file_check.rpt
+    RUN_AFTER:
+      TASK: syn_dc
+    DEPENDENCY:
+      LICENSE: ''
+      FILE: ''
+FLOW:
+  syn:
+  - syn_dc
+  fv:
+  - fm_rtl2gate
+  - fm_rtl2pg
+  sta:
+  - presta

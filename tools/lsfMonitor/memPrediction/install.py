@@ -1,6 +1,5 @@
 import os
 import sys
-import stat
 import socket
 
 CWD = os.getcwd()
@@ -63,7 +62,7 @@ export MEM_PREDICTION_INSTALL_PATH=""" + str(CWD) + """
 # Execute """ + str(tool_name) + """.py.
 python3 $MEM_PREDICTION_INSTALL_PATH/""" + str(tool_name) + '.py "$@"')
 
-            os.chmod(tool, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
+            os.chmod(tool, 0o755)
         except Exception as error:
             print('*Error*: Failed on generating script "' + str(tool) + '": ' + str(error))
             sys.exit(1)
@@ -94,7 +93,7 @@ MEM_PREDICTION_INSTALL_PATH=""" + str(CWD) + """
 # Set LD_LIBRARY_PATH.
 """ + str(ld_library_path_setting))
 
-        os.chmod(tool, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
+        os.chmod(tool, 0o755)
     except Exception as error:
         print('*Error*: Failed on generating script "' + str(tool) + '": ' + str(error))
         sys.exit(1)
@@ -129,7 +128,7 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target""")
 
-        os.chmod(web_service_tool, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
+        os.chmod(web_service_tool, 0o755)
     except Exception as error:
         print('*Error*: Failed on generating script "' + str(web_service_tool) + '": ' + str(error))
         sys.exit(1)
@@ -147,7 +146,7 @@ WantedBy=multi-user.target""")
 ps -elf|grep '""" + str(PYTHON_PATH) + '/gunicorn' + """ -c predict_gconf.py predict_web:app'|grep -v grep|awk '{print $4}'|xargs kill
  """)
 
-        os.chmod(stop_service_tool, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
+        os.chmod(stop_service_tool, 0o755)
     except Exception as error:
         print('*Error*: Failed on generating script "' + str(stop_service_tool) + '": ' + str(error))
         sys.exit(1)
@@ -155,7 +154,7 @@ ps -elf|grep '""" + str(PYTHON_PATH) + '/gunicorn' + """ -c predict_gconf.py pre
 
 def gen_config_file():
     """
-    Generate config file <MEM_PREDICTION_INSTALL_PATH>/monitor/conf/config.py.
+    Generate config file <MEM_PREDICTION_INSTALL_PATH>/config/config.py.
     """
     config_file = str(CWD) + '/config/config.py'
 
@@ -177,6 +176,9 @@ def gen_config_file():
                 CF.write('''# job infomation database save directory, format: csv/sqlite.
 db_path = "''' + str(job_db_path) + '''"
 
+# Specify job database format
+job_format = 'csv'
+
 # job rusage analysis report template
 report_template = "''' + str(report_template) + '''"
 
@@ -195,10 +197,10 @@ predict_model = "''' + str(default_predict_model) + '''"
 # model training max lines, default 10,000,000. if set to '0' or '', means infinity.
 max_training_lines = 10000000
 ''')
-            os.chmod(config_file, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
-            os.chmod(job_db_path, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
-            os.chmod(report_db_path, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
-            os.chmod(model_db_path, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
+            os.chmod(config_file, 0o777)
+            os.chmod(job_db_path, 0o777)
+            os.chmod(report_db_path, 0o777)
+            os.chmod(model_db_path, 0o777)
         except Exception as error:
             print('*Error*: Failed on opening config file "' + str(config_file) + '" for write: ' + str(error))
             sys.exit(1)
@@ -290,7 +292,7 @@ if [ $exit_code -ne 0 ]; then
 fi
 """)
 
-        os.chmod(tool, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
+        os.chmod(tool, 0o755)
     except Exception as error:
         print('*Error*: Failed on generating script "' + str(tool) + '": ' + str(error))
         sys.exit(1)
@@ -324,7 +326,7 @@ systemctl status predict_web.service
 
 """)
 
-        os.chmod(tool, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
+        os.chmod(tool, 0o755)
     except Exception as error:
         print('*Error*: Failed on generating script "' + str(tool) + '": ' + str(error))
         sys.exit(1)

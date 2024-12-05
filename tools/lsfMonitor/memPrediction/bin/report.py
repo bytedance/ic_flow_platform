@@ -39,7 +39,7 @@ def read_args():
     rusage_rpt_group = parser.add_argument_group('rusage rpt csv')
     rusage_rpt_group.add_argument('-st', '--start_date', default=(datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'), help='analysis rpt from start date, format: YYYY-mm-dd, default 30days ago')
     rusage_rpt_group.add_argument('-et', '--end_date', default=datetime.now().strftime('%Y-%m-%d'), help='analysis rpt to end date, format: YYYY-mm-dd, default today')
-    rusage_rpt_group.add_argument('-db', default=config.db_path, help='csv path')
+    rusage_rpt_group.add_argument('-db', default=config.db_path, help='directory path including all job data')
     rusage_rpt_group.add_argument('-m', '--memory', action='store_true', default=False, help='memory analysis')
     rusage_rpt_group.add_argument('-c', '--cpu', action='store_true', default=False, help='cpu analysis')
 
@@ -62,27 +62,46 @@ def merge_data(start_date='', end_date='', csv_path=os.getcwd(), mode='memory'):
 
     if os.path.exists(csv_path):
         for file in os.listdir(csv_path):
-            if my_match := re.match(r'^job_info_(\S+).csv$', file):
-                file_date = datetime.strptime(my_match.group(1), '%Y%m%d')
+            df = None
+
+            if hasattr(config, 'job_format') and config.job_format.lower() == 'json':
+                file_date = datetime.strptime(file, '%Y%m%d')
 
                 if datetime.strptime(start_date, '%Y-%m-%d') <= file_date <= datetime.strptime(end_date, '%Y-%m-%d'):
+                    logger.info("reading %s data ..." % file_date)
                     file_path = os.path.join(csv_path, file)
-                    df = pd.read_csv(file_path)
+                    df = pd.read_json(file_path, orient='index')
+                    df.rename(columns={'index': 'job_id'}, inplace=True)
+                    df.reset_index(inplace=True)
+            else:
+                if my_match := re.match(r'^job_info_(\S+).csv$', file):
+                    file_date = datetime.strptime(my_match.group(1), '%Y%m%d')
 
-                    if mode == 'memory':
-                        if 'job_description' in df.columns:
-                            df['pre_mem'] = df['job_description'].apply(lambda x: get_mem_predict_value(x, unit=unit))
-                        else:
-                            df['pre_mem'] = 0.0
+                    if datetime.strptime(start_date, '%Y-%m-%d') <= file_date <= datetime.strptime(end_date, '%Y-%m-%d'):
+                        logger.info("reading %s data ..." % file_date)
+                        file_path = os.path.join(csv_path, file)
+                        df = pd.read_csv(file_path)
 
-                    df = df[original_column_list]
+            if df is not None:
+                df = df.drop_duplicates(subset=['job_id'], keep='first')
 
-                    if num == 0:
-                        df.to_csv(merge_path, encoding='utf_8_sig', index=False)
+                if mode == 'memory':
+                    if 'job_description' in df.columns:
+                        df['pre_mem'] = df['job_description'].apply(lambda x: get_mem_predict_value(x, unit=unit))
                     else:
-                        df.to_csv(merge_path, encoding='utf_8_sig', index=False, header=False, mode='a+')
+                        df['pre_mem'] = 0.0
 
-                    num += 1
+                df = df[original_column_list]
+
+                if 'status' in df.columns:
+                    df = df[df['status'] == 'DONE']
+
+                if num == 0:
+                    df.to_csv(merge_path, encoding='utf_8_sig', index=False)
+                else:
+                    df.to_csv(merge_path, encoding='utf_8_sig', index=False, header=False, mode='a+')
+
+                num += 1
 
     if not os.path.exists(merge_path):
         logger.error("Could not find merge data result, please check data source!")
@@ -101,7 +120,7 @@ def get_mem_predict_value(job_description, unit='MB'):
     mem_predict_value = 0
 
     if job_description:
-        if my_match := re.match(r'.*ALLOC_MEMORY_USER=memPrediction\(.*=(\d+(\.\d+)*)%s\)' % unit, str(job_description)):
+        if my_match := re.match(r'.*ALLOC_MEMORY_USER=memoryPrediction\(.*=(\d+(\.\d+)*)%s\)' % unit, str(job_description)):
             mem_predict_value = float(my_match.group(1))
 
     return mem_predict_value
@@ -146,12 +165,11 @@ class MemoryReport:
         self.table_dic = {}
 
     def convert_memory_infomation(self):
-        lsf_unit_for_limits = common_lsf.get_lsf_unit_for_limits()
         memory_item_list = ['max_mem', 'rusage_mem', 'pre_mem']
 
         for mem_item in memory_item_list:
             if mem_item in self.df.columns:
-                self.df[mem_item] = common.memory_unit_to_gb(self.df[mem_item], unit=lsf_unit_for_limits)
+                self.df[mem_item] = common.memory_unit_to_gb(self.df[mem_item], unit='MB')
                 self.df[mem_item] = self.df[mem_item].fillna(0)
                 self.df[r'%s_interval' % mem_item] = pd.cut(self.df[mem_item].values.reshape(-1), self.bins)
             else:
@@ -216,7 +234,7 @@ class MemoryReport:
         user_rusage_data["under_rusage_mean"] = pre_df["under_diff_mem"].groupby(pre_df["user"]).mean()
         user_rusage_data["under_rusage_mean_rate"] = (pre_df["under_diff_mem"] / pre_df["max_mem"] * 100).groupby(pre_df["user"]).mean()
 
-        count_df = pre_df["status"].groupby(pre_df["user"]).value_counts().unstack(fill_value=0)
+        count_df = pre_df["status"].groupby(pre_df["user"]).value_counts().unstack(fill_value=0).fillna(0).reindex(columns=['DONE', 'EXIT'], fill_value=0)
         count_df.columns = ['done_count', 'exit_count']
         user_rusage_data['exit_count'] = count_df['exit_count']
         user_rusage_data['done_count'] = count_df['done_count']
@@ -1056,8 +1074,13 @@ class SlotsReport:
         fill:
             self.df["span_hosts"], self.df["processors_requested"]
         """
-        self.df['start'] = pd.to_datetime(self.df["started_time"], format="%a %b %d %H:%M:%S", errors='coerce')
-        self.df['end'] = pd.to_datetime(self.df['finished_time'], format="%a %b %d %H:%M:%S", errors='coerce')
+        if hasattr(config, 'job_format') and config.job_format.lower() == 'json':
+            self.df['start'] = pd.to_datetime(self.df["started_time"], format="%a-%b-%d %H:%M:%S", errors='coerce')
+            self.df['end'] = pd.to_datetime(self.df['finished_time'], format="%a-%b-%d %H:%M:%S", errors='coerce')
+        else:
+            self.df['start'] = pd.to_datetime(self.df["started_time"], format="%a %b %d %H:%M:%S", errors='coerce')
+            self.df['end'] = pd.to_datetime(self.df['finished_time'], format="%a %b %d %H:%M:%S", errors='coerce')
+
         self.df.dropna(subset=['start', 'end'], inplace=True)
 
         self.df["run_time"] = (self.df["end"] - self.df['start']).dt.total_seconds()

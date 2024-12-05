@@ -1,0 +1,33 @@
+TERM_ADMIN: 任务被root用户或LSF管理员终止
+TERM_BUCKET_KILL: 任务被kill -b命令终止
+TERM_CHKPNT: 在checkpointing之后, 任务被终止
+TERM_CPULIMIT: 因达到LSF CPU使用限制, 任务被被终止
+TERM_CSM_ALLOC: 因CSM分配API错误, 任务被终止
+TERM_CWD_NOTEXIST: 当前工作目录不可访问或在执行主机上不存在, 任务被终止
+TERM_DATA: 因数据暂存失败, 任务被终止
+TERM_DEADLINE: 因截止期限到期, 任务被终止
+TERM_EXTERNAL_SIGNAL: 任务被LSF外部的信号所终止
+TERM_FORCE_ADMIN: 任务被root用户或LSF管理员终止, 没有时间进行清理
+TERM_FORCE_OWNER: 任务被所有者终止, 没有时间进行清理
+TERM_KUBE: 因Kubernetes集成, 任务被终止
+TERM_LOAD: 因负载超过阈值, 任务被终止
+TERM_MC_RECALL: 因多集群任务重新调用, 任务被终止
+TERM_MEMLIMIT: 因达到LSF内存使用限制, 任务被终止
+TERM_ORPHAN_SYSTEM: LSF自动终止了孤立任务
+TERM_OTHER: 在切换到另一个队列后, 处于WAIT状态的区块任务被终止并重新排队
+TERM_OWNER: 任务被所有者终止
+TERM_PREEMPT: 任务因抢占而终止
+TERM_PRE_EXEC_FAIL: 达到执行前重试限制后, 任务被终止
+TERM_PROCESSLIMIT: 达到LSF进程限制后, 任务被终止
+TERM_RC: 当云平台回收LSF资源连接器执行主机时, 任务被终止
+TERM_REMOVE_HUNG_JOB: 任务被从LSF中移除
+TERM_REQUEUE_ADMIN: 任务被root用户或LSF管理员终止并重新排队
+TERM_REQUEUE_OWNER: 任务被所有者终止并重新排队
+TERM_REQUEUE_RC: 当云平台回收LSF资源连接器执行主机时, 任务被终止并重新排队
+TERM_RMS: 因RMS系统错误, 任务被终止
+TERM_RUNLIMIT: 因达到LSF运行时间限制, 任务被终止
+TERM_SWAP: 因达到LSF swap使用限制, 任务被终止
+TERM_THREADLIMIT: 因达到LSF线程限制, 任务被终止
+TERM_UNKNOWN: LSF无法确定终止原因
+TERM_WINDOW: 因队列运行窗口关闭, 任务被终止
+TERM_ZOMBIE: 当LSF不可用, 任务被终止

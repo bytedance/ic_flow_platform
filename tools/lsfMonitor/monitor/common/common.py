@@ -4,7 +4,7 @@ import datetime
 import subprocess
 
 
-def bprint(message, color='', background_color='', display_method='', date_format='', level='', indent=0, save_file='', save_file_method='a'):
+def bprint(message, color='', background_color='', display_method='', date_format='', level='', indent=0, end='\n', save_file='', save_file_method='a'):
     """
     Enhancement of "print" function.
 
@@ -13,7 +13,8 @@ def bprint(message, color='', background_color='', display_method='', date_forma
     display_method:   Specify font display method, default to follow the terminal settings.
     date_format:      Will show date/time information before the message, such as "%Y_%m_%d %H:%M:%S". Default is "", means silent mode.
     level:            Will show message level information after date/time information, default is "", means show nothing.
-    Indent:           How much spaces to indent for specified message (with level information), default is 0, means no indentation.
+    indent:           How much spaces to indent for specified message (with level information), default is 0, means no indentation.
+    end:              Specify the character at the end of the output, default is "\n".
     save_file:        Save message into specified file, default is "", means save nothing.
     save_file_method: Save message with "append" or "write" mode, default is "append" mode.
 
@@ -280,7 +281,7 @@ def bprint(message, color='', background_color='', display_method='', date_forma
     else:
         final_message_with_color = final_message
 
-    print(final_message_with_color)
+    print(final_message_with_color, end=end)
 
     # Save file.
     if save_file:

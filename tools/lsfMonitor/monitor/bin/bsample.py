@@ -3,16 +3,16 @@
 import os
 import re
 import sys
-import argparse
-import datetime
+import json
 import time
+import datetime
+import argparse
 from multiprocessing import Process
 
 sys.path.append(str(os.environ['LSFMONITOR_INSTALL_PATH']) + '/monitor')
 from common import common
 from common import common_lsf
 from common import common_sqlite3
-from conf import config
 
 # Import local config file if exists.
 local_config_dir = str(os.environ['HOME']) + '/.lsfMonitor/conf'
@@ -21,6 +21,8 @@ local_config = str(local_config_dir) + '/config.py'
 if os.path.exists(local_config):
     sys.path.append(local_config_dir)
     import config
+else:
+    from conf import config
 
 os.environ["PYTHONUNBUFFERED"] = '1'
 
@@ -34,7 +36,11 @@ def read_args():
     parser.add_argument("-j", "--job",
                         action="store_true",
                         default=False,
-                        help='Sample running job info with command "bjobs -u all -r -UF".')
+                        help='Sample (finished) job info with command "bjobs -u all -d -UF".')
+    parser.add_argument("-m", "--job_mem",
+                        action="store_true",
+                        default=False,
+                        help='Sample (running) job memory usage information with command "bjobs -u all -r -UF".')
     parser.add_argument("-q", "--queue",
                         action="store_true",
                         default=False,
@@ -50,19 +56,23 @@ def read_args():
     parser.add_argument("-u", "--user",
                         action="store_true",
                         default=False,
-                        help='Sample user info with command "busers".')
+                        help='Sample user (finished) job info with command "bjobs -u all -d -UF".')
     parser.add_argument("-U", "--utilization",
                         action="store_true",
                         default=False,
                         help='Sample utilization (slot/cpu/mem) info with command "lsload/bhosts/lshosts".')
+    parser.add_argument("-UD", "--utilization_day",
+                        action="store_true",
+                        default=False,
+                        help='Count and save utilization-day info with utilization data.')
 
     args = parser.parse_args()
 
-    if (not args.job) and (not args.queue) and (not args.host) and (not args.load) and (not args.user) and (not args.utilization):
-        common.bprint('At least one argument of "job/queue/host/load/user/utilization" must be selected.', level='Error')
+    if (not args.job) and (not args.job_mem) and (not args.queue) and (not args.host) and (not args.load) and (not args.user) and (not args.utilization) and (not args.utilization_day):
+        common.bprint('At least one argument of "job/job_mem/queue/host/load/user/utilization/utilization_day" must be selected.', level='Error')
         sys.exit(1)
 
-    return args.job, args.queue, args.host, args.load, args.user, args.utilization
+    return args.job, args.job_mem, args.queue, args.host, args.load, args.user, args.utilization, args.utilization_day
 
 
 class Sampling:
@@ -70,37 +80,36 @@ class Sampling:
     Sample LSF basic information with LSF bjobs/bqueues/bhosts/lshosts/lsload/busers commands.
     Save the infomation into sqlite3 DB.
     """
-    def __init__(self, job_sampling, queue_sampling, host_sampling, load_sampling, user_sampling, utilization_sampling):
+    def __init__(self, job_sampling, job_mem_sampling, queue_sampling, host_sampling, load_sampling, user_sampling, utilization_sampling, utilization_day_counting):
         self.job_sampling = job_sampling
+        self.job_mem_sampling = job_mem_sampling
         self.queue_sampling = queue_sampling
         self.host_sampling = host_sampling
         self.load_sampling = load_sampling
         self.user_sampling = user_sampling
         self.utilization_sampling = utilization_sampling
-
-        # Check cluster info.
-        cluster = self.check_cluster_info()
+        self.utilization_day_counting = utilization_day_counting
 
         # Get sample time.
         self.sample_second = int(time.time())
         self.sample_date = datetime.datetime.today().strftime('%Y%m%d')
         self.sample_time = datetime.datetime.today().strftime('%Y%m%d_%H%M%S')
 
-        # Create db path.
+        # Update self.db_path with cluster information.
         self.db_path = str(config.db_path) + '/monitor'
+        cluster = self.check_cluster_info()
 
         if cluster:
             self.db_path = str(config.db_path) + '/' + str(cluster)
 
-        job_db_path = str(self.db_path) + '/job'
+        # Create db path.
+        self.job_db_path = str(self.db_path) + '/job'
+        self.job_mem_db_path = str(self.db_path) + '/job_mem'
+        self.user_db_path = str(self.db_path) + '/user'
 
-        if not os.path.exists(job_db_path):
-            try:
-                os.makedirs(job_db_path)
-            except Exception as error:
-                common.bprint('Failed on creating sqlite job db directory "' + str(job_db_path) + '".', level='Error')
-                common.bprint(error, color='red', display_method=1, indent=9)
-                sys.exit(1)
+        self.create_dir(self.job_db_path)
+        self.create_dir(self.job_mem_db_path)
+        self.create_dir(self.user_db_path)
 
     def check_cluster_info(self):
         """
@@ -114,11 +123,58 @@ class Sampling:
 
         return cluster
 
+    def create_dir(self, dir_path):
+        """
+        Create dir_path with access permission 777.
+        """
+        if not os.path.exists(dir_path):
+            try:
+                os.makedirs(dir_path)
+                os.chmod(dir_path, 0o777)
+            except Exception as error:
+                common.bprint('Failed on creating directory "' + str(dir_path) + '".', level='Error')
+                common.bprint(error, color='red', display_method=1, indent=9)
+                sys.exit(1)
+
     def sample_job_info(self):
         """
-        Sample job info, especially the memory usage info.
+        Sample (finished) job information into json file.
         """
         print('>>> Sampling job info ...')
+
+        bjobs_dic = common_lsf.get_bjobs_uf_info('bjobs -u all -d -UF')
+
+        # Re-organize jobs_dic with finished_date.
+        date_bjobs_dic = {}
+
+        for job in bjobs_dic.keys():
+            finished_date = common_lsf.switch_bjobs_uf_time(bjobs_dic[job]['finished_time'], '%Y%m%d')
+            date_bjobs_dic.setdefault(finished_date, {})
+            date_bjobs_dic[finished_date][job] = bjobs_dic[job]
+
+        # Write json file based on finished_date.
+        for finished_date in date_bjobs_dic.keys():
+            finished_date_bjobs_dic = date_bjobs_dic[finished_date]
+            finished_date_json = str(self.job_db_path) + '/' + str(finished_date)
+
+            if os.path.exists(finished_date_json):
+                with open(finished_date_json, 'r') as FDJ:
+                    old_finished_date_bjobs_dic = json.loads(FDJ.read())
+
+                    for job in old_finished_date_bjobs_dic.keys():
+                        if job not in finished_date_bjobs_dic:
+                            finished_date_bjobs_dic[job] = old_finished_date_bjobs_dic[job]
+
+            with open(finished_date_json, 'w') as FDJ:
+                FDJ.write(str(json.dumps(finished_date_bjobs_dic, ensure_ascii=False)) + '\n')
+
+        print('    Done (' + str(len(bjobs_dic.keys())) + ' jobs).')
+
+    def sample_job_mem_info(self):
+        """
+        Sample (running) job memory usage information.
+        """
+        print('>>> Sampling job mem usage info ...')
 
         bjobs_dic = common_lsf.get_bjobs_uf_info('bjobs -u all -r -UF')
         job_list = list(bjobs_dic.keys())
@@ -128,20 +184,18 @@ class Sampling:
         key_type_list = ['INTEGER PRIMARY KEY', 'TEXT', 'TEXT']
 
         for job_range in job_range_dic.keys():
-            job_db_file = str(self.db_path) + '/job/' + str(job_range) + '.db'
-            (result, job_db_conn) = common_sqlite3.connect_db_file(job_db_file, mode='write')
+            job_mem_db_file = str(self.job_mem_db_path) + '/' + str(job_range) + '.db'
+            (result, job_mem_db_conn) = common_sqlite3.connect_db_file(job_mem_db_file, mode='write')
 
             if result == 'passed':
-                job_table_list = common_sqlite3.get_sql_table_list(job_db_file, job_db_conn)
+                job_table_list = common_sqlite3.get_sql_table_list(job_mem_db_file, job_mem_db_conn)
 
                 for job in job_range_dic[job_range]:
                     job_table_name = 'job_' + str(job)
 
-                    print('    Sampling for job "' + str(job) + '" ...')
-
-                    # If job table (with old data) has been on the job_db_file, drop it.
+                    # If job table (with old data) has been on the job_mem_db_file, drop it.
                     if job_table_name in job_table_list:
-                        data_dic = common_sqlite3.get_sql_table_data(job_db_file, job_db_conn, job_table_name, ['sample_second'])
+                        data_dic = common_sqlite3.get_sql_table_data(job_mem_db_file, job_mem_db_conn, job_table_name, ['sample_second'])
 
                         if data_dic:
                             if len(data_dic['sample_second']) > 0:
@@ -149,21 +203,21 @@ class Sampling:
 
                                 if self.sample_second - last_sample_second > 3600:
                                     common.bprint('Table "' + str(job_table_name) + '" already existed even one hour ago, will drop it.', level='Warning', indent=4)
-                                    common_sqlite3.drop_sql_table(job_db_file, job_db_conn, job_table_name, commit=False)
+                                    common_sqlite3.drop_sql_table(job_mem_db_file, job_mem_db_conn, job_table_name, commit=False)
                                     job_table_list.remove(job_table_name)
 
                     # Generate sql table if not exitst.
                     if job_table_name not in job_table_list:
                         key_string = common_sqlite3.gen_sql_table_key_string(key_list, key_type_list)
-                        common_sqlite3.create_sql_table(job_db_file, job_db_conn, job_table_name, key_string, commit=False)
+                        common_sqlite3.create_sql_table(job_mem_db_file, job_mem_db_conn, job_table_name, key_string, commit=False)
 
                     # Insert sql table value.
                     value_list = [self.sample_second, self.sample_time, bjobs_dic[job]['mem']]
                     value_string = common_sqlite3.gen_sql_table_value_string(value_list)
-                    common_sqlite3.insert_into_sql_table(job_db_file, job_db_conn, job_table_name, value_string, commit=False)
+                    common_sqlite3.insert_into_sql_table(job_mem_db_file, job_mem_db_conn, job_table_name, value_string, commit=False)
 
-                job_db_conn.commit()
-                job_db_conn.close()
+                job_mem_db_conn.commit()
+                job_mem_db_conn.close()
 
         print('    Done (' + str(len(job_list)) + ' jobs).')
 
@@ -190,8 +244,6 @@ class Sampling:
             for i in range(len(queue_list)):
                 queue = queue_list[i]
                 queue_table_name = 'queue_' + str(queue)
-
-                print('    Sampling for queue "' + str(queue) + '" ...')
 
                 # Clean up queue database, only keep 10000 items.
                 if queue_table_name in queue_table_list:
@@ -221,6 +273,8 @@ class Sampling:
                             total_slots += int(max)
 
                     value_list = [self.sample_second, self.sample_time, total_slots, sum([int(i) for i in bqueues_dic['NJOBS']]), sum([int(i) for i in bqueues_dic['PEND']]), sum([int(i) for i in bqueues_dic['RUN']]), sum([int(i) for i in bqueues_dic['SUSP']])]
+                elif queue == 'lost_and_found':
+                    value_list = [self.sample_second, self.sample_time, 'N/A', bqueues_dic['NJOBS'][i], bqueues_dic['PEND'][i], bqueues_dic['RUN'][i], bqueues_dic['SUSP'][i]]
                 else:
                     for queue_host in queue_host_dic[queue]:
                         host_index = bhosts_dic['HOST_NAME'].index(queue_host)
@@ -257,8 +311,6 @@ class Sampling:
             for i in range(len(host_list)):
                 host = host_list[i]
                 host_table_name = 'host_' + str(host)
-
-                print('    Sampling for host "' + str(host) + '" ...')
 
                 # Clean up host database, only keep 10000 items.
                 if host_table_name in host_table_list:
@@ -308,8 +360,6 @@ class Sampling:
                 host = host_list[i]
                 load_table_name = 'load_' + str(host)
 
-                print('    Sampling for host "' + str(host) + '" ...')
-
                 # Clean up load database, only keep 100000 items.
                 if load_table_name in load_table_list:
                     load_table_count = common_sqlite3.get_sql_table_count(load_db_file, load_db_conn, load_table_name)
@@ -339,53 +389,57 @@ class Sampling:
 
     def sample_user_info(self):
         """
-        Sample user info and save it into sqlite db.
+        Sample user info and save it into json file.
         """
-        print('>>> Sampling user info ...')
+        print('>>> Sampling user job info ...')
 
-        user_db_file = str(self.db_path) + '/user.db'
-        (result, user_db_conn) = common_sqlite3.connect_db_file(user_db_file, mode='write')
+        bjobs_dic = common_lsf.get_bjobs_uf_info('bjobs -u all -d -UF')
 
-        if result == 'passed':
-            user_table_list = common_sqlite3.get_sql_table_list(user_db_file, user_db_conn)
-            busers_dic = common_lsf.get_busers_info()
-            user_list = busers_dic['USER/GROUP']
+        # Re-organize jobs_dic with finished_date.
+        date_bjobs_dic = {}
 
-            key_list = ['sample_second', 'sample_time', 'NJOBS', 'PEND', 'RUN', 'SSUSP', 'USUSP']
-            key_type_list = ['INTEGER PRIMARY KEY', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT']
+        for job in bjobs_dic.keys():
+            finished_date = common_lsf.switch_bjobs_uf_time(bjobs_dic[job]['finished_time'], '%Y%m%d')
+            date_bjobs_dic.setdefault(finished_date, {})
+            user = bjobs_dic[job]['user']
+            date_bjobs_dic[finished_date].setdefault(user, {})
+            date_bjobs_dic[finished_date][user][job] = {'status': bjobs_dic[job]['status'], 'queue': bjobs_dic[job]['queue'], 'project': bjobs_dic[job]['project'], 'rusage_mem': bjobs_dic[job]['rusage_mem'], 'max_mem': bjobs_dic[job]['max_mem']}
 
-            for i in range(len(user_list)):
-                user = user_list[i]
-                user_table_name = 'user_' + str(user)
+        # Write db_file with finished_date.
+        key_list = ['job', 'status', 'queue', 'project', 'rusage_mem', 'max_mem']
+        key_type_list = ['PRIMARY KEY', 'TEXT', 'TEXT', 'TEXT', 'TEXT', 'TEXT']
 
-                print('    Sampling for user "' + str(user) + '" ...')
+        for finished_date in date_bjobs_dic.keys():
+            finished_date_db_file = str(self.user_db_path) + '/' + str(finished_date)
+            (result, finished_date_db_conn) = common_sqlite3.connect_db_file(finished_date_db_file, mode='write')
 
-                # Clean up user database, only keep 100000 items.
-                if user_table_name in user_table_list:
-                    user_table_count = common_sqlite3.get_sql_table_count(user_db_file, user_db_conn, user_table_name)
+            if result == 'passed':
+                user_table_list = common_sqlite3.get_sql_table_list(finished_date_db_file, finished_date_db_conn)
 
-                    if user_table_count != 'N/A':
-                        if int(user_table_count) > 100000:
-                            row_id = 'sample_time'
-                            begin_line = 0
-                            end_line = int(user_table_count) - 100000
+                for user in date_bjobs_dic[finished_date]:
+                    # Generate sql table (user) if not exitst.
+                    if user not in user_table_list:
+                        key_string = common_sqlite3.gen_sql_table_key_string(key_list, key_type_list)
+                        common_sqlite3.create_sql_table(finished_date_db_file, finished_date_db_conn, user, key_string, commit=False)
 
-                            print('    Deleting database "' + str(user_db_file) + '" table "' + str(user_table_name) + '" ' + str(begin_line) + '-' + str(end_line) + ' lines to only keep 100000 items.')
+                    # Get user list from finished_date_db_file.
+                    user_db_data_dic = common_sqlite3.get_sql_table_data(finished_date_db_file, finished_date_db_conn, user, ['job',], '')
+                    user_db_job_list = []
 
-                            common_sqlite3.delete_sql_table_rows(user_db_file, user_db_conn, user_table_name, row_id, begin_line, end_line)
+                    if user_db_data_dic:
+                        user_db_job_list = user_db_data_dic['job']
 
-                # Generate sql table if not exists.
-                if user_table_name not in user_table_list:
-                    key_string = common_sqlite3.gen_sql_table_key_string(key_list, key_type_list)
-                    common_sqlite3.create_sql_table(user_db_file, user_db_conn, user_table_name, key_string, commit=False)
+                    for job in date_bjobs_dic[finished_date][user]:
+                        # Insert sql table value if not exists.
+                        if job not in user_db_job_list:
+                            value_list = [job, bjobs_dic[job]['status'], bjobs_dic[job]['queue'], bjobs_dic[job]['project'], bjobs_dic[job]['rusage_mem'], bjobs_dic[job]['max_mem']]
+                            value_string = common_sqlite3.gen_sql_table_value_string(value_list)
+                            common_sqlite3.insert_into_sql_table(finished_date_db_file, finished_date_db_conn, user, value_string, commit=False)
 
-                # Insert sql table value.
-                value_list = [self.sample_second, self.sample_time, busers_dic['NJOBS'][i], busers_dic['PEND'][i], busers_dic['RUN'][i], busers_dic['SSUSP'][i], busers_dic['USUSP'][i]]
-                value_string = common_sqlite3.gen_sql_table_value_string(value_list)
-                common_sqlite3.insert_into_sql_table(user_db_file, user_db_conn, user_table_name, value_string, commit=False)
+                finished_date_db_conn.commit()
+                finished_date_db_conn.close()
 
-        user_db_conn.commit()
-        user_db_conn.close()
+        print('    Done (' + str(len(bjobs_dic.keys())) + ' jobs).')
 
     def sample_utilization_info(self):
         """
@@ -409,8 +463,6 @@ class Sampling:
             for i in range(len(host_list)):
                 host = host_list[i]
                 utilization_table_name = 'utilization_' + str(host)
-
-                print('    Sampling for host "' + str(host) + '" ...')
 
                 # Clean up utilization database, only keep 100000 items.
                 if utilization_table_name in utilization_table_list:
@@ -494,8 +546,6 @@ class Sampling:
 
         utilization_db_conn.commit()
         utilization_db_conn.close()
-
-        self.count_utilization_day_info()
 
     def get_utilization_day_info(self):
         """
@@ -619,6 +669,10 @@ class Sampling:
             p = Process(target=self.sample_job_info)
             p.start()
 
+        if self.job_mem_sampling:
+            p = Process(target=self.sample_job_mem_info)
+            p.start()
+
         if self.queue_sampling:
             p = Process(target=self.sample_queue_info)
             p.start()
@@ -639,6 +693,10 @@ class Sampling:
             p = Process(target=self.sample_utilization_info)
             p.start()
 
+        if self.utilization_day_counting:
+            p = Process(target=self.count_utilization_day_info)
+            p.start()
+
         p.join()
 
 
@@ -646,8 +704,8 @@ class Sampling:
 # Main Function #
 #################
 def main():
-    (job, queue, host, load, user, utilization) = read_args()
-    my_sampling = Sampling(job, queue, host, load, user, utilization)
+    (job, job_mem, queue, host, load, user, utilization, utilization_day) = read_args()
+    my_sampling = Sampling(job, job_mem, queue, host, load, user, utilization, utilization_day)
     my_sampling.sampling()
 
 

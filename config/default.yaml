@@ -1,50 +1,84 @@
-## Format ##
+## How to define variables for IFP? ##
+#
 # VAR:
 #     key: value
 #
-# TASK:
-#     flow(RUN_AFTER=):vendor:task(RUN_AFTER=):
-#         action:
-#             attribute: value
-#    
+## System Variables ##
 #
-## Supported Variables (default) ##
 # CWD: <ifp start directory>
 # IFP_INSTALL_PATH: <ifp install path>
+# USER: whoami
 # BLOCK: <block name>
 # VERSION: <version name>
 # FLOW: <flow name>
-# VENDOR: <vendor name>
-# BRANCH: <branch name>
 # TASK: <task name>
 #
 #
-## Supported action ##
-# BUILD/RUN/CHECK/SUMMARIZE/POST_RUN/RELEASE
-# 
-# 
-## Supportedd action attribute ##
-# PATH/COMMAND/RUN_METHOD/VIEWER/REPORT_FILE
+#--------------------------------------------------------------------------
+#
+#
+## How to define TASK attribute? ##
+# TASK:
+#     task_name:
+#         key:
+#             attribute: value
+#
+## Supported key ##
+# COMMON/BUILD/RUN/CHECK/SUMMARIZE/RELEASE/RUN_AFTER/DEPENDENCY
+#
+## Supported action attribute ##
+# PATH/COMMAND/RUN_METHOD
+# LOG (Only for RUN)
+# VIEWER/REPORT_FILE (Only for CHECK/SUMMARIZE)
+#
+#
+#--------------------------------------------------------------------------
+#
+#
+## How to define relationship between FLOWs and TASKs
+#
+# FLOW:
+#     initial: [setup]
+#
+#
+#--------------------------------------------------------------------------
 #
 #
 ## Example ##
 # VAR:
 #     BSUB_QUEUE: ai_syn
-#     DEFAULT_PATH: ${CWD}/${BLOCK}/${VERSION}/${FLOW}/${VENDOR}/${BRANCH}
+#     DEFAULT_PATH: ${CWD}/${BLOCK}/${VERSION}/${FLOW}
 #
 # TASK:
-#    k_lib:cadence:setup:
-#        RUN:
-#            PATH: ${DEFAULT_PATH}
-#            COMMAND: ${LIBRARY_CHARACTERIZATION}/tools/gen_setup_file.py -i ${DEFAULT_PATH}/customized_ip_spec_${BLOCK}_${VERSION}_kg_${BRANCH}.xlsx -s kg
-#            RUN_METHOD: bsub -q ${BSUB_QUEUE}
-#        CHECK:
-#            PATH: ${DEFAULT_PATH}
-#            COMMAND: ${LIBRARY_CHARACTERIZATION}/tools/pre_check.py -i ${DEFAULT_PATH}/kitgen_setup.txt -s kg
-#            RUN_METHOD: bsub -q ${BSUB_QUEUE}
-#    k_lib:cadence:lpe(RUN_AFTER=setup):
-#        RUN:
-#            PATH: ${DEFAULT_PATH}
-#            COMMAND: ${LIBRARY_CHARACTERIZATION}/tools/gen_lpe.py -i ${DEFAULT_PATH}/kitgen_setup.txt -s kg
-#            RUN_METHOD: bsub -q ${BSUB_QUEUE}
-
+#     synthesis:
+#         BUILD:
+#             PATH: $DEFAULT_PATH
+#             COMMAND: make build
+#         RUN:
+#             PATH: ${DEFAULT_PATH}/dc
+#             COMMAND: make run_initopt
+#             RUN_METHOD: bsub -q $BSUB_QUEUE -n 8 -R "rusage[mem=50000]"
+#         CHECK:
+#             PATH: ${DEFAULT_PATH}/dc
+#             COMMAND: ${IFP_INSTALL_PATH}/action/check/syn/synopsys/syn_synopsys.syn_dc.py -b ${BLOCK}
+#             VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report.py -i
+#             REPORT_FILE: file_check/file_check.rpt
+#         SUMMARIZE:
+#             PATH: ${DEFAULT_PATH}/dc
+#             COMMAND: ${IFP_INSTALL_PATH}/action/summary/collect_syn_qor.py
+#             VIEWER: /bin/soffice
+#             REPORT_FILE: syn_qor.xlsx
+#         RELEASE:
+#             PATH: ${DEFAULT_PATH}/dc
+#             COMMAND: make release
+#         RUN_AFTER:
+#             TASK: initial
+#         DEPENDENCY:
+#             FILE:
+#                 - ${CWD}/initial_setup.txt
+#             LICENSE:
+#                 - DC 5
+# FLOW: 
+#     initial : [gen_dir]
+#     syn : [fusion_lib, synthesis, dataout]
+#     formal : [dftrtl2syn, syn2dft]

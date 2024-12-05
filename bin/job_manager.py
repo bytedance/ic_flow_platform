@@ -55,7 +55,6 @@ def transfer_formula_to_list(formula):
                 final_list.append('&')
         if i < len(formula.split('|')) - 1:
             final_list.append('|')
-
     return final_list
 
 
@@ -126,13 +125,13 @@ class DebugWindow(QMainWindow):
         self.setWindowTitle('Debug Window')
 
         self.table = QTableView()
-        self.model = QStandardItemModel(0, 13)
-        self.model.setHorizontalHeaderLabels(['Block', 'Version', 'Flow', 'Vendor', 'Branch', 'Task', 'Equation', 'Bool Equation', 'Finish', 'Current Equation', 'Run Time', 'Action', 'Status'])
+        self.model = QStandardItemModel(0, 11)
+        self.model.setHorizontalHeaderLabels(['Block', 'Version', 'Flow', 'Task', 'Equation', 'Bool Equation', 'Finish', 'Current Equation', 'Run Time', 'Action', 'Status'])
         self.table.setModel(self.model)
-        self.table.setColumnWidth(6, 300)
-        self.table.setColumnWidth(7, 150)
-        self.table.setColumnWidth(9, 200)
-        self.table.horizontalHeader().setSectionResizeMode(12, QHeaderView.Stretch)
+        self.table.setColumnWidth(4, 300)
+        self.table.setColumnWidth(5, 150)
+        self.table.setColumnWidth(7, 200)
+        self.table.horizontalHeader().setSectionResizeMode(10, QHeaderView.Stretch)
 
         self.top_layout.addWidget(self.table)
         common_pyqt5.center_window(self)
@@ -144,17 +143,13 @@ class DebugWindow(QMainWindow):
         for block in config_dic['BLOCK'].keys():
             for version in config_dic['BLOCK'][block].keys():
                 for flow in config_dic['BLOCK'][block][version].keys():
-                    for vendor in config_dic['BLOCK'][block][version][flow].keys():
-                        for branch in config_dic['BLOCK'][block][version][flow][vendor].keys():
-                            for task in config_dic['BLOCK'][block][version][flow][vendor][branch].keys():
-                                self.model.setItem(row, 0, QStandardItem(block))
-                                self.model.setItem(row, 1, QStandardItem(version))
-                                self.model.setItem(row, 2, QStandardItem(flow))
-                                self.model.setItem(row, 3, QStandardItem(vendor))
-                                self.model.setItem(row, 4, QStandardItem(branch))
-                                self.model.setItem(row, 5, QStandardItem(task))
-                                row += 1
-                                self.table.setRowHeight(row, 100)
+                    for task in config_dic['BLOCK'][block][version][flow].keys():
+                        self.model.setItem(row, 0, QStandardItem(block))
+                        self.model.setItem(row, 1, QStandardItem(version))
+                        self.model.setItem(row, 2, QStandardItem(flow))
+                        self.model.setItem(row, 3, QStandardItem(task))
+                        row += 1
+                        self.table.setRowHeight(row, 100)
 
     def update_info(self, task_obj):
         if not self.debug:
@@ -173,12 +168,12 @@ class DebugWindow(QMainWindow):
             current_equation = ''.join(transfer_formula_list_to_task_equation(task_obj.current_formula))
             finish = '\n'.join([str(task_obj.formula_list[i]['finish']) for i in run_times])
 
-        self.model.setItem(self.row_mapping[task_obj], 6, QStandardItem(task_equation))
-        self.model.setItem(self.row_mapping[task_obj], 7, QStandardItem(bool_equation))
-        self.model.setItem(self.row_mapping[task_obj], 8, QStandardItem(finish))
-        self.model.setItem(self.row_mapping[task_obj], 9, QStandardItem(current_equation))
-        self.model.setItem(self.row_mapping[task_obj], 10, QStandardItem(str(task_obj.current_run_times)))
-        self.model.setItem(self.row_mapping[task_obj], 11, QStandardItem(task_obj.action if task_obj.action else ''))
+        self.model.setItem(self.row_mapping[task_obj], 4, QStandardItem(task_equation))
+        self.model.setItem(self.row_mapping[task_obj], 5, QStandardItem(bool_equation))
+        self.model.setItem(self.row_mapping[task_obj], 6, QStandardItem(finish))
+        self.model.setItem(self.row_mapping[task_obj], 7, QStandardItem(current_equation))
+        self.model.setItem(self.row_mapping[task_obj], 8, QStandardItem(str(task_obj.current_run_times)))
+        self.model.setItem(self.row_mapping[task_obj], 9, QStandardItem(task_obj.action if task_obj.action else ''))
 
         status = task_obj.status if task_obj.status else ''
         item = QStandardItem(status)
@@ -199,7 +194,7 @@ class DebugWindow(QMainWindow):
         if color:
             item.setForeground(QBrush(color))
 
-        self.model.setItem(self.row_mapping[task_obj], 12, item)
+        self.model.setItem(self.row_mapping[task_obj], 10, item)
 
 
 class JobManager(QThread):
@@ -227,24 +222,67 @@ class JobManager(QThread):
         if self.debug:
             self.debug_window.show()
 
-    def record_formula(self, task_obj=None, flow_formula=None, task_formula=None, formula=None, run_time=None):
+    def record_formula(self, task_obj=None, task_formula=None, formula=None, run_time=None):
         task_obj.formula_list.setdefault(run_time, {})
-        task_obj.formula_list[run_time]['flow_formula'] = flow_formula
         task_obj.formula_list[run_time]['task_formula'] = task_formula
         task_obj.formula_list[run_time]['formula'] = formula
         task_obj.formula_list[run_time]['enable'] = False
         task_obj.formula_list[run_time]['finish'] = False
-
         for item in formula:
             if item not in ['(', ')', '|', '&']:
                 if type(item) is list:
                     for child_item in item:
 
-                        if task_obj not in child_item.child:
+                        if isinstance(child_item, TaskObject) and task_obj not in child_item.child:
                             child_item.child.append(task_obj)
                 else:
-                    if task_obj not in item.child:
+                    if isinstance(item, TaskObject) and task_obj not in item.child:
                         item.child.append(task_obj)
+
+    @staticmethod
+    def clean_dependency(item_list=None, item=None, dependency=None):
+        if not item_list or not item or not dependency:
+            return ''
+
+        independent_condition_list = dependency.split(',')
+        valid_independent_condition_list = []
+
+        if not independent_condition_list:
+            return ''
+
+        for independent_condition in independent_condition_list:
+            parallel_condition_list = independent_condition.split('|')
+            valid_parallel_condition_list = []
+
+            if not parallel_condition_list:
+                continue
+
+            for parallel_condition in parallel_condition_list:
+                and_condition_list = parallel_condition.split('&')
+                valid_add_condition_list = []
+
+                if not and_condition_list:
+                    continue
+
+                for and_condition in and_condition_list:
+                    if and_condition.strip() not in item_list:
+                        continue
+                    else:
+                        valid_add_condition_list.append(and_condition.strip())
+
+                valid_parallel_condition = '&'.join(valid_add_condition_list)
+
+                if valid_parallel_condition:
+                    valid_parallel_condition_list.append(valid_parallel_condition)
+
+            valid_independent_condition = '|'.join(valid_parallel_condition_list)
+
+            if valid_independent_condition:
+                valid_independent_condition_list.append(valid_independent_condition)
+
+        valid_dependency = ','.join(valid_independent_condition_list)
+
+        return valid_dependency
 
     def update(self, config_dic):
 
@@ -252,139 +290,80 @@ class JobManager(QThread):
 
         row = 0
 
+        total_tasks = AutoVivification()
         for block in self.config_dic['BLOCK'].keys():
             for version in self.config_dic['BLOCK'][block].keys():
-                for flow in self.config_dic['BLOCK'][block][version].keys():
-                    for vendor in self.config_dic['BLOCK'][block][version][flow].keys():
-                        for branch in self.config_dic['BLOCK'][block][version][flow][vendor].keys():
-                            for task in self.config_dic['BLOCK'][block][version][flow][vendor][branch].keys():
-                                if self.all_tasks[block][version][flow][vendor][branch][task] == {}:
-                                    task_obj = TaskObject(self.config_dic, block, version, flow, vendor, branch, task, self.ifp_obj, self.debug_window)
-                                    task_obj.update_status_signal.connect(self.ifp_obj.update_task_status)
-                                    task_obj.msg_signal.connect(self.ifp_obj.update_message_text)
-                                    task_obj.set_one_jobid_signal.connect(self.ifp_obj.update_main_table_item)
-                                    task_obj.set_run_time_signal.connect(self.ifp_obj.update_main_table_item)
-                                    task_obj.update_debug_info_signal.connect(self.debug_window.update_info)
-                                    self.all_tasks[block][version][flow][vendor][branch][task] = task_obj
-                                    self.debug_window.row_mapping[task_obj] = row
-                                else:
-                                    self.all_tasks[block][version][flow][vendor][branch][task].config_dic = config_dic
-                                    self.debug_window.row_mapping[self.all_tasks[block][version][flow][vendor][branch][task]] = row
+                total_tasks[block][version] = []
 
-                                row += 1
+                for flow in self.config_dic['BLOCK'][block][version].keys():
+                    for task in self.config_dic['BLOCK'][block][version][flow].keys():
+                        total_tasks[block][version].append(task)
+
+                        if self.all_tasks[block][version][flow][task] == {}:
+                            task_obj = TaskObject(self.config_dic, block, version, flow, task, self.ifp_obj, self.debug_window)
+                            task_obj.update_status_signal.connect(self.ifp_obj.update_task_status)
+                            task_obj.msg_signal.connect(self.ifp_obj.update_message_text)
+                            task_obj.set_one_jobid_signal.connect(self.ifp_obj.update_main_table_item)
+                            task_obj.set_run_time_signal.connect(self.ifp_obj.update_main_table_item)
+                            task_obj.update_debug_info_signal.connect(self.debug_window.update_info)
+                            self.all_tasks[block][version][flow][task] = task_obj
+                            self.debug_window.row_mapping[task_obj] = row
+                        else:
+                            self.all_tasks[block][version][flow][task].config_dic = config_dic
+                            self.debug_window.row_mapping[self.all_tasks[block][version][flow][task]] = row
+
+                        row += 1
         # update parent/child/formula
         for block in self.config_dic['BLOCK'].keys():
             for version in self.config_dic['BLOCK'][block].keys():
+                # No repeated tasks belongs to specific block/version
                 for flow in self.config_dic['BLOCK'][block][version].keys():
-                    run_after_flow = set(self.config_dic['RUN_AFTER_FLOW']['{}:{}:{}'.format(block, version, flow)].replace('|', '&').split('&'))
-                    flow_formula = transfer_formula_to_list(self.config_dic['RUN_AFTER_FLOW']['{}:{}:{}'.format(block, version, flow)])
-                    for prepositive_flow in run_after_flow:
+                    for task in self.config_dic['BLOCK'][block][version][flow].keys():
 
-                        if prepositive_flow == '':
-                            continue
+                        # run_after_task = []
+                        task_formula = []
 
-                        all_prepositive_tasks = []
+                        if self.config_dic['BLOCK'][block][version][flow][task].get('RUN_AFTER', {}).get('TASK', {}):
+                            run_after = self.clean_dependency(item_list=total_tasks[block][version], item=task, dependency=self.config_dic['BLOCK'][block][version][flow][task]['RUN_AFTER']['TASK'])
+                            # run_after_task = set(run_after.replace('|', '&').replace(',', '&').split('&'))
+                            task_formula = transfer_formula_to_list(run_after)
 
-                        for prepositive_vendor in self.config_dic['BLOCK'][block][version][prepositive_flow].keys():
-                            for prepositive_branch in self.config_dic['BLOCK'][block][version][prepositive_flow][prepositive_vendor].keys():
-                                for prepositive_task in self.config_dic['BLOCK'][block][version][prepositive_flow][prepositive_vendor][prepositive_branch].keys():
-                                    task_obj = self.all_tasks[block][version][prepositive_flow][prepositive_vendor][prepositive_branch][prepositive_task]
-                                    all_prepositive_tasks.append(task_obj)
+                        for prepositive_task in task_formula:
+                            if prepositive_task in ['', '&', '|', ',']:
+                                continue
 
-                        flow_formula[flow_formula.index(prepositive_flow)] = all_prepositive_tasks
+                            for flow2 in self.config_dic['BLOCK'][block][version].keys():
+                                for task2 in self.config_dic['BLOCK'][block][version][flow2].keys():
+                                    if prepositive_task == task2:
 
-                    for vendor in self.config_dic['BLOCK'][block][version][flow].keys():
-                        for branch in self.config_dic['BLOCK'][block][version][flow][vendor].keys():
-                            for task in self.config_dic['BLOCK'][block][version][flow][vendor][branch].keys():
-                                run_after_task = set(self.config_dic['RUN_AFTER_TASK']['{}.{}.{}.{}.{}.{}'.format(block, version, flow, vendor, branch, task)].replace('|', '&').replace(',', '&').split('&'))
-                                task_formula = transfer_formula_to_list(self.config_dic['RUN_AFTER_TASK']['{}.{}.{}.{}.{}.{}'.format(block, version, flow, vendor, branch, task)])
+                                        task_obj = self.all_tasks[block][version][flow2][prepositive_task]
 
-                                for prepositive_flow in run_after_flow:
-                                    if prepositive_flow == '':
-                                        continue
+                                        if task_obj not in self.all_tasks[block][version][flow][task].parent.keys():
+                                            self.all_tasks[block][version][flow][task].parent[task_obj] = 'True'
 
-                                    for prepositive_vendor in self.config_dic['BLOCK'][block][version][prepositive_flow].keys():
-                                        for prepositive_branch in self.config_dic['BLOCK'][block][version][prepositive_flow][prepositive_vendor].keys():
-                                            for prepositive_task in self.config_dic['BLOCK'][block][version][prepositive_flow][prepositive_vendor][prepositive_branch].keys():
-                                                task_obj = self.all_tasks[block][version][prepositive_flow][prepositive_vendor][prepositive_branch][prepositive_task]
-                                                if task_obj not in self.all_tasks[block][version][flow][vendor][branch][task].parent.keys():
-                                                    self.all_tasks[block][version][flow][vendor][branch][task].parent[task_obj] = 'True'
+                                        task_formula[task_formula.index(prepositive_task)] = task_obj
 
-                                for prepositive_task in run_after_task:
-                                    if prepositive_task == '':
-                                        continue
+                        task_object = self.all_tasks[block][version][flow][task]
+                        task_object.formula_list = {}
+                        task_formula_child = []
+                        run_time = 1
+                        if not len(task_formula) == 0:
+                            for j in range(len(task_formula)):
+                                task_obj = task_formula[j]
 
-                                    task_obj = self.all_tasks[block][version][flow][vendor][branch][prepositive_task]
+                                if not task_obj == ',' and not j == len(task_formula) - 1:
+                                    task_formula_child.append(task_obj)
+                                    continue
 
-                                    if task_obj not in self.all_tasks[block][version][flow][vendor][branch][task].parent.keys():
-                                        self.all_tasks[block][version][flow][vendor][branch][task].parent[task_obj] = 'True'
+                                if j == len(task_formula) - 1:
+                                    task_formula_child.append(task_obj)
 
-                                    task_formula[task_formula.index(prepositive_task)] = task_obj
-
-                                task_object = self.all_tasks[block][version][flow][vendor][branch][task]
-                                task_object.formula_list = {}
+                                formula = task_formula_child
+                                self.record_formula(task_obj=task_object, task_formula=task_formula_child, formula=formula, run_time=run_time)
+                                run_time += 1
                                 task_formula_child = []
-                                run_time = 1
 
-                                if len(flow_formula) == 0 and not len(task_formula) == 0:
-
-                                    for j in range(len(task_formula)):
-                                        task_obj = task_formula[j]
-
-                                        if not task_obj == ',' and not j == len(task_formula) - 1:
-                                            task_formula_child.append(task_obj)
-                                            continue
-
-                                        if j == len(task_formula) - 1:
-                                            task_formula_child.append(task_obj)
-
-                                        formula = task_formula_child
-                                        self.record_formula(task_obj=task_object, flow_formula=flow_formula, task_formula=task_formula_child, formula=formula, run_time=run_time)
-                                        run_time += 1
-                                        task_formula_child = []
-                                elif not len(flow_formula) == 0 and len(task_formula) == 0:
-                                    formula = flow_formula
-                                    self.record_formula(task_obj=task_object, flow_formula=flow_formula, task_formula=task_formula, formula=formula, run_time=run_time)
-                                    run_time += 1
-                                elif not len(flow_formula) == 0 and not len(task_formula) == 0:
-                                    task_formula_child = []
-
-                                    for j in range(len(task_formula)):
-                                        task_obj = task_formula[j]
-
-                                        if not task_obj == ',' and not j == len(task_formula) - 1:
-                                            task_formula_child.append(task_obj)
-                                            continue
-
-                                        if j == len(task_formula) - 1:
-                                            task_formula_child.append(task_obj)
-
-                                        formula = []
-
-                                        if len(flow_formula) > 1:
-                                            formula.extend(['('])
-
-                                        formula.extend(flow_formula)
-
-                                        if len(flow_formula) > 1:
-                                            formula.extend([')'])
-                                        # formula = ['(', [a1_obj, a2_obj], &, [b1_obj, b2_obj], |, [c1_obj, c2_obj], ',', [d1_obj, d2_obj], &, [e1_obj, e2_obj], |, [f1_obj, f2_obj], ')']
-
-                                        formula.extend(['&'])
-
-                                        if len(task_formula_child) > 1:
-                                            formula.extend(['('])
-
-                                        formula.extend(task_formula_child)
-
-                                        if len(task_formula_child) > 1:
-                                            formula.extend([')'])
-
-                                        self.record_formula(task_obj=task_object, flow_formula=flow_formula, task_formula=task_formula_child, formula=formula, run_time=run_time)
-                                        task_formula_child = []
-                                        run_time += 1
-
-                                self.debug_window.update_info(task_object)
+                        self.debug_window.update_info(task_object)
 
         self.debug_window.update_gui(self.config_dic)
 
@@ -408,20 +387,16 @@ class JobManager(QThread):
             block = line['Block']
             version = line['Version']
             flow = line['Flow']
-            vendor = line['Vendor']
-            branch = line['Branch']
             task = line['Task']
-            task_obj = self.all_tasks[block][version][flow][vendor][branch][task]
+            task_obj = self.all_tasks[block][version][flow][task]
             total_selected_tasks.append(task_obj)
 
         for line in task_dic_list:
             block = line['Block']
             version = line['Version']
             flow = line['Flow']
-            vendor = line['Vendor']
-            branch = line['Branch']
             task = line['Task']
-            task_obj = self.all_tasks[block][version][flow][vendor][branch][task]
+            task_obj = self.all_tasks[block][version][flow][task]
             # Check
 
             # 1. Can't insert prepositive tasks
@@ -444,21 +419,18 @@ class JobManager(QThread):
             block = line['Block']
             version = line['Version']
             flow = line['Flow']
-            vendor = line['Vendor']
-            branch = line['Branch']
             task = line['Task']
-            task_obj = self.all_tasks[block][version][flow][vendor][branch][task]
+            task_obj = self.all_tasks[block][version][flow][task]
             total_selected_tasks.append(task_obj)
 
         for line in task_dic_list:
+
             block = line['Block']
             version = line['Version']
             flow = line['Flow']
-            vendor = line['Vendor']
-            branch = line['Branch']
             task = line['Task']
             # Update formula
-            task_obj = self.all_tasks[block][version][flow][vendor][branch][task]
+            task_obj = self.all_tasks[block][version][flow][task]
 
             # Skip tasks which already have actions (except kill)
             if task_obj.action and task_obj.action not in [common.action.kill]:
@@ -476,7 +448,6 @@ class JobManager(QThread):
             for i in task_obj.formula_list.keys():
                 task_obj.formula_list[i]['finish'] = False
                 task_formula = task_obj.formula_list[i]['task_formula']
-
                 for obj in task_formula:
                     if obj in ['(', ')', '&', '|']:
                         continue
@@ -506,11 +477,9 @@ class JobManager(QThread):
             block = line['Block']
             version = line['Version']
             flow = line['Flow']
-            vendor = line['Vendor']
-            branch = line['Branch']
             task = line['Task']
 
-            task_obj = self.all_tasks[block][version][flow][vendor][branch][task]
+            task_obj = self.all_tasks[block][version][flow][task]
 
             if action_name in [common.action.check_view, common.action.summarize_view]:
                 task_obj.receive_view_action(action_name)
@@ -545,30 +514,28 @@ class JobManager(QThread):
         for block in self.all_tasks.keys():
             for version in self.all_tasks[block].keys():
                 for flow in self.all_tasks[block][version].keys():
-                    for vendor in self.all_tasks[block][version][flow].keys():
-                        for branch in self.all_tasks[block][version][flow][vendor].keys():
-                            for task in self.all_tasks[block][version][flow][vendor][branch].keys():
-                                task_obj = self.all_tasks[block][version][flow][vendor][branch][task]
+                    for task in self.all_tasks[block][version][flow].keys():
+                        task_obj = self.all_tasks[block][version][flow][task]
 
-                                # Task must already own one action
-                                if not task_obj.action:
-                                    continue
-                                else:
-                                    all_finished_flag = False
+                        # Task must already own one action
+                        if not task_obj.action:
+                            continue
+                        else:
+                            all_finished_flag = False
 
-                                # Launch when status is not killing or killed for KILL action
-                                if task_obj.action == common.action.kill:
-                                    if task_obj.status not in [common.status.killing, common.status.killed]:
-                                        task_obj.launch()
+                        # Launch when status is not killing or killed for KILL action
+                        if task_obj.action == common.action.kill:
+                            if task_obj.status not in [common.status.killing, common.status.killed]:
+                                task_obj.launch()
 
-                                # Launch when status is not running for RUN action
-                                elif task_obj.action == common.action.run:
-                                    # If user define run_all_steps, flow will execute build before run
-                                    if task_obj.status not in [common.status.building, common.status.running]:
-                                        task_obj.launch()
-                                # Launch when status is not ING
-                                elif task_obj.status not in common.status_ing.values():
-                                    task_obj.launch()
+                        # Launch when status is not running for RUN action
+                        elif task_obj.action == common.action.run:
+                            # If user define run_all_steps, flow will execute build before run
+                            if task_obj.status not in [common.status.building, common.status.running]:
+                                task_obj.launch()
+                        # Launch when status is not ING
+                        elif task_obj.status not in common.status_ing.values():
+                            task_obj.launch()
 
         if all_finished_flag:
             self.disable_gui_signal.emit(False)
@@ -586,21 +553,19 @@ class JobManager(QThread):
         for block in self.all_tasks.keys():
             for version in self.all_tasks[block].keys():
                 for flow in self.all_tasks[block][version].keys():
-                    for vendor in self.all_tasks[block][version][flow].keys():
-                        for branch in self.all_tasks[block][version][flow][vendor].keys():
-                            for task in self.all_tasks[block][version][flow][vendor][branch].keys():
-                                task_obj = self.all_tasks[block][version][flow][vendor][branch][task]
+                    for task in self.all_tasks[block][version][flow].keys():
+                        task_obj = self.all_tasks[block][version][flow][task]
 
-                                # Task must already own one action
-                                if not task_obj.action:
-                                    continue
-                                else:
-                                    # If tasks not killed
-                                    self.close_flag = True
-                                    if task_obj.action == common.action.kill or task_obj.status in [common.status.killing]:
-                                        continue
+                        # Task must already own one action
+                        if not task_obj.action:
+                            continue
+                        else:
+                            # If tasks not killed
+                            self.close_flag = True
+                            if task_obj.action == common.action.kill or task_obj.status in [common.status.killing]:
+                                continue
 
-                                    task_obj.receive_action(common.action.kill)
+                            task_obj.receive_action(common.action.kill)
 
         # If all tasks has been killed, close main window
         if self.close_flag:
@@ -612,18 +577,16 @@ class JobManager(QThread):
 class TaskObject(QThread):
     update_status_signal = pyqtSignal(object, str, str)
     msg_signal = pyqtSignal(dict)
-    set_one_jobid_signal = pyqtSignal(str, str, str, str, str, str, str, str)
-    set_run_time_signal = pyqtSignal(str, str, str, str, str, str, str, str)
+    set_one_jobid_signal = pyqtSignal(str, str, str, str, str, str)
+    set_run_time_signal = pyqtSignal(str, str, str, str, str, str)
     update_debug_info_signal = pyqtSignal(object)
 
-    def __init__(self, config_dic, block, version, flow, vendor, branch, task, ifp_obj, debug_window):
+    def __init__(self, config_dic, block, version, flow, task, ifp_obj, debug_window):
         super().__init__()
         self.config_dic = config_dic
         self.block = block
         self.version = version
         self.flow = flow
-        self.vendor = vendor
-        self.branch = branch
         self.task = task
         self.parent = {}
         self.child = []
@@ -647,6 +610,98 @@ class TaskObject(QThread):
         self.rerun_command_before_view = None
         self.run_all_steps = False
         self.skipped = False
+        self.ignore_fail = False
+        self.dependency_traceback_stage = 0
+
+        self.action_progress = {common.action.build: ActionProgressObject(common.action.build),
+                                common.action.run: ActionProgressObject(common.action.run),
+                                common.action.check: ActionProgressObject(common.action.check),
+                                common.action.summarize: ActionProgressObject(common.action.summarize)}
+
+    def __eq__(self, other):
+        if id(other) == id(self):
+            return True
+        return False
+
+    def __hash__(self):
+        return hash((self.block, self.version, self.flow, self.task))
+
+    def print_task_progress(self, task, message, prefix=''):
+        if self.action:
+            self.action_progress[self.action].progress_message.append('%s %s' % (prefix, message))
+
+    def calculate_strong_dependency(self, task_obj, formula_list, dependency_traceback_stage):
+        result = False
+        cancelled_num = 0
+        dependency_traceback_stage += 1
+
+        for run_time in formula_list.keys():
+            formula = formula_list[run_time]['formula']
+            new_formula_list = []
+            for i in range(len(formula)):
+                if formula[i] not in ['(', ')', '&', '|', ',']:
+                    if type(formula[i]) is list:
+                        if len(formula[i]) > 1:
+                            new_formula_list.append('(')
+
+                        for j in range(len(formula[i])):
+                            # Parent task is on-schedule
+                            if task_obj.parent[formula[i][j]] in ['False', 'Cancel']:
+                                new_formula_list.append(task_obj.parent[formula[i][j]])
+                            # Parent task do not have any pre-dependency
+                            elif not formula[i][j].formula_list:
+                                new_formula_list.append(task_obj.parent[formula[i][j]])
+                            # Calculate parent task dependency
+                            else:
+                                new_formula_list.append(self.calculate_strong_dependency(formula[i][j], formula[i][j].formula_list, dependency_traceback_stage))
+
+                            if j < len(formula[i]) - 1:
+                                new_formula_list.append('&')
+
+                        if len(formula[i]) > 1:
+                            new_formula_list.append(')')
+                    else:
+                        if task_obj.parent[formula[i]] in ['False', 'Cancel']:
+                            traceback_result = task_obj.parent[formula[i]]
+                        elif not formula[i].formula_list:
+                            traceback_result = task_obj.parent[formula[i]]
+                        else:
+                            traceback_result = self.calculate_strong_dependency(formula[i], formula[i].formula_list, dependency_traceback_stage)
+
+                        new_formula_list.append(traceback_result)
+                else:
+                    new_formula_list.append(formula[i])
+
+            if 'Cancel' in new_formula_list:
+                equation_wo_cancel = ''.join(str(x) for x in new_formula_list).replace('Cancel', 'False')
+                result = eval(equation_wo_cancel)
+
+                if not result:
+                    all_finish_flag = True
+                    for task_obj2 in task_obj.parent.keys():
+                        if task_obj2 in formula:
+                            if task_obj2.status in [common.status.running, common.status.queued]:
+                                all_finish_flag = False
+                                break
+
+                    if all_finish_flag:
+                        cancelled_num += 1
+
+            else:
+                result = eval(''.join(str(x) for x in new_formula_list))
+
+            if result:
+                if not formula_list[run_time]['finish']:
+                    break
+                else:
+                    continue
+
+        if 0 < task_obj.total_run_times == cancelled_num:
+            result = 'Cancel'
+        elif task_obj.total_run_times == 0 and cancelled_num > 0:
+            result = 'Cancel'
+
+        return result
 
     def receive_view_action(self, action_name):
         self.view_action = action_name
@@ -673,6 +728,7 @@ class TaskObject(QThread):
             self.killed_action = self.action
 
         self.action = action_name
+        self.action_progress[self.action] = ActionProgressObject(self.action)
         self.current_run_times = 0
         self.run_all_steps = run_all_steps
         # If task is Killing, need wait killed and execute action
@@ -694,7 +750,6 @@ class TaskObject(QThread):
         self.update_debug_info_signal.emit(self)
 
     def launch(self):
-
         if self.action == common.action.kill:
             pass
         # If pre-task is A|B for C, must avoid A and B emit C to run twice
@@ -704,20 +759,22 @@ class TaskObject(QThread):
         if self.is_checking_license:
             return
 
-        result = False
-
+        self.action_progress[self.action].progress_message = []
         if self.action == common.action.run:
             if self.formula_list:
+                # weak
                 cancelled_num = 0
                 for i in self.formula_list.keys():
+
                     if not self.formula_list[i]['enable']:
                         continue
 
                     equation = transfer_formula_list_to_bool_equation(self, self.formula_list[i]['formula'])
+                    # self.print_task_progress(self.task, 'Condition-%s equation : %s' % (i, equation))
 
                     if 'Cancel' in equation:
                         equation_wo_cancel = ''.join(equation).replace('Cancel', 'False')
-                        result = eval(''.join(equation_wo_cancel))
+                        result = eval(equation_wo_cancel)
 
                         if not result:
                             all_finish_flag = True
@@ -738,7 +795,6 @@ class TaskObject(QThread):
                     else:
 
                         result = eval(''.join(equation))
-
                         if result:
                             if not self.formula_list[i]['finish']:
                                 self.current_formula_id = i
@@ -747,7 +803,18 @@ class TaskObject(QThread):
                             else:
                                 continue
 
-                if cancelled_num == self.total_run_times:
+                # strong dependency
+                # if result is True:
+                self.dependency_traceback_stage = -1
+                result = self.calculate_strong_dependency(self, self.formula_list, self.dependency_traceback_stage)
+
+                if result is False:
+                    self.print_task_progress(self.task, '[RUN_ORDER] : Cant start due to pre-tasks are running')
+                    self.current_formula_id = None
+                    self.current_formula = None
+
+                if cancelled_num == self.total_run_times or result == 'Cancel':
+                    self.print_task_progress(self.task, '[RUN_ORDER] : Cancelled due to pre-tasks are failed or cancelled')
                     self.status = common.status.cancelled
                     self.action = None
                     self.run_all_steps = None
@@ -768,7 +835,8 @@ class TaskObject(QThread):
             result = True
 
         if self.action and result:
-            self.set_run_time_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Runtime', None)
+            self.print_task_progress(self.task, '[RUN_ORDER] : Pre-tasks are all finished!')
+            self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', None)
 
             if self.action == common.action.kill:
                 thread = threading.Thread(target=self.kill_action)
@@ -795,94 +863,104 @@ class TaskObject(QThread):
             run_method = re.sub(r'xterm', f'xterm -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"', run_method)
         elif re.search('gnome-terminal --', run_method) and (not re.search('-c', run_method)):
             run_method = re.sub(r'gnome-terminal --', f'gnome-terminal -t "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"' + f" --wait -- {str(os.environ['SHELL'])} -c '", run_method)
+        elif re.search('terminator -e', run_method) and (not re.search('-T', run_method)):
+            run_method = re.sub(r'terminator -e', f'terminator -u -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"' + r" -e '", run_method)
 
         return run_method
 
-    def check_license(self):
+    def check_file_and_license(self):
+        check_result = True
 
-        license_check_result = True
-        run_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(common.action.run.upper(), None),
-                                     {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'VENDOR': self.vendor, 'BRANCH': self.branch, 'TASK': self.task})
+        run_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(common.action.run.upper(), None),
+                                     {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
+
+        run_dependency = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task].get('DEPENDENCY', {}), {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
 
         if not run_action:
-            return license_check_result
+            return check_result
 
-        self.is_checking_license = True
-        required_license = run_action.get('REQUIRED_LICENSE', '')
-        required_feature = {}
+        if run_action and run_action.get('LOG', ''):
+            self.action_progress[common.action.run].log_path = run_action.get('LOG', '')
 
-        try:
-            for i in required_license.split(','):
-                if len(i.split(':')) == 2:
-                    feature = i.split(':')[0].strip()
-                    quantity = i.split(':')[1].strip()
-                    required_feature[feature] = quantity
+        if run_dependency.get('FILE', []):
 
-            if len(list(required_feature.keys())) > 0:
+            required_files = run_dependency.get('FILE', [])
 
-                self.msg_signal.emit({'message': '*Info*: Check required license {} for {} {} {} {} {} {}'.format(', '.join(list(required_feature.keys())),
-                                                                                                                  self.block,
-                                                                                                                  self.version,
-                                                                                                                  self.flow,
-                                                                                                                  self.vendor,
-                                                                                                                  self.branch,
-                                                                                                                  self.task),
-                                      'color': 'black'})
+            for file in required_files:
+                self.print_task_progress(self.task, '[DEPENDENCY] : check %s if exists' % file)
 
-                run_method = self.get_run_method(run_action)
+                if file and not os.path.exists(file):
+                    self.print_task_progress(self.task, '[RUN_ORDER] : waiting for %s' % file)
+                    check_result = False
+                    time.sleep(5)
+                    return check_result
 
-                if re.search(r'^\s*bsub', run_method):
-                    license_dic = common_license.GetLicenseInfo(lmstat_path=install_config.lmstat_path, bsub_command=run_method).get_license_info()
-                else:
-                    license_dic = common_license.GetLicenseInfo(lmstat_path=install_config.lmstat_path).get_license_info()
+        if run_dependency.get('LICENSE', []):
+            required_license = run_dependency.get('LICENSE', [])
+            required_feature = {}
 
-                filtered_license_dic = common_license.FilterLicenseDic().run(license_dic=license_dic, feature_list=list(required_feature.keys()))
+            try:
+                self.is_checking_license = True
 
-                for specified_feature in required_feature.keys():
-                    total_issued = 0
-                    total_in_use = 0
-                    for license_server in filtered_license_dic.keys():
-                        for vendor_daemon in filtered_license_dic[license_server]['vendor_daemon'].keys():
-                            issued = filtered_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][specified_feature]['issued']
-                            in_use = filtered_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][specified_feature]['in_use']
-                            total_issued += int(issued)
-                            total_in_use += int(in_use)
+                for i in required_license:
+                    if len(i.split(':')) == 2:
+                        feature = i.split(':')[0].strip()
+                        quantity = i.split(':')[1].strip()
+                        required_feature[feature] = quantity
 
-                    if int(required_feature[specified_feature]) <= (total_issued - total_in_use):
-                        pass
+                if len(list(required_feature.keys())) > 0:
+
+                    run_method = self.get_run_method(run_action)
+
+                    if re.search(r'^\s*bsub', run_method):
+                        license_dic = common_license.GetLicenseInfo(lmstat_path=install_config.lmstat_path, bsub_command=run_method).get_license_info()
                     else:
-                        self.msg_signal.emit({'message': '*Info*: waiting for {} (Required : {}, Total issued : {}, Total in used : {}) for {} {} {} {} {} {}'.format(specified_feature,
-                                                                                                                                                                      required_feature[specified_feature],
-                                                                                                                                                                      total_issued,
-                                                                                                                                                                      total_in_use,
-                                                                                                                                                                      self.block,
-                                                                                                                                                                      self.version,
-                                                                                                                                                                      self.flow,
-                                                                                                                                                                      self.vendor,
-                                                                                                                                                                      self.branch,
-                                                                                                                                                                      self.task),
-                                              'color': 'black'})
-                        license_check_result = False
-                        break
-        except Exception:
-            pass
-        finally:
-            self.is_checking_license = False
+                        license_dic = common_license.GetLicenseInfo(lmstat_path=install_config.lmstat_path).get_license_info()
 
-        return license_check_result
+                    filtered_license_dic = common_license.FilterLicenseDic().run(license_dic=license_dic, feature_list=list(required_feature.keys()))
+
+                    for specified_feature in required_feature.keys():
+                        self.print_task_progress(self.task, '[DEPENDENCY] : check %s if is sufficient' % specified_feature)
+                        total_issued = 0
+                        total_in_use = 0
+                        for license_server in filtered_license_dic.keys():
+                            for vendor_daemon in filtered_license_dic[license_server]['vendor_daemon'].keys():
+                                issued = filtered_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][specified_feature]['issued']
+                                in_use = filtered_license_dic[license_server]['vendor_daemon'][vendor_daemon]['feature'][specified_feature]['in_use']
+                                total_issued += int(issued)
+                                total_in_use += int(in_use)
+
+                        if int(required_feature[specified_feature]) <= (total_issued - total_in_use):
+                            pass
+                        else:
+                            self.msg_signal.emit({'message': '*Info*: waiting for {} (Required : {}, Total issued : {}, Total in used : {}) for {} {} {} {}'.format(specified_feature,
+                                                                                                                                                                    required_feature[specified_feature],
+                                                                                                                                                                    total_issued,
+                                                                                                                                                                    total_in_use,
+                                                                                                                                                                    self.block,
+                                                                                                                                                                    self.version,
+                                                                                                                                                                    self.flow,
+                                                                                                                                                                    self.task),
+                                                  'color': 'black'})
+                            self.print_task_progress(self.task, '[RUN_ORDER] : waiting for {} (Required : {}, Total issued : {}, Total in used : {})'.format(specified_feature, required_feature[specified_feature], total_issued, total_in_use))
+                            time.sleep(5)
+                            check_result = False
+                            break
+            except Exception:
+                pass
+            finally:
+                self.is_checking_license = False
+
+        return check_result
 
     def expand_var(self, action_dict, task_dict):
         if not action_dict:
             return None
 
         new_action = {}
-        ifp_var_dic = {}
-
-        for attr in self.ifp_obj.config_obj.var_dic.keys():
-            ifp_var_dic[attr] = common.expand_var(self.ifp_obj.config_obj.var_dic[attr], ifp_var_dic=self.ifp_obj.config_obj.var_dic, **task_dict)
 
         for attr in action_dict.keys():
-            new_action[attr] = common.expand_var(action_dict[attr], ifp_var_dic=ifp_var_dic, **task_dict)
+            new_action[attr] = common.expand_var(action_dict[attr], ifp_var_dic=self.ifp_obj.config_obj.var_dic, **task_dict)
 
         return new_action
 
@@ -890,13 +968,12 @@ class TaskObject(QThread):
         """
         Execute action for BUILD/RUN/CHECK/SUMMARIZE/RELEASE
         """
-
         # Avoid kill action when task is building for Run all steps
         if action == common.action.kill:
             return
 
-        run_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(action.upper(), None),
-                                     {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'VENDOR': self.vendor, 'BRANCH': self.branch, 'TASK': self.task})
+        run_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(action.upper(), None),
+                                     {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
 
         self.status = None
 
@@ -909,18 +986,19 @@ class TaskObject(QThread):
         if self.skipped:
             self.status = '{} {}'.format(action, common.status.skipped)
             self.update_status_signal.emit(self, action, self.status)
-            self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Job', '')
+            self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', '')
             return
 
         if (not run_action) or (not run_action.get('COMMAND')):
             self.status = '{} {}'.format(action, common.status.undefined)
+            self.update_status_signal.emit(self, action, self.status)
         else:
             run_method = self.get_run_method(run_action)
             self.status = common.status_ing[action]
-            self.update_status_signal.emit(self, common.action.check, None)
+            # self.update_status_signal.emit(self, common.action.check, None)
             self.update_status_signal.emit(self, self.action, self.status)
             self.update_debug_info_signal.emit(self)
-            self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s : %s "%s"' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, self.status, run_method, run_action['COMMAND']), 'color': 'black'})
+            self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s : %s "%s"' % (self.block, self.version, self.flow, self.task, self.status, run_method, run_action['COMMAND']), 'color': 'black'})
 
             # Get command
             command = run_action['COMMAND']
@@ -931,14 +1009,35 @@ class TaskObject(QThread):
             if re.search(r'gnome-terminal', run_method):
                 command = str(command) + "; exit'"
                 # command = str(command) + f"; exec {str(os.environ['SHELL'])}" + "'"
+            elif re.search(r'terminator', run_method):
+                command = str(command) + r"'"
 
             if ('PATH' in run_action) and run_action['PATH']:
                 if os.path.exists(run_action['PATH']):
                     command = 'cd ' + str(run_action['PATH']) + '; ' + str(command)
+                    command_dir = '%s/.ifp/' % str(run_action['PATH'])
                 else:
-                    self.msg_signal.emit({'message': '*Warning*: {} PATH "'.format(action) + str(run_action['PATH']) + '" not exists.', 'color': 'orange'})
+                    # self.msg_signal.emit({'message': '*Warning*: {} PATH "'.format(action) + str(run_action['PATH']) + '" not exists.', 'color': 'orange'})
+                    command_dir = '%s/.ifp/' % os.getcwd()
             else:
                 self.msg_signal.emit({'message': '*Warning*: {} PATH is not defined for task "'.format(action) + str(self.task) + '".', 'color': 'orange'})
+                command_dir = '%s/.ifp/' % os.getcwd()
+
+            # Record command
+            if not os.path.exists(command_dir):
+                os.system('mkdir -p %s' % command_dir)
+
+            self.action_progress[action].current_path = command_dir
+            command_file = '%s/%s_%s.sh' % (command_dir, action, self.task)
+            command_f = open(command_file, 'w')
+            command_f.write('#!/bin/bash\n')
+
+            for (key, value) in self.ifp_obj.config_obj.var_dic.items():
+                command_f.write('export %s=%s\n' % (key, value))
+
+            command_f.write(command)
+            command_f.close()
+            self.action_progress[action].current_command = command
 
             # Run command
             if re.search(r'^\s*bsub', run_method):
@@ -949,26 +1048,28 @@ class TaskObject(QThread):
                     self.job_id = 'b:{}'.format(common.get_jobid(stdout))
 
                     if action in [common.action.run]:
-                        self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Job', str(self.job_id))
-                        self.set_run_time_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Runtime', "pending")
+                        self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', str(self.job_id))
+                        self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "pending")
 
                     while True:
                         current_job = self.job_id[2:]
                         current_job_dic = common_lsf.get_bjobs_uf_info(command='bjobs -UF ' + str(current_job))
+
+                        self.action_progress[action].current_job_dict = current_job_dic
 
                         if current_job_dic:
                             job_status = current_job_dic[current_job]['status']
 
                             if job_status in ['RUN', 'EXIT', 'DONE']:
                                 if action in [common.action.run]:
-                                    self.set_run_time_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
+                                    self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
 
                                 break
 
                         time.sleep(1)
                 else:
                     self.job_id = 'submit fail'
-                    self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s submit fail : %s "%s"' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, action, run_method, run_action['COMMAND']),
+                    self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s submit fail : %s "%s"' % (self.block, self.version, self.flow, self.task, action, run_method, run_action['COMMAND']),
                                           'color': 'red'})
 
             else:
@@ -976,9 +1077,10 @@ class TaskObject(QThread):
                 self.job_id = 'l:{}'.format(process.pid)
 
                 if action in [common.action.run]:
-                    self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Job', str(self.job_id))
-                    self.set_run_time_signal.emit(self.block, self.version, self.flow, self.vendor, self.branch, self.task, 'Runtime', "00:00:00")
+                    self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', str(self.job_id))
+                    self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:00")
 
+            self.action_progress[action].job_id = self.job_id
             stdout, stderr = process.communicate()
             return_code = process.returncode
 
@@ -994,18 +1096,19 @@ class TaskObject(QThread):
 
                 if return_code == 0:
                     self.status = '{} {}'.format(action, common.status.passed)
-                    self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s done' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, action), 'color': 'green'})
+                    self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s done' % (self.block, self.version, self.flow, self.task, action), 'color': 'green'})
                 else:
                     self.status = '{} {}'.format(action, common.status.failed)
-                    self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] %s failed: %s "%s"' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, action, run_method, run_action['COMMAND']), 'color': 'red'})
-                    self.msg_signal.emit({'message': stderr, 'color': 'red'})
+                    self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s failed: %s "%s"' % (self.block, self.version, self.flow, self.task, action, run_method, run_action['COMMAND']), 'color': 'red'})
+                    self.print_task_progress(self.task, '[RUN_RESULT] : %s' % stderr)
+                    self.print_task_progress(self.task, '[RUN_RESULT] : %s' % stdout)
 
             if action in [common.action.check, common.action.check_view]:
                 self.check_status = self.status
             elif action in [common.action.summarize, common.action.summarize_view]:
                 self.summarize_status = self.status
 
-        self.update_status_signal.emit(self, action, self.status)
+            self.update_status_signal.emit(self, action, self.status)
 
     def manage_action(self):
         """
@@ -1013,7 +1116,7 @@ class TaskObject(QThread):
         """
         # Check license for RUN action
         if self.action in [common.action.run] and not self.skipped:
-            if not self.check_license():
+            if not self.check_file_and_license():
                 self.current_formula_id = None
                 self.current_formula = None
                 return
@@ -1026,6 +1129,7 @@ class TaskObject(QThread):
             self.execute_action(common.action.build)
 
         # Execute action
+        self.print_task_progress(self.task, '[ACTION] : Start execute %s action' % self.action)
         self.execute_action(self.action)
 
         all_finished_flag = True
@@ -1033,9 +1137,9 @@ class TaskObject(QThread):
         if self.action == common.action.run or (self.action == common.action.kill and self.killed_action == common.action.run):
 
             # Force execute CHECK after RUN
-            if self.action == common.action.run and not self.skipped:
-                check_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(common.action.check.upper(), None),
-                                               {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'VENDOR': self.vendor, 'BRANCH': self.branch, 'TASK': self.task})
+            if self.action == common.action.run and not self.skipped and self.ifp_obj.auto_check:
+                check_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(common.action.check.upper(), None),
+                                               {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
 
                 if (not check_action) or (not check_action.get('COMMAND')):
                     pass
@@ -1053,7 +1157,7 @@ class TaskObject(QThread):
 
             # If status is PASSED or user set ignore fail tasks, set TRUE for dependency state in self.child
             if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed), '{} {}'.format(common.action.run, common.status.skipped)] or \
-                    (self.ifp_obj.ignore_fail and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
+                    ((self.ifp_obj.ignore_fail or self.ignore_fail) and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
 
                 if all_finished_flag:
                     self.action = None
@@ -1102,7 +1206,7 @@ class TaskObject(QThread):
         # If user defined run_all_steps and all run times have finished which means RUN action has finished and need to execute CHECK and SUMMARIZE
         if self.run_all_steps and all_finished_flag and not self.skipped:
             if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed)] or \
-                    (self.ifp_obj.ignore_fail and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
+                    ((self.ifp_obj.ignore_fail or self.ignore_fail) and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
                 self.action = common.action.summarize
                 self.execute_action(common.action.summarize)
                 self.action = None
@@ -1117,7 +1221,7 @@ class TaskObject(QThread):
         """
 
         self.status = common.status.killing
-        self.msg_signal.emit({'message': '[%s/%s/%s/%s/%s/%s] is %s' % (self.block, self.version, self.flow, self.vendor, self.branch, self.task, common.status.killing), 'color': 'red'})
+        self.msg_signal.emit({'message': '[%s/%s/%s/%s] is %s' % (self.block, self.version, self.flow, self.task, common.status.killing), 'color': 'red'})
         self.update_status_signal.emit(self, self.killed_action, common.status.killing)
 
         while self.killed_action and not self.job_id:
@@ -1142,8 +1246,8 @@ class TaskObject(QThread):
             self.execute_action(self.rerun_command_before_view)
 
         # Run viewer command under task check directory.
-        action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.vendor][self.branch][self.task]['ACTION'].get(self.view_action.split()[0].upper(), None),
-                                 {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'VENDOR': self.vendor, 'BRANCH': self.branch, 'TASK': self.task})
+        action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(self.view_action.split()[0].upper(), None),
+                                 {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
 
         command = ''
 
@@ -1182,9 +1286,9 @@ class TaskObject(QThread):
                     child_task.parent[self] = 'True'
                 self.update_debug_info_signal.emit(child_task)
 
-    def print_output(self, block, version, flow, vendor, branch, task, result, output):
+    def print_output(self, block, version, flow, task, result, output):
         self.debug_print('')
-        self.debug_print('[DEBUG] Block(' + str(block) + ')  Version(' + str(version) + ')  Flow(' + str(flow) + ')  Vendor(' + str(vendor) + ')  Branch(' + str(branch) + ')  Task(' + str(task) + ')  :  ' + str(result))
+        self.debug_print('[DEBUG] Block(' + str(block) + ')  Version(' + str(version) + ')  Flow(' + str(flow) + ')  Task(' + str(task) + ')  :  ' + str(result))
         self.debug_print('[DEBUG] ----------------')
 
         try:
@@ -1200,3 +1304,14 @@ class TaskObject(QThread):
     def debug_print(self, message):
         if self.debug:
             print(message)
+
+
+class ActionProgressObject:
+    def __init__(self, action):
+        self.action = action
+        self.job_id = None
+        self.current_path = None
+        self.current_command = None
+        self.progress_message = []
+        self.log_path = None
+        self.current_job_dict = None

@@ -6,7 +6,7 @@ import screeninfo
 from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem, QCompleter
 from PyQt5.QtGui import QTextCursor, QFont
 from PyQt5.Qt import QFontMetrics
-from PyQt5.QtCore import Qt, QEvent
+from PyQt5.QtCore import Qt, QEvent, QObject
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5 import NavigationToolbar2QT
@@ -106,6 +106,23 @@ class MyCheckBox(QCheckBox):
         return super().eventFilter(watched, event)
 
 
+class ComboBoxEventFilter(QObject):
+    def __init__(self, comboBox, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.comboBox = comboBox
+        self.droppedDown = False
+
+    def eventFilter(self, obj, event):
+        # MouseButtonPress
+        if event.type() == 3:
+            self.droppedDown = True
+        # MouseLeave
+        elif event.type() == 11:
+            self.droppedDown = False
+
+        return super().eventFilter(obj, event)
+
+
 class QComboCheckBox(QComboBox):
     """
     QComboCheckBox is a QComboBox with checkbox.
@@ -129,6 +146,15 @@ class QComboCheckBox(QComboBox):
 
         # Adjust width for new item.
         self.dropDownBoxWidthPixel = self.width()
+
+        self.eventFilter = ComboBoxEventFilter(self)
+        self.view().viewport().installEventFilter(self.eventFilter)
+
+    def hidePopup(self):
+        if self.eventFilter.droppedDown:
+            return
+        else:
+            return super().hidePopup()
 
     def validQLineEditValue(self):
         """
@@ -156,6 +182,7 @@ class QComboCheckBox(QComboBox):
         self.checkBoxList.append(qBox)
         self.qListWidget.setItemWidget(qItem, qBox)
         self.updateDropDownBoxWidth(text, qBox)
+        self.updateDropDownBoxHeight()
 
     def qBoxStateChanged(self, checkState):
         """
@@ -203,11 +230,22 @@ class QComboCheckBox(QComboBox):
         """
         fm = QFontMetrics(QFont())
         textPixel = fm.width(text)
-        indicatorPixel = qBox.iconSize().width() * 1.4
+        indicatorPixel = int(qBox.iconSize().width() * 1.4)
 
         if textPixel > self.dropDownBoxWidthPixel:
             self.dropDownBoxWidthPixel = textPixel
             self.view().setMinimumWidth(self.dropDownBoxWidthPixel + indicatorPixel)
+
+    def updateDropDownBoxHeight(self):
+        fm = QFontMetrics(QFont())
+        fontPixel = fm.height() + 2
+        self.setStyleSheet(f"""
+            QComboBox QAbstractItemView::item {{
+                min-height: {fontPixel}px;
+                padding: 0px;
+                margin: 0px;
+            }}
+        """)
 
     def selectedItems(self):
         """

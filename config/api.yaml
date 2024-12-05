@@ -67,7 +67,7 @@ API:
         - LABEL: "PRE_CFG function for demo case"
           PATH: ${CWD}
           ENABLE: True
-          COMMAND: echo -e '\033[37;41;1mYou can execute some script before load ifp.cfg.yaml by API(PRE_CFG) function, such as generate a customized ifp.cfg.yaml for user!\033[0m' 
+          COMMAND: echo -e '\033[37;40;1mYou can execute some script before load ifp.cfg.yaml by API(PRE_CFG) function, such as generate a customized ifp.cfg.yaml for user!\033[0m' 
           COMMENT : 'For demo case'
         - LABEL: 'pre_cfg'
           PATH: ${CWD}

@@ -582,7 +582,12 @@ def check_expire_date(expire_date, second_threshold=1209600):
     if re.search(r'permanent', expire_date):
         return 0
     else:
-        expire_seconds = int(time.mktime(time.strptime(expire_date, '%d-%b-%Y')))
+        try:
+            expire_seconds = int(time.mktime(time.strptime(expire_date, '%d-%b-%Y')))
+        except Exception as warning:
+            common.bprint('Failed to parse expire_data "' + str(expire_date) + '": ' + str(warning), level='Warning')
+            return 0
+
         expire_seconds = expire_seconds + 86400
         current_seconds = int(time.time())
 

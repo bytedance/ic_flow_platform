@@ -1,15 +1,18 @@
-# IC Flow Platform V1.3.1 (2024.09.04)
+# IC Flow Platform V1.4 (2024.11.30)
+
+> <font color=red size=5>V1.4 is not compatible with previous version due to removed vendor/branch and new format default.yaml</font>
 
 ## Update history
 ***
-| Version | Date         | Update content                                                                                     |
-|:--------|:-------------|:---------------------------------------------------------------------------------------------------|
-| V1.3.1  | (2024.09.04) | Support edit and export default.yaml / api.yaml from GUI<br/> Add syn demo case in user guidance   |
-| V1.3    | (2024.07.15) | Brand new user configuration interface and API function to support customized daily work scenarios |
-| V1.2    | (2023.12.31) | Support more complex logic control and centrally manage user settings                              |
-| V1.1.1  | (2023.08.31) | Optimize menu bar functions and interface operations                                               |
-| V1.1    | (2023.07.14) | Fix some operation bugs and optimize CONFIG TAB operation mode                                     |
-| V1.0    | (2023.02.02) | Open source and the first official version is released                                             |
+| Version | Date          | Update content                                                                                                                                                       |
+|:-------|:--------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| V1.4   | (2024.11.30)  | Remove vendor and branch columns<br/>More detailed task information interface</br>More clearly method to define task attributes/run order/dependency in default.yaml |
+| V1.3.1 | (2024.09.04)  | Support edit and export default.yaml / api.yaml from GUI<br/> Add syn demo case in user guidance                                                                     |
+| V1.3   | (2024.07.15)  | Brand new user configuration interface and API function to support customized daily work scenarios                                                                   |
+| V1.2   | (2023.12.31)  | Support more complex logic control and centrally manage user settings                                                                                                |
+| V1.1.1 | (2023.08.31)  | Optimize menu bar functions and interface operations                                                                                                                 |
+| V1.1   | (2023.07.14)  | Fix some operation bugs and optimize CONFIG TAB operation mode                                                                                                       |
+| V1.0   | (2023.02.02)  | Open source and the first official version is released                                                                                                               |
 
 
 ## Introduction
@@ -61,9 +64,9 @@ IFP will enter demo mode when you set ${IFP_DEMO_MODE}=TRUE, such as (bash env):
 
 <img src="./data/pictures/readme/IFP_set_task.png" width="80%">
 
-  - Step 5 : Adjust task actuating logic in `CONFIG-Dependency interface`, if you select `Enable user dependency interface`
+  - Step 5 : Adjust task actuating logic in `CONFIG-Order interface`, if you select `Enable user order interface`
 
-<img src="./data/pictures/readme/IFP_set_dependency.png" width="80%">
+<img src="./data/pictures/readme/IFP_set_order.png" width="80%">
 
   - Step 6 : Adjust IFP internal variables in `CONFIG-Variable interface`, if you select `Enable user variable interface`
 

@@ -1,4 +1,3 @@
-import datetime
 import os
 import sys
 import yaml
@@ -7,6 +6,7 @@ os.environ['PYTHONUNBUFFERED'] = '1'
 
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 import common
+
 
 ################
 # Main Process #
@@ -27,33 +27,23 @@ def main():
                         'GROUP': 'dv',
                         'DEFAULT_YAML': '%s/config/default.demo.dv.yaml' % str(os.environ['IFP_INSTALL_PATH']),
                         'API_YAML': '%s/config/api.demo.dv.yaml' % str(os.environ['IFP_INSTALL_PATH'])}
-        block_version = 'RTL_A_Bench_1'
-        ifp_cfg_dict['BLOCK'].setdefault(project, {})
-        ifp_cfg_dict['BLOCK'][project].setdefault(block_version, {})
 
         with open('%s/config/default.demo.dv.yaml' % str(os.environ['IFP_INSTALL_PATH']), 'rb') as SF:
             default_yaml_dict = yaml.load(SF, Loader=yaml.FullLoader)
 
-        branch = datetime.datetime.now().strftime('%Y_%m_%d')
+        block = project
+        version = 'RTL_A_Bench_1'
+        ifp_cfg_dict['BLOCK'].setdefault(block, {})
+        ifp_cfg_dict['BLOCK'][block].setdefault(version, {})
 
-        for item in default_yaml_dict['TASK'].keys():
-            flow = item.split(':')[0]
-            vendor = item.split(':')[1]
-            task = item.split(':')[2]
-            if flow not in ifp_cfg_dict['BLOCK'][project].keys():
-                ifp_cfg_dict['BLOCK'][project][block_version].setdefault(flow, {})
-
-            if vendor not in ifp_cfg_dict['BLOCK'][project][block_version][flow].keys():
-                ifp_cfg_dict['BLOCK'][project][block_version][flow].setdefault(vendor, {})
-
-            if branch not in ifp_cfg_dict['BLOCK'][project][block_version][flow][vendor].keys():
-                ifp_cfg_dict['BLOCK'][project][block_version][flow][vendor].setdefault(branch, {})
-
-            if task not in ifp_cfg_dict['BLOCK'][project][block_version][flow][vendor][branch].keys():
-                ifp_cfg_dict['BLOCK'][project][block_version][flow][vendor][branch].setdefault(task, {})
+        for flow in ['initial', 'analysis', 'elaboration', 'simulation']:
+            ifp_cfg_dict['BLOCK'][block][version].setdefault(flow, {})
+            for task in default_yaml_dict['FLOW'][flow]:
+                ifp_cfg_dict['BLOCK'][block][version][flow].setdefault(task, {})
 
         with open(ifp_cfg_yaml, 'w', encoding='utf-8') as SF:
             yaml.dump(ifp_cfg_dict, SF, indent=4, sort_keys=False)
+
 
 if __name__ == '__main__':
     main()

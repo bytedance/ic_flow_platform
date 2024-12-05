@@ -1,6 +1,5 @@
 import os
 import sys
-import stat
 import subprocess
 
 CWD = os.getcwd()
@@ -63,7 +62,7 @@ export LSFMONITOR_INSTALL_PATH=""" + str(CWD) + """
 # Execute """ + str(tool_name) + """.py.
 python3 $LSFMONITOR_INSTALL_PATH/""" + str(tool_name) + '.py "$@"')
 
-            os.chmod(tool, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
+            os.chmod(tool, 0o755)
         except Exception as error:
             print('*Error*: Failed on generating script "' + str(tool) + '": ' + str(error))
             sys.exit(1)
@@ -96,8 +95,8 @@ lmstat_path = "''' + str(lmstat_path) + '''"
 lmstat_bsub_command = ""
 ''')
 
-            os.chmod(config_file, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
-            os.chmod(db_path, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
+            os.chmod(config_file, 0o777)
+            os.chmod(db_path, 0o777)
         except Exception as error:
             print('*Error*: Failed on opening config file "' + str(config_file) + '" for write: ' + str(error))
             sys.exit(1)

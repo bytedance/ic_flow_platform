@@ -5,7 +5,6 @@
 # Created On  : 2022-05-27 13:48:57
 # Description :
 ################################
-import copy
 import os
 import re
 import sys
@@ -33,27 +32,20 @@ class Config:
     dict_keys(['block2_version'])
     >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW.keys()
     dict_keys(['flow1', 'flow2'])
-    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].RUN_AFTER
-    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].VENDOR.keys()
-    dict_keys(['vendor1'])
-    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].VENDOR['vendor1'].BRANCH.keys()
-    dict_keys(['branch1'])
-    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].VENDOR['vendor1'].BRANCH['branch1'].TASK.keys()
+    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].TASK.keys()
     dict_keys(['task1'])
-    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].VENDOR['vendor1'].BRANCH['branch1'].TASK['task1'].RUN_AFTER
-    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].VENDOR['vendor1'].BRANCH['branch1'].TASK['task1'].ACTION.keys()
+    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].TASK['task1'].RUN_AFTER
+    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].TASK['task1'].ACTION.keys()
     dict_keys(['COMMON', 'BUILD', 'RUN', 'CHECK', 'SUMMARIZE', 'RELEASE'])
-    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].VENDOR['vendor1'].BRANCH['branch1'].TASK['task1'].ACTION['BUILD']
+    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].TASK['task1'].ACTION['BUILD']
     {'NAME': 'BUILD', 'COMMAND': 'task1_build_cmd', 'PATH': 'CWD'}
-    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].VENDOR['vendor1'].BRANCH['branch1'].TASK['task1'].PATH
+    >>> c.BLOCK['block1'].VERSION['block1_versionA'].FLOW['flow1'].TASK['task1'].PATH
     'CWD'
     >>> table_list = c.main_table_info_list
     >>> len(table_list)
     5
     >>> table_list[0]['Block']
     'block1'
-    >>> c.config_dic['RUN_AFTER_FLOW']['block:version:flow']
-    >>> c.config_dic['RUN_AFTER_TASK']['block.version.flow.vendor.branch.task']
     """
     def __new__(cls, *args, **kwargs):
         obj = getattr(cls, '__instance__', None)
@@ -141,13 +133,13 @@ class Config:
         self.env_dic = common.get_env_dic(project=self.PROJECT, group=self.GROUP)
         self.var_dic.update(self.env_dic)
 
-        default_config_dic = {}
+        self.default_config_dic = {}
         if os.path.exists(self.default_config_file):
-            default_config_dic = self.parse_config_file(self.default_config_file, kind='default')
-            default_config_dic = self.filter_dependency(default_config_dic)
+            self.default_config_dic = self.parse_config_file(self.default_config_file, kind='default')
+            # default_config_dic = self.filter_dependency(default_config_dic)
 
-            if ('VAR' in default_config_dic) and isinstance(default_config_dic['VAR'], dict):
-                for (key, value) in default_config_dic['VAR'].items():
+            if ('VAR' in self.default_config_dic) and isinstance(self.default_config_dic['VAR'], dict):
+                for (key, value) in self.default_config_dic['VAR'].items():
                     if isinstance(value, str) or isinstance(value, int) or isinstance(value, float):
                         self.var_dic[key] = value
 
@@ -175,92 +167,87 @@ class Config:
                                     flow_obj = Flow(flow)
 
                                     if user_config_dic['BLOCK'][block][version][flow]:
-                                        for vendor in user_config_dic['BLOCK'][block][version][flow].keys():
-                                            vendor_obj = Vendor(vendor)
+                                        for task in user_config_dic['BLOCK'][block][version][flow].keys():
+                                            task_obj = Task(task)
+                                            user_task_dic = user_config_dic['BLOCK'][block][version][flow][task]
+                                            # Update task_obj task attribute with default config file settings.
+                                            if self.default_config_dic:
+                                                # Get task information from default.yaml.
+                                                if 'TASK' in self.default_config_dic:
+                                                    task_mark = str(task_obj.NAME)
 
-                                            if user_config_dic['BLOCK'][block][version][flow][vendor]:
-                                                for branch in user_config_dic['BLOCK'][block][version][flow][vendor].keys():
-                                                    branch_obj = Branch(branch)
+                                                    if self.default_config_dic['TASK'] and (task_mark in self.default_config_dic['TASK']) and self.default_config_dic['TASK'][task_mark]:
+                                                        for action in self.default_config_dic['TASK'][task_mark].keys():
+                                                            if action in ['COMMON', 'BUILD', 'RUN', 'CHECK', 'SUMMARIZE', 'RELEASE']:
+                                                                default_action_dic = self.default_config_dic['TASK'][task_mark].get(action, {})
 
-                                                    if user_config_dic['BLOCK'][block][version][flow][vendor][branch]:
-                                                        for task in user_config_dic['BLOCK'][block][version][flow][vendor][branch].keys():
-                                                            task_obj = Task(task)
-                                                            user_task_dic = user_config_dic['BLOCK'][block][version][flow][vendor][branch][task]
-                                                            # Update task_obj task attribute with default config file settings.
-                                                            if default_config_dic:
-                                                                # Get task information from default.yaml.
-                                                                if 'TASK' in default_config_dic:
-                                                                    task_mark = str(flow_obj.NAME) + ':' + str(vendor_obj.NAME) + ':' + str(task_obj.NAME)
+                                                                if default_action_dic:
+                                                                    for action_attr in ['XTERM_COMMAND', 'PATH', 'COMMAND', 'RUN_METHOD', 'VIEWER', 'REPORT_FILE', 'REQUIRED_LICENSE']:
+                                                                        if (action_attr in default_action_dic) and (default_action_dic[action_attr]):
+                                                                            task_obj.ACTION.setdefault(action, {})
+                                                                            task_obj.ACTION[action][action_attr] = default_action_dic[action_attr]
 
-                                                                    if default_config_dic['TASK'] and (task_mark in default_config_dic['TASK']) and default_config_dic['TASK'][task_mark]:
-                                                                        for action in default_config_dic['TASK'][task_mark].keys():
-                                                                            if action in ['COMMON', 'BUILD', 'RUN', 'CHECK', 'SUMMARIZE', 'RELEASE']:
-                                                                                default_action_dic = default_config_dic['TASK'][task_mark].get(action, {})
+                                                        for para in self.default_config_dic['TASK'][task_mark].keys():
+                                                            if para in ['RUN_AFTER']:
+                                                                task_obj.RUN_AFTER = self.default_config_dic['TASK'][task_mark][para]
 
-                                                                                if default_action_dic:
-                                                                                    for action_attr in ['XTERM_COMMAND', 'PATH', 'COMMAND', 'RUN_METHOD', 'VIEWER', 'REPORT_FILE', 'REQUIRED_LICENSE']:
-                                                                                        if (action_attr in default_action_dic) and (default_action_dic[action_attr]):
-                                                                                            task_obj.ACTION.setdefault(action, {})
-                                                                                            task_obj.ACTION[action][action_attr] = default_action_dic[action_attr]
-                                                                            else:
-                                                                                common.print_warning('*Warning*: invalid action "' + str(action) + '" on ' + str(self.default_config_file) + '.')
+                                                        for para in self.default_config_dic['TASK'][task_mark].keys():
+                                                            if para in ['DEPENDENCY']:
+                                                                task_obj.DEPENDENCY = self.default_config_dic['TASK'][task_mark][para]
 
-                                                            # Re-write task_obj task attribute with user configuration.
-                                                            if user_task_dic and isinstance(user_task_dic, dict):
-                                                                for action in user_task_dic.keys():
-                                                                    if action in ['COMMON', 'BUILD', 'RUN', 'CHECK', 'SUMMARIZE', 'RELEASE']:
-                                                                        for action_attr in ['XTERM_COMMAND', 'PATH', 'COMMAND', 'RUN_METHOD', 'VIEWER', 'REPORT_FILE', 'REQUIRED_LICENSE']:
-                                                                            if (action_attr in user_task_dic[action]) and user_task_dic[action][action_attr]:
-                                                                                task_obj.ACTION.setdefault(action, {})
-                                                                                task_obj.ACTION[action][action_attr] = user_task_dic[action][action_attr]
-                                                                    else:
-                                                                        common.print_warning('*Warning*: invalid action "' + str(action) + '" on ' + str(config_file) + '.')
+                                            # Re-write task_obj task attribute with user configuration.
+                                            if user_task_dic and isinstance(user_task_dic, dict):
+                                                for action in user_task_dic.keys():
+                                                    if action in ['COMMON', 'BUILD', 'RUN', 'CHECK', 'SUMMARIZE', 'RELEASE']:
+                                                        for action_attr in ['XTERM_COMMAND', 'PATH', 'COMMAND', 'RUN_METHOD', 'VIEWER', 'REPORT_FILE', 'REQUIRED_LICENSE']:
+                                                            if (action_attr in user_task_dic[action]) and user_task_dic[action][action_attr]:
+                                                                task_obj.ACTION.setdefault(action, {})
+                                                                task_obj.ACTION[action][action_attr] = user_task_dic[action][action_attr]
 
-                                                            # Set task_obj.PATH.
-                                                            if not task_obj.PATH:
-                                                                if ('RUN' in task_obj.ACTION) and ('PATH' in task_obj.ACTION['RUN']):
-                                                                    task_obj.PATH = task_obj.ACTION['RUN']['PATH']
-                                                                elif ('BUILD' in task_obj.ACTION) and ('PATH' in task_obj.ACTION['BUILD']):
-                                                                    task_obj.PATH = task_obj.ACTION['BUILD']['PATH']
-                                                                else:
-                                                                    task_obj.PATH = CWD
+                                                for para in user_task_dic.keys():
+                                                    if para in ['RUN_AFTER']:
+                                                        task_obj.RUN_AFTER = user_task_dic[para]
 
-                                                            # Check task_obj.ACTION.
-                                                            if task_obj.ACTION:
-                                                                for action in task_obj.ACTION.keys():
-                                                                    # Set default action.
-                                                                    if action not in task_obj.ACTION:
-                                                                        task_obj.ACTION.setdefault(action, {})
+                                                for para in user_task_dic.keys():
+                                                    if para in ['DEPENDENCY']:
+                                                        task_obj.DEPENDENCY = user_task_dic[para]
 
-                                                                    # Set default 'PATH' to CWD for all task actions.
-                                                                    if ('PATH' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['PATH']):
-                                                                        task_obj.ACTION[action]['PATH'] = CWD
+                                            # Set task_obj.PATH.
+                                            if not task_obj.PATH:
+                                                if ('RUN' in task_obj.ACTION) and ('PATH' in task_obj.ACTION['RUN']):
+                                                    task_obj.PATH = task_obj.ACTION['RUN']['PATH']
+                                                elif ('BUILD' in task_obj.ACTION) and ('PATH' in task_obj.ACTION['BUILD']):
+                                                    task_obj.PATH = task_obj.ACTION['BUILD']['PATH']
+                                                else:
+                                                    task_obj.PATH = CWD
 
-                                                                    # Make sure 'COMMAND' exists.
-                                                                    if action not in ['COMMON']:
-                                                                        if ('COMMAND' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['COMMAND']):
-                                                                            common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "COMMAND" is not defined.')
+                                            # Check task_obj.ACTION.
+                                            if task_obj.ACTION:
+                                                for action in task_obj.ACTION.keys():
+                                                    # Set default action.
+                                                    if action not in task_obj.ACTION:
+                                                        task_obj.ACTION.setdefault(action, {})
 
-                                                                    # For 'CHECK' and 'SUMMARY', make sure 'VIEWER' and 'REPORT_FILE' are defined.
-                                                                    # if action in ['CHECK', 'SUMMARY']:
-                                                                    #     if ('VIEWER' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['VIEWER']):
-                                                                    #         common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "VIEWER" is not defined.')
-                                                                    #     elif ('REPORT_FILE' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['REPORT_FILE']):
-                                                                    #         common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "REPORT_FILE" is not defined.')
+                                                    # Set default 'PATH' to CWD for all task actions.
+                                                    if ('PATH' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['PATH']):
+                                                        task_obj.ACTION[action]['PATH'] = CWD
 
-                                                            # Update self.taks_dic.
-                                                            self.task_dic.update({'{} {} {} {} {} {}'.format(block_obj.NAME,
-                                                                                                             version_obj.NAME,
-                                                                                                             flow_obj.NAME,
-                                                                                                             vendor_obj.NAME,
-                                                                                                             branch_obj.NAME,
-                                                                                                             task_obj.NAME): task_obj})
+                                                    # Make sure 'COMMAND' exists.
+                                                    if action not in ['COMMON']:
+                                                        if ('COMMAND' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['COMMAND']):
+                                                            common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "COMMAND" is not defined.')
 
-                                                            branch_obj.update_field(task_obj)
+                                                    # For 'CHECK' and 'SUMMARY', make sure 'VIEWER' and 'REPORT_FILE' are defined.
+                                                    # if action in ['CHECK', 'SUMMARY']:
+                                                    #     if ('VIEWER' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['VIEWER']):
+                                                    #         common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "VIEWER" is not defined.')
+                                                    #     elif ('REPORT_FILE' not in task_obj.ACTION[action]) or (not task_obj.ACTION[action]['REPORT_FILE']):
+                                                    #         common.print_warning('*Warning*: For task (' + str(task_obj.NAME) + ') action (' + str(action) + '), "REPORT_FILE" is not defined.')
 
-                                                        vendor_obj.update_field(branch_obj)
+                                            # Update self.taks_dic.
+                                            self.task_dic.update({'{} {} {} {}'.format(block_obj.NAME, version_obj.NAME, flow_obj.NAME, task_obj.NAME): task_obj})
 
-                                                flow_obj.update_field(vendor_obj)
+                                            flow_obj.update_field(task_obj)
 
                                         version_obj.update_field(flow_obj)
 
@@ -268,20 +255,8 @@ class Config:
 
                         self.block_dic.update({block: block_obj})
 
-    def filter_dependency(self, default_config_dic):
-        new_default_config_dic = copy.deepcopy(default_config_dic)
-
-        if 'TASK' in default_config_dic.keys():
-            for item in default_config_dic['TASK'].keys():
-                if re.search(r'\(RUN_AFTER=(.*)\)', item):
-                    flow = re.sub(r'\(RUN_AFTER=(.*)\)', '', item.split(':')[0])
-                    vendor = item.split(':')[1]
-                    task = re.sub(r'\(RUN_AFTER=(.*)\)', '', item.split(':')[2])
-                    new_item = '%s:%s:%s' % (flow, vendor, task)
-                    new_default_config_dic['TASK'][new_item] = copy.deepcopy(new_default_config_dic['TASK'][item])
-                    del new_default_config_dic['TASK'][item]
-
-        return new_default_config_dic
+        for attr in self.var_dic.keys():
+            self.var_dic[attr] = common.expand_var(self.var_dic[attr], ifp_var_dic=self.var_dic, show_warning=False)
 
     @property
     def main_table_info_list(self):
@@ -295,14 +270,10 @@ class Config:
                     for version in block.VERSION.values():
                         if version.FLOW:
                             for flow in version.FLOW.values():
-                                if flow.VENDOR:
-                                    for vendor in flow.VENDOR.values():
-                                        if vendor.BRANCH:
-                                            for branch in vendor.BRANCH.values():
-                                                if branch.TASK:
-                                                    for task in branch.TASK.values():
-                                                        item = IfpItem(block.NAME, version.NAME, flow.NAME, vendor.NAME, branch.NAME, task)
-                                                        self.__item_list.append(item)
+                                if flow.TASK:
+                                    for task in flow.TASK.values():
+                                        item = IfpItem(block.NAME, version.NAME, flow.NAME, task)
+                                        self.__item_list.append(item)
 
         return self.__item_list
 
@@ -311,9 +282,7 @@ class Config:
         config_dic = {'PROJECT': self.PROJECT,
                       'GROUP': self.GROUP,
                       'VAR': self.var_dic,
-                      'BLOCK': {},
-                      'RUN_AFTER_FLOW': {},
-                      'RUN_AFTER_TASK': {}}
+                      'BLOCK': {}}
 
         if self.block_dic:
             for block in self.block_dic.values():
@@ -325,21 +294,11 @@ class Config:
 
                         if version.FLOW:
                             for flow in version.FLOW.values():
-                                config_dic['RUN_AFTER_FLOW'].update({'{}:{}:{}'.format(block.NAME, version.NAME, flow.NAME): flow.RUN_AFTER})
                                 config_dic['BLOCK'][block.NAME][version.NAME].update({flow.NAME: {}})
 
-                                if flow.VENDOR:
-                                    for vendor in flow.VENDOR.values():
-                                        config_dic['BLOCK'][block.NAME][version.NAME][flow.NAME].update({vendor.NAME: {}})
-
-                                        if vendor.BRANCH:
-                                            for branch in vendor.BRANCH.values():
-                                                config_dic['BLOCK'][block.NAME][version.NAME][flow.NAME][vendor.NAME].update({branch.NAME: {}})
-
-                                                if branch.TASK:
-                                                    for task in branch.TASK.values():
-                                                        config_dic['RUN_AFTER_TASK'].update({'{}.{}.{}.{}.{}.{}'.format(block.NAME, version.NAME, flow.NAME, vendor.NAME, branch.NAME, task.NAME): task.RUN_AFTER})
-                                                        config_dic['BLOCK'][block.NAME][version.NAME][flow.NAME][vendor.NAME][branch.NAME].update({task.NAME: task})
+                                if flow.TASK:
+                                    for task in flow.TASK.values():
+                                        config_dic['BLOCK'][block.NAME][version.NAME][flow.NAME].update({task.NAME: task})
 
         return config_dic
 
@@ -350,16 +309,16 @@ class Config:
             'BLOCK': self.block_dic
             })
 
-    def update_task_field(self, block, version, flow, vendor, branch, task_name, field, field_value):
-        task_obj = self.get_task(block, version, flow, vendor, branch, task_name)
+    def update_task_field(self, block, version, flow, task_name, field, field_value):
+        task_obj = self.get_task(block, version, flow, task_name)
 
         if not hasattr(task_obj, field):
             raise Exception('*Error*: Task has no attribute {}'.format(field))
 
         task_obj.__dict__[field] = field_value
 
-    def get_task(self, block, version, flow, vendor, branch, task_name):
-        query = '{} {} {} {} {} {}'.format(block, version, flow, vendor, branch, task_name)
+    def get_task(self, block, version, flow, task_name):
+        query = '{} {} {} {}'.format(block, version, flow, task_name)
         task_obj = self.task_dic.get(query, None)
 
         if not task_obj:
@@ -375,12 +334,10 @@ class Config:
                 block = i_in_cur_session.Block
                 version = i_in_cur_session.Version
                 flow = i_in_cur_session.Flow
-                vendor = i_in_cur_session.Vendor
-                branch = i_in_cur_session.Branch
                 task = i_in_cur_session.Task
 
                 for i in restored_item_list:
-                    if block == i.Block and version == i.Version and flow == i.Flow and vendor == i.Vendor and branch == i.Branch and task == i.Task:
+                    if block == i.Block and version == i.Version and flow == i.Flow and task == i.Task:
                         i_in_cur_session.Status = i.Status
                         i_in_cur_session.Runtime = i.Runtime
                         i_in_cur_session.Job = i.Job
@@ -388,16 +345,14 @@ class Config:
 
 
 class IfpItem:
-    def __init__(self, block, version, flow, vendor, branch, task):
+    def __init__(self, block, version, flow, task):
         self.Block = block
         self.Version = version
         self.Flow = flow
-        self.Vendor = vendor
-        self.Branch = branch
         self.Task = task.NAME
         self.__task = task
-        self.item_list = ['Block', 'Version', 'Flow', 'Vendor', 'Branch', 'Task']
-        self.property_list = ['Visible', 'Selected', 'PATH', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm', 'BuildStatus', 'RunStatus', 'CheckStatus', 'SummarizeStatus', 'ReleaseStatus']
+        self.item_list = ['Block', 'Version', 'Flow', 'Task']
+        self.property_list = ['Visible', 'Selected', 'PATH', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm', 'BuildStatus', 'RunStatus', 'CheckStatus', 'SummarizeStatus', 'ReleaseStatus', 'Task_obj']
 
     @property
     def Visible(self):
@@ -584,23 +539,6 @@ class Version(Common):
 class Flow(Common):
     def __init__(self, name):
         super().__init__(name)
-
-        if not hasattr(self, 'RUN_AFTER'):
-            self.RUN_AFTER = ''
-
-        self.VENDOR = {}
-
-
-class Vendor(Common):
-    def __init__(self, name):
-        super().__init__(name)
-        self.BRANCH = {}
-
-
-class Branch(Common):
-    def __init__(self, name):
-        super().__init__(name)
-
         self.TASK = {}
 
 
@@ -608,6 +546,8 @@ class Task(Common):
     def __init__(self, name):
         super().__init__(name)
         self.ACTION = {}
+        self.RUN_AFTER = {'TASK': ''}
+        self.DEPENDENCY = {'FILE': [], 'LICENSE': []}
         self.Visible = True
         self.Selected = False
         self.PATH = None
@@ -623,9 +563,6 @@ class Task(Common):
         self.Runtime = None
         self.Xterm = None
         self.property_list = ['Visible', 'Selected', 'PATH', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm', 'BuildStatus', 'RunStatus', 'CheckStatus', 'SummarizeStatus', 'ReleaseStatus']
-
-        if not hasattr(self, 'RUN_AFTER'):
-            self.RUN_AFTER = ''
 
     def get(self, key, default=None):
         try:

@@ -12,7 +12,7 @@ API:
           PROJECT: 
           GROUP:
           TAB: 
-          COLUMN: BRANCH
+          COLUMN: TASK
           PATH: ${CWD}
           ENABLE: True
           COMMAND: gvim ${DEFAULT_PATH}/dv/verif/sim/setup.sh
@@ -21,7 +21,7 @@ API:
           PROJECT: 
           GROUP:
           TAB: 
-          COLUMN: BRANCH
+          COLUMN: TASK
           PATH: ${CWD}
           ENABLE: True
           COMMAND: gvim ${DEFAULT_PATH}/dv/verif/sim/Makefile

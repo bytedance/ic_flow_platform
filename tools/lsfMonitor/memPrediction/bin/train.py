@@ -28,7 +28,7 @@ from sklearn.ensemble import RandomForestRegressor
 sys.path.append(str(os.environ['MEM_PREDICTION_INSTALL_PATH']))
 
 from config import config
-from common import common, common_model, common_lsf
+from common import common, common_model
 
 USER = getpass.getuser()
 LOG_PATH = '/tmp/memPrediction.' + str(USER) + '.train.log'
@@ -202,27 +202,40 @@ class TrainingModel:
 
         if os.path.exists(self.data_path):
             for file in os.listdir(self.data_path):
-                if my_match := re.match(r'^job_info_(\S+).csv$', file):
-                    file_date = datetime.strptime(my_match.group(1), '%Y%m%d')
+                df = None
+
+                if hasattr(config, 'job_format') and config.job_format.lower() == 'json':
+                    file_date = datetime.strptime(file, '%Y%m%d')
 
                     if self.start_date_utc <= file_date <= self.end_date_utc:
                         logger.info("reading %s data ..." % file_date)
                         file_path = os.path.join(self.data_path, file)
-                        df = pd.read_csv(file_path)
+                        df = pd.read_json(file_path, orient='index')
+                        df.rename(columns={'index': 'job_id'}, inplace=True)
+                        df.reset_index(inplace=True)
+                else:
+                    if my_match := re.match(r'^job_info_(\S+).csv$', file):
+                        file_date = datetime.strptime(my_match.group(1), '%Y%m%d')
 
-                        if 'status' in df.columns:
-                            df = df[df['status'] == 'DONE']
+                        if self.start_date_utc <= file_date <= self.end_date_utc:
+                            logger.info("reading %s data ..." % file_date)
+                            file_path = os.path.join(self.data_path, file)
+                            df = pd.read_csv(file_path)
 
-                        df = df.drop_duplicates(subset=['job_id'], keep='first')
-                        df = df[original_column_list]
-                        df['rusage_mem'] = 0
+                if df is not None:
+                    df = df.drop_duplicates(subset=['job_id'], keep='first')
+                    df = df[original_column_list]
+                    df['rusage_mem'] = 0
 
-                        if num == 0:
-                            df.to_csv(merge_path, encoding='utf_8_sig', index=False)
-                        else:
-                            df.to_csv(merge_path, encoding='utf_8_sig', index=False, header=False, mode='a+')
+                    if 'status' in df.columns:
+                        df = df[df['status'] == 'DONE']
 
-                        num += 1
+                    if num == 0:
+                        df.to_csv(merge_path, encoding='utf_8_sig', index=False)
+                    else:
+                        df.to_csv(merge_path, encoding='utf_8_sig', index=False, header=False, mode='a+')
+
+                    num += 1
 
         if not os.path.exists(merge_path):
             logger.error("Could not find merge result csv: %s, please check!" % str(merge_path))
@@ -267,12 +280,11 @@ class TrainingModel:
         """
         logger.info("Convert unit from mb to gb")
 
-        lsf_unit_for_limits = common_lsf.get_lsf_unit_for_limits()
         memory_item_list = ['max_mem', 'rusage_mem']
 
         for mem_item in memory_item_list:
             if mem_item in self.df.columns:
-                self.df[mem_item] = common.memory_unit_to_gb(self.df[mem_item], unit=lsf_unit_for_limits)
+                self.df[mem_item] = common.memory_unit_to_gb(self.df[mem_item], unit='MB')
             else:
                 logger.error("Could not find column %s in dataframe, please check!" % mem_item)
                 sys.exit(1)

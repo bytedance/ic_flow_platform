@@ -2,6 +2,7 @@ import copy
 import datetime
 import os
 import re
+import traceback
 from string import Template
 
 import psutil
@@ -14,10 +15,10 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import QMessageBox, QAction
 
 import time
-
 import common_pyqt5
 
-def bprint(message, color='', background_color='', display_method='', date_format='', level='', indent=0, save_file='', save_file_method='a'):
+
+def bprint(message, color='', background_color='', display_method='', date_format='', level='', indent=0, end='\n', save_file='', save_file_method='a'):
     """
     Enhancement of "print" function.
 
@@ -26,7 +27,8 @@ def bprint(message, color='', background_color='', display_method='', date_forma
     display_method:   Specify font display method, default to follow the terminal settings.
     date_format:      Will show date/time information before the message, such as "%Y_%m_%d %H:%M:%S". Default is "", means silent mode.
     level:            Will show message level information after date/time information, default is "", means show nothing.
-    Indent:           How much spaces to indent for specified message (with level information), default is 0, means no indentation.
+    indent:           How much spaces to indent for specified message (with level information), default is 0, means no indentation.
+    end:              Specify the character at the end of the output, default is "\n".
     save_file:        Save message into specified file, default is "", means save nothing.
     save_file_method: Save message with "append" or "write" mode, default is "append" mode.
 
@@ -293,7 +295,7 @@ def bprint(message, color='', background_color='', display_method='', date_forma
     else:
         final_message_with_color = final_message
 
-    print(final_message_with_color)
+    print(final_message_with_color, end=end)
 
     # Save file.
     if save_file:
@@ -348,6 +350,11 @@ def run_command_for_api(command, msg_signal, path, gating_flag=False):
     """
     Run shell command with subprocess.Popen.
     """
+
+    if not os.path.exists(path):
+        msg_signal.emit({'message': '[API] : %s not exists!' % path, 'color': 'red'})
+        return
+
     SP = subprocess.Popen(command, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=path)
 
     while SP.poll() is None:
@@ -567,6 +574,8 @@ def parse_user_api(api_yaml):
 
 def add_api_menu(ifp_obj, user_api, menu, project=None, group=None, tab=None, column=None, var_dic=None):
     if 'TABLE_RIGHT_KEY_MENU' in user_api['API'].keys():
+        menu.addSeparator()
+
         for item in user_api['API']['TABLE_RIGHT_KEY_MENU']:
             if not item['ENABLE']:
                 continue
@@ -598,6 +607,12 @@ def add_api_menu(ifp_obj, user_api, menu, project=None, group=None, tab=None, co
                 for item2 in item['API-2']:
                     if not item2['ENABLE']:
                         continue
+
+                    if 'PATH' not in item2:
+                        if 'PATH' in item:
+                            item2['PATH'] = item['PATH']
+                        else:
+                            item2['PATH'] = '${CWD}'
 
                     action_obj = CreateAction('[API]  ' + item2['LABEL'], expand_var(item2['COMMAND'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic), expand_var(item2['PATH'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic))
                     action_obj.msg_signal.connect(ifp_obj.update_message_text)
@@ -632,29 +647,51 @@ class CreateAction(QThread):
         thread.start()
 
 
-def expand_var(setting_str, ifp_var_dic=None, **kwargs):
+def expand_var(setting_str, ifp_var_dic=None, show_warning=True, **kwargs):
     """
     Expand variable settings on 'setting_str'.
     """
     common_var = {'CWD': CWD,
                   'USER': USER}
+    settings = []
+    new_settings = []
 
     if type(setting_str) is str:
-        # Merge IFP_INSTALL_PATH/CWD and **kwargs into var_dic.
-        var_dic = copy.deepcopy(ifp_var_dic)
-        var_dic.update(**kwargs)
-        var_dic.update(common_var)
+        settings = [setting_str]
+    elif type(setting_str) is list:
+        settings = setting_str
 
-        while setting_str.find('$') >= 0:
-            # Replace variables with var_dic on setting_str.
-            try:
-                tpl = Template(setting_str)
-                setting_str = tpl.substitute(var_dic)
-            except Exception as warning:
-                print_warning('*Warning*: Failed on expanding variable for "' + str(setting_str) + '" : ' + str(warning))
-                break
+    for setting_str2 in settings:
+        if type(setting_str2) is str:
+            # Merge IFP_INSTALL_PATH/CWD and **kwargs into var_dic.
+            var_dic = copy.deepcopy(ifp_var_dic)
+            var_dic.update(**kwargs)
+            var_dic.update(common_var)
 
-    return setting_str
+            if setting_str2.find('$') >= 0:
+                while setting_str2.find('$') >= 0:
+                    # Replace variables with var_dic on setting_str.
+                    try:
+                        tpl = Template(setting_str2)
+                        setting_str2 = tpl.substitute(var_dic)
+                    except Exception as warning:
+                        traceback.format_exc()
+                        if show_warning:
+                            print_warning('*Warning*: Failed on expanding variable for "' + str(setting_str2) + '" : ' + str(warning))
+                        new_settings.append(setting_str2)
+                        break
+                else:
+                    new_settings.append(setting_str2)
+            else:
+                new_settings.append(setting_str2)
+
+        else:
+            new_settings.append(setting_str2)
+
+    if type(setting_str) is str:
+        return new_settings[-1]
+    elif type(setting_str) is list:
+        return new_settings
 
 
 def get_env_dic(project=None, group=None):
@@ -699,6 +736,19 @@ def get_env_dic(project=None, group=None):
         common_pyqt5.Dialog('Env configuration warning', 'Not find any environment configuration file "' + str(env_file) + '".', icon=QMessageBox.Warning)
 
     return env_dic
+
+
+def get_user_cache_path() -> str:
+    try:
+        home_path = os.path.expanduser('~')
+    except Exception as error:
+        print_error(f'Find user homepath failed!\nError: {str(error)}')
+        home_path = os.getcwd()
+
+    cache_path = os.path.join(home_path, '.ifp/cache')
+    os.makedirs(cache_path, exist_ok=True)
+
+    return cache_path
 
 
 class ThreadRun(QThread):
@@ -758,10 +808,11 @@ class ConfigSetting:
             'rerun_flag': {'value': True, 'note': 'remind user to confirm if rerun passed tasks'},
             'ignore_fail': {'value': False, 'note': 'task will run even if dependent tasks failed'},
             'send_result': {'value': False, 'note': 'send result to users after action done'},
+            'auto_check': {'value': True, 'note': 'auto execute check action after run finish'},
             'auto_import_tasks': {'value': True, 'note': 'import all tasks when add new block/version'},
             'rerun_check_or_summarize_before_view': {'value': True, 'note': 'Auto rerun CHECK(SUMMARIZE) command before view check(summarize) report'},
             'enable_variable_interface': {'value': False, 'note': "Show variable interface and can edit variables with effect only in IFP"},
-            'enable_dependency_interface': {'value': False, 'note': "Show dependency interface and can adjust dependency between flow sand tasks"},
+            'enable_order_interface': {'value': False, 'note': "Show run order interface and can adjust order between flows and tasks"},
             'enable_api_interface': {'value': False, 'note': "Show API interface and can enable/disable API"}
 
         }
@@ -776,7 +827,7 @@ status_ing = {action.build: status.building,
               action.summarize: status.summarizing,
               action.release: status.releasing}
 UNEXPECTED_JOB_STATUS = [status.killed, status.killing, status.cancelled, '{} {}'.format(action.run, status.failed)]
-CLOSE_REMIND_STATUS = [status.building, status.running, status.checking, status.summarizing, status.releasing]
+CLOSE_REMIND_STATUS = [status.building, status.running, status.checking, status.summarizing, status.releasing, status.queued]
 ING_STATUS = [status.building, status.running]
 CONFIG_DIC = {**config.admin_setting_dic, **config.user_setting_dic}
 USER = os.popen('whoami').read().strip()

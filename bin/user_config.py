@@ -19,6 +19,7 @@ import graphviz
 import functools
 from typing import Tuple
 import screeninfo.common
+import screeninfo
 from screeninfo import get_monitors
 
 from PyQt5.QtWidgets import QWidget, QMainWindow, QAction, QPushButton, QLabel, QHeaderView, QVBoxLayout, QHBoxLayout, QLineEdit, QTableView, QAbstractItemView, QMenu, QToolTip, QDesktopWidget, QMessageBox, QComboBox, QFileDialog, QApplication, QGridLayout, QTreeWidget, QTreeWidgetItem, \
@@ -112,7 +113,7 @@ def check_task_items(task):
 
 def custom_get_monitors():
     try:
-        monitors = get_monitors()
+        monitors = screeninfo.get_monitors()
     except screeninfo.common.ScreenInfoError:
         monitors = []
 
@@ -137,7 +138,7 @@ def custom_get_monitors():
     return monitors
 
 
-screeninfo.get_monitors = custom_get_monitors
+get_monitors = custom_get_monitors
 
 
 class UserConfig(QMainWindow):

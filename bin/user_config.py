@@ -27,6 +27,7 @@ import functools
 import screeninfo.common
 from dateutil import parser
 from typing import Tuple, Dict
+import screeninfo
 from screeninfo import get_monitors
 
 from PyQt5.QtWidgets import QWidget, QMainWindow, QAction, QPushButton, QLabel, QHeaderView, QVBoxLayout, QHBoxLayout, QLineEdit, QTableView, QAbstractItemView, QMenu, QToolTip, QDesktopWidget, QMessageBox, QComboBox, QFileDialog, QApplication, QGridLayout, \
@@ -143,7 +144,7 @@ def custom_format_map(s, d):
 
 def custom_get_monitors():
     try:
-        monitors = get_monitors()
+        monitors = screeninfo.get_monitors()
     except screeninfo.common.ScreenInfoError:
         monitors = []
 
@@ -168,7 +169,7 @@ def custom_get_monitors():
     return monitors
 
 
-screeninfo.get_monitors = custom_get_monitors
+get_monitors = custom_get_monitors
 
 
 class SkipNullsDumper(yaml.SafeDumper):

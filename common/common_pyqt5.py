@@ -57,7 +57,7 @@ def auto_resize(window, width=0, height=0):
     output: Window: Scaled window
     """
     # Get default width/height setting.
-    monitor = screeninfo.get_monitors()[0]
+    monitor = get_monitors()[0]
 
     if not width:
         width = monitor.width

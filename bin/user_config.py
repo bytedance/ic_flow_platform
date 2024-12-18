@@ -142,33 +142,6 @@ def custom_format_map(s, d):
     return s
 
 
-def custom_get_monitors():
-    try:
-        monitors = screeninfo.get_monitors()
-    except screeninfo.common.ScreenInfoError:
-        monitors = []
-
-        class Monitor:
-            def __init__(self, width: int, height: int):
-                self.width = width
-                self.height = height
-
-        try:
-            output = subprocess.check_output("xdpyinfo", shell=True).decode('utf-8').split('\n')
-
-            for line in output:
-                if my_match := re.match(r'^\s*dimensions:\s*(\d+)x(\d+)\s*pixels.*', line):
-                    width = my_match.group(1)
-                    height = my_match.group(2)
-                    monitor = Monitor(int(width), int(height))
-                    monitors.append(monitor)
-
-        except Exception:
-            monitors = [Monitor(1980, 1080)]
-
-    return monitors
-
-
 get_monitors = custom_get_monitors
 
 

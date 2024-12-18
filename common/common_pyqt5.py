@@ -28,7 +28,7 @@ def custom_get_monitors():
                 if my_match := re.match(r'^\s*dimensions:\s*(\d+)x(\d+)\s*pixels.*', line):
                     width = my_match.group(1)
                     height = my_match.group(2)
-                    monitor = Monitor(width, height)
+                    monitor = Monitor(int(width), int(height))
                     monitors.append(monitor)
 
         except Exception:

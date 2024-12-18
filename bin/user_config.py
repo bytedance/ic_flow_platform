@@ -139,7 +139,7 @@ def custom_format_map(s, d):
     return s
 
 
-get_monitors = custom_get_monitors
+get_monitors = common_pyqt5.custom_get_monitors  # noqa: F811
 
 
 class SkipNullsDumper(yaml.SafeDumper):

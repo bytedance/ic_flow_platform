@@ -1,9 +1,9 @@
+import math
 import screeninfo
 from PyQt5.QtCore import Qt, QEvent
-from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem, QAction, QMessageBox, QHeaderView, QStyledItemDelegate
+from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem, QMessageBox, QStyledItemDelegate
 from PyQt5.QtGui import QTextCursor, QFont
 from PyQt5.Qt import QFontMetrics
-from PyQt5 import QtGui
 
 
 def center_window(window):
@@ -14,6 +14,7 @@ def center_window(window):
     cp = QDesktopWidget().availableGeometry().center()
     qr.moveCenter(cp)
     window.move(qr.topLeft())
+
 
 def auto_resize(window, width=0, height=0):
     """

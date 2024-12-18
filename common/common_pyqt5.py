@@ -1,9 +1,42 @@
 import math
+import re
+import subprocess
 import screeninfo
+from screeninfo import get_monitors
 from PyQt5.QtCore import Qt, QEvent
 from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem, QMessageBox, QStyledItemDelegate
 from PyQt5.QtGui import QTextCursor, QFont
 from PyQt5.Qt import QFontMetrics
+
+
+def custom_get_monitors():
+    try:
+        monitors = screeninfo.get_monitors()
+    except screeninfo.common.ScreenInfoError:
+        monitors = []
+
+        class Monitor:
+            def __init__(self, width: int, height: int):
+                self.width = width
+                self.height = height
+
+        try:
+            output = subprocess.check_output("xdpyinfo", shell=True).decode('utf-8').split('\n')
+
+            for line in output:
+                if my_match := re.match(r'^\s*dimensions:\s*(\d+)x(\d+)\s*pixels.*', line):
+                    width = my_match.group(1)
+                    height = my_match.group(2)
+                    monitor = Monitor(width, height)
+                    monitors.append(monitor)
+
+        except Exception:
+            monitors = [Monitor(1980, 1080)]
+
+    return monitors
+
+
+get_monitors = custom_get_monitors  # noqa: F811
 
 
 def center_window(window):

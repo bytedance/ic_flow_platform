@@ -2,6 +2,7 @@ import math
 import re
 import subprocess
 import screeninfo
+import screeninfo.common
 from screeninfo import get_monitors
 from PyQt5.QtCore import Qt, QEvent
 from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem, QMessageBox, QStyledItemDelegate

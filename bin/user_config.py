@@ -10,7 +10,6 @@ import io
 import json
 import os
 import re
-import subprocess
 import sys
 from collections import deque
 from dataclasses import dataclass, asdict
@@ -24,10 +23,8 @@ import shutil
 import getpass
 import graphviz
 import functools
-import screeninfo.common
 from dateutil import parser
 from typing import Tuple, Dict
-import screeninfo
 from screeninfo import get_monitors
 
 from PyQt5.QtWidgets import QWidget, QMainWindow, QAction, QPushButton, QLabel, QHeaderView, QVBoxLayout, QHBoxLayout, QLineEdit, QTableView, QAbstractItemView, QMenu, QToolTip, QDesktopWidget, QMessageBox, QComboBox, QFileDialog, QApplication, QGridLayout, \

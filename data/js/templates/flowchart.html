@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Vis.js Network Example</title>
+  <script src="{{ js }}/vis-4.21.0/dist/vis-network.min.js"></script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <style type="text/css">
+    #network {
+      width: {{ width }}px;
+      height: {{ height }}px;
+      border: 1px solid lightgray;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <div id="network"></div>
+  <script type="text/javascript">
+    var nodes = new vis.DataSet([]);
+    var edges = new vis.DataSet([]);
+
+    var container = document.getElementById("network");
+    var data = { nodes: nodes, edges: edges };
+    var options = {
+      nodes: {
+          shape: 'circle',
+          font: { size: 20, vadjust: 0},
+          color: {
+              background: "lightgrey",
+              border: 'grey',
+              highlight: "grey",
+              hover: "grey",
+          },
+      },
+      edges: {
+          arrows: { to: { enabled: true } },
+          smooth: true,
+          length: 50,
+          color: {
+              inherit: true,
+              opacity: 1.0,
+          },
+      },
+      layout:{
+          hierarchical: {
+              enabled: true,
+              direction: 'LR',
+              sortMethod: 'directed',
+              levelSeparation: 80,
+              nodeSpacing: 80,
+          },
+      },
+      physics: true,
+    };
+    var network = new vis.Network(container, data, options);
+
+    network.on("doubleClick", function (params) {
+      if (params.nodes.length > 0) {
+        const nodeId = params.nodes[0];
+
+        new QWebChannel(qt.webChannelTransport, function (channel) {
+          channel.objects.backend.open_node_window(nodeId);
+        });
+      }
+    });
+
+    function updateGraph(newNodes, newEdges) {
+      const selectedNodes = network.getSelectedNodes();
+      const positions = {};
+
+      nodes.forEach((node) => {
+          const position = network.getPositions([node.id])[node.id];
+          positions[node.id] = { x: position.x, y: position.y };
+      });
+
+      nodes.clear();
+      edges.clear();
+
+      nodes.add(newNodes);
+      edges.add(newEdges);
+      network.setData({ nodes: nodes, edges: edges });
+
+      nodes.forEach((node) => {
+         if (positions[node.id]) {
+             network.moveNode(node.id, positions[node.id].x, positions[node.id].y);
+         }
+      });
+
+      network.selectNodes(selectedNodes);
+      network.redraw();
+    }
+
+    function clearGraph() {
+        nodes.clear();
+        edges.clear();
+    }
+
+    function resizeGraph(width, height) {
+        // Set new width and height
+        container.style.width = width + 'px';
+        container.style.height = height + 'px';
+        network.redraw()
+    }
+    window.resizeGraph = resizeGraph;
+  </script>
+</body>
+</html>

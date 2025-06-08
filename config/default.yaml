@@ -24,7 +24,7 @@
 #             attribute: value
 #
 ## Supported key ##
-# COMMON/BUILD/RUN/CHECK/SUMMARIZE/RELEASE/RUN_AFTER/DEPENDENCY
+# COMMON/BUILD/RUN*/RUN_MODE/CHECK/SUMMARIZE/RELEASE/RUN_AFTER/DEPENDENCY
 #
 ## Supported action attribute ##
 # PATH/COMMAND/RUN_METHOD
@@ -58,6 +58,11 @@
 #             PATH: ${DEFAULT_PATH}/dc
 #             COMMAND: make run_initopt
 #             RUN_METHOD: bsub -q $BSUB_QUEUE -n 8 -R "rusage[mem=50000]"
+#         RUN.option1:
+#             PATH: ${DEFAULT_PATH}/dc
+#             COMMAND: make run_initopt --option1
+#             RUN_METHOD: bsub -q $BSUB_QUEUE -n 8 -R "rusage[mem=50000]"
+#         RUN_MODE: RUN.option1
 #         CHECK:
 #             PATH: ${DEFAULT_PATH}/dc
 #             COMMAND: ${IFP_INSTALL_PATH}/action/check/syn/synopsys/syn_synopsys.syn_dc.py -b ${BLOCK}

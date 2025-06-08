@@ -204,8 +204,7 @@ class GenScripts():
         task_script = str(self.outdir) + '/' + str(self.flow) + '_' + str(self.vendor) + '.' + str(task) + '.py'
 
         with open(task_script, 'w') as FL:
-            FL.write("""#!/bin/env python3
-# -*- coding: utf-8 -*-
+            FL.write("""# -*- coding: utf-8 -*-
 
 import os
 import sys
@@ -216,6 +215,7 @@ import common
 import common_file_check
 
 os.environ['PYTHONUNBUFFERED'] = '1'
+
 
 def read_args():
     parser = argparse.ArgumentParser()
@@ -236,6 +236,7 @@ def read_args():
 """)
 
             FL.write("""
+
 def file_check(block, task, corner):
     my_file_check = common_file_check.FileCheck()
 
@@ -274,6 +275,7 @@ def file_check(block, task, corner):
 
     sys.exit(my_file_check.final_return_code)
 
+
 #################
 # Main Function #
 #################
@@ -286,8 +288,10 @@ def main():
 
             FL.write("""    file_check(block, task, corner)
 
+
 if __name__ == '__main__':
-    main()""")
+    main()
+""")
 
             FL.close()
 

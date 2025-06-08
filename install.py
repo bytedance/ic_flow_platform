@@ -37,7 +37,7 @@ export IFP_INSTALL_PATH=""" + str(CWD) + """
 """ + str(ld_library_path_setting) + """
 
 # Execute ifp.py.
-python3 $IFP_INSTALL_PATH/""" + str(python_script) + """ $@
+python3 $IFP_INSTALL_PATH/""" + str(python_script) + """ \"$@\"
 """)
 
         os.chmod(wrapper_script, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)

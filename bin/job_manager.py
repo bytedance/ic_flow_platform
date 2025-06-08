@@ -6,14 +6,18 @@
 # Created On  : 2023-09-27 14:59:51
 # Description :
 ################################
+import datetime
+import getpass
 import os
 import re
 import sys
 import threading
 import time
 import random
+from typing import Dict
 
-from PyQt5.QtCore import pyqtSignal, QThread, Qt, QTimer
+import requests
+from PyQt5.QtCore import pyqtSignal, QThread, Qt, QTimer, QObject
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QColor, QBrush
 from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QTableView, QHeaderView
 
@@ -24,6 +28,8 @@ os.environ['PYTHONUNBUFFERED'] = '1'
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/common')
 import common
 import common_license
+import common_db
+import common_prediction
 
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/config')
 import config as install_config
@@ -199,7 +205,7 @@ class DebugWindow(QMainWindow):
 
 class JobManager(QThread):
     disable_gui_signal = pyqtSignal(bool)
-    finish_signal = pyqtSignal()
+    finish_signal = pyqtSignal(str, str, str, str)
     close_signal = pyqtSignal()
 
     def __init__(self, ifp_obj, debug=False):
@@ -210,6 +216,7 @@ class JobManager(QThread):
         self.monitor_flag = False
         self.send_result_flag = False
         self.close_flag = False
+        self.current_running_jobs = 0
 
         # Define QTimer
         timer = QTimer(self)
@@ -300,9 +307,10 @@ class JobManager(QThread):
                         total_tasks[block][version].append(task)
 
                         if self.all_tasks[block][version][flow][task] == {}:
-                            task_obj = TaskObject(self.config_dic, block, version, flow, task, self.ifp_obj, self.debug_window)
+                            task_obj = TaskObject(self.config_dic, block, version, flow, task, self.ifp_obj, self.debug_window, self)
                             task_obj.update_status_signal.connect(self.ifp_obj.update_task_status)
                             task_obj.msg_signal.connect(self.ifp_obj.update_message_text)
+                            task_obj.send_result_signal.connect(self.ifp_obj.send_result_to_user)
                             task_obj.set_one_jobid_signal.connect(self.ifp_obj.update_main_table_item)
                             task_obj.set_run_time_signal.connect(self.ifp_obj.update_main_table_item)
                             task_obj.update_debug_info_signal.connect(self.debug_window.update_info)
@@ -319,6 +327,9 @@ class JobManager(QThread):
                 # No repeated tasks belongs to specific block/version
                 for flow in self.config_dic['BLOCK'][block][version].keys():
                     for task in self.config_dic['BLOCK'][block][version][flow].keys():
+
+                        if self.all_tasks[block][version][flow][task].action:
+                            continue
 
                         # run_after_task = []
                         task_formula = []
@@ -401,7 +412,18 @@ class JobManager(QThread):
 
             # 1. Can't insert prepositive tasks
             if action_name in [common.action.run]:
-                for child_task in task_obj.child:
+
+                def flatten(lst):
+                    result = []
+                    for element in lst:
+                        if len(element.child) > 0:
+                            result.extend(flatten(element.child))
+                        result.append(element)
+                    return result
+
+                all_elements = set(flatten(task_obj.child))
+
+                for child_task in all_elements:
                     if child_task.status in [common.status.running]:
                         info = '<br>Post-position task (%s) is running, cant execute RUN action for %s</br>' % (child_task.task, task)
                         title = 'Error!'
@@ -542,7 +564,6 @@ class JobManager(QThread):
             self.monitor_flag = False
 
             if self.send_result_flag:
-                self.finish_signal.emit()
                 self.send_result_flag = False
 
             if self.close_flag:
@@ -574,20 +595,22 @@ class JobManager(QThread):
             return False
 
 
-class TaskObject(QThread):
+class TaskObject(QObject):
     update_status_signal = pyqtSignal(object, str, str)
     msg_signal = pyqtSignal(dict)
+    send_result_signal = pyqtSignal(str, str, str, str, str)
     set_one_jobid_signal = pyqtSignal(str, str, str, str, str, str)
     set_run_time_signal = pyqtSignal(str, str, str, str, str, str)
     update_debug_info_signal = pyqtSignal(object)
 
-    def __init__(self, config_dic, block, version, flow, task, ifp_obj, debug_window):
+    def __init__(self, config_dic, block, version, flow, task, ifp_obj, debug_window, job_manager):
         super().__init__()
         self.config_dic = config_dic
         self.block = block
         self.version = version
         self.flow = flow
         self.task = task
+        self.job_manager = job_manager
         self.parent = {}
         self.child = []
         self.formula_list = None
@@ -602,6 +625,7 @@ class TaskObject(QThread):
         self.summarize_status = None
         self.kill_status = None
         self.ifp_obj = ifp_obj
+        self.ifp_cache_dir = self.ifp_obj.ifp_cache_dir
         self.job_id = None
         self.debug_window = debug_window
         self.total_run_times = 0
@@ -612,6 +636,16 @@ class TaskObject(QThread):
         self.skipped = False
         self.ignore_fail = False
         self.dependency_traceback_stage = 0
+        self.predict = True if hasattr(install_config, 'mem_prediction') and install_config.mem_prediction else False
+        self.predict_model = common_prediction.PredictionModel() if self.predict else None
+
+        self.task_obj = self.ifp_obj.config_obj.get_task(self.block,
+                                                         self.version,
+                                                         self.flow,
+                                                         self.task)
+
+        self.in_process_check = True if isinstance(self.task_obj.InProcessCheck, dict) and self.task_obj.InProcessCheck.get('ENABLE') is True else False
+        self.in_process_check_server = install_config.in_process_check_server if hasattr(install_config, 'in_process_check_server') and install_config.in_process_check_server else '10.232.134.66'
 
         self.action_progress = {common.action.build: ActionProgressObject(common.action.build),
                                 common.action.run: ActionProgressObject(common.action.run),
@@ -619,7 +653,9 @@ class TaskObject(QThread):
                                 common.action.summarize: ActionProgressObject(common.action.summarize)}
 
     def __eq__(self, other):
-        if id(other) == id(self):
+        if not isinstance(other, TaskObject):
+            return False
+        if self.block == other.block and self.version == other.version and self.flow == other.flow and self.task == other.task:
             return True
         return False
 
@@ -653,7 +689,7 @@ class TaskObject(QThread):
                                 new_formula_list.append(task_obj.parent[formula[i][j]])
                             # Calculate parent task dependency
                             else:
-                                new_formula_list.append(self.calculate_strong_dependency(formula[i][j], formula[i][j].formula_list, dependency_traceback_stage))
+                                new_formula_list.append(self.calculate_strong_dependency(formula[i][j], formula[i][j].formula_list, dependency_traceback_stage)[0])
 
                             if j < len(formula[i]) - 1:
                                 new_formula_list.append('&')
@@ -666,7 +702,7 @@ class TaskObject(QThread):
                         elif not formula[i].formula_list:
                             traceback_result = task_obj.parent[formula[i]]
                         else:
-                            traceback_result = self.calculate_strong_dependency(formula[i], formula[i].formula_list, dependency_traceback_stage)
+                            traceback_result = self.calculate_strong_dependency(formula[i], formula[i].formula_list, dependency_traceback_stage)[0]
 
                         new_formula_list.append(traceback_result)
                 else:
@@ -701,7 +737,7 @@ class TaskObject(QThread):
         elif task_obj.total_run_times == 0 and cancelled_num > 0:
             result = 'Cancel'
 
-        return result
+        return [result, cancelled_num]
 
     def receive_view_action(self, action_name):
         self.view_action = action_name
@@ -728,6 +764,7 @@ class TaskObject(QThread):
             self.killed_action = self.action
 
         self.action = action_name
+
         self.action_progress[self.action] = ActionProgressObject(self.action)
         self.current_run_times = 0
         self.run_all_steps = run_all_steps
@@ -740,6 +777,8 @@ class TaskObject(QThread):
             self.status = common.status.queued
             self.update_debug_info_signal.emit(self)
             self.update_status_signal.emit(self, self.action, common.status.queued)
+            self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', '')
+            self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "pending")
 
         elif self.action == common.action.kill and self.status == common.status.queued:
             self.status = common.status.killed
@@ -750,10 +789,15 @@ class TaskObject(QThread):
         self.update_debug_info_signal.emit(self)
 
     def launch(self):
+        self.action_progress[self.action].progress_message = []
+
         if self.action == common.action.kill:
             pass
         # If pre-task is A|B for C, must avoid A and B emit C to run twice
         elif self.status in [common.status.running] and self.action == common.action.run or self.current_formula:
+            return
+        elif self.config_dic.get('VAR', {}).get('MAX_RUNNING_JOBS') and self.job_manager.current_running_jobs >= int(self.config_dic['VAR']['MAX_RUNNING_JOBS']) > 0:
+            self.print_task_progress(self.task, 'Wait! Max running jobs[%s] reached!' % self.config_dic['VAR']['MAX_RUNNING_JOBS'])
             return
 
         if self.is_checking_license:
@@ -806,8 +850,7 @@ class TaskObject(QThread):
                 # strong dependency
                 # if result is True:
                 self.dependency_traceback_stage = -1
-                result = self.calculate_strong_dependency(self, self.formula_list, self.dependency_traceback_stage)
-
+                [result, cancelled_num] = self.calculate_strong_dependency(self, self.formula_list, self.dependency_traceback_stage)
                 if result is False:
                     self.print_task_progress(self.task, '[RUN_ORDER] : Cant start due to pre-tasks are running')
                     self.current_formula_id = None
@@ -819,15 +862,22 @@ class TaskObject(QThread):
                     self.action = None
                     self.run_all_steps = None
                     self.update_status_signal.emit(self, self.action, self.status)
-                    for task_obj in self.parent.keys():
-                        self.parent[task_obj] = 'True'
+                    self.current_formula = None
+
+                    def set_parent_dict_to_true(parent):
+                        for obj in parent.keys():
+                            parent[obj] = 'True'
+
+                            if len(obj.parent) > 0:
+                                set_parent_dict_to_true(obj.parent)
+
+                    set_parent_dict_to_true(self.parent)
 
                     self.update_debug_info_signal.emit(self)
 
                     for child_task in self.child:
                         child_task.parent[self] = 'Cancel'
                         self.update_debug_info_signal.emit(child_task)
-
             else:
                 result = True
 
@@ -837,6 +887,9 @@ class TaskObject(QThread):
         if self.action and result:
             self.print_task_progress(self.task, '[RUN_ORDER] : Pre-tasks are all finished!')
             self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', None)
+
+            if self.action == common.action.run:
+                self.job_manager.current_running_jobs += 1
 
             if self.action == common.action.kill:
                 thread = threading.Thread(target=self.kill_action)
@@ -864,7 +917,10 @@ class TaskObject(QThread):
         elif re.search('gnome-terminal --', run_method) and (not re.search('-c', run_method)):
             run_method = re.sub(r'gnome-terminal --', f'gnome-terminal -t "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"' + f" --wait -- {str(os.environ['SHELL'])} -c '", run_method)
         elif re.search('terminator -e', run_method) and (not re.search('-T', run_method)):
-            run_method = re.sub(r'terminator -e', f'terminator -u -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"' + r" -e '", run_method)
+            if re.search('bsub', run_method):
+                run_method = re.sub(r'terminator -e', f'terminator -u -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"' + r" -e '", run_method)
+            else:
+                run_method = re.sub(r'terminator -e', f'terminator -u -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"' + r" -e ", run_method)
 
         return run_method
 
@@ -991,6 +1047,13 @@ class TaskObject(QThread):
 
         if (not run_action) or (not run_action.get('COMMAND')):
             self.status = '{} {}'.format(action, common.status.undefined)
+            self.msg_signal.emit({'message': '[%s/%s/%s/%s] Undefined %s command, not submit!' % (self.block, self.version, self.flow, self.task, action), 'color': 'red'})
+
+            if action in [common.action.check, common.action.check_view]:
+                self.check_status = self.status
+            elif action in [common.action.summarize, common.action.summarize_view]:
+                self.summarize_status = self.status
+
             self.update_status_signal.emit(self, action, self.status)
         else:
             run_method = self.get_run_method(run_action)
@@ -999,6 +1062,10 @@ class TaskObject(QThread):
             self.update_status_signal.emit(self, self.action, self.status)
             self.update_debug_info_signal.emit(self)
             self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s : %s "%s"' % (self.block, self.version, self.flow, self.task, self.status, run_method, run_action['COMMAND']), 'color': 'black'})
+
+            if self.predict and re.search(r'^\s*bsub', run_method):
+                predict_job_info = self.update_predict_info(run_method=run_method, cwd=run_action.get('PATH', os.getcwd()), command=run_action['COMMAND'])
+                run_method = self.predict_model.predict_job(job_info=predict_job_info, run_method=run_method)
 
             # Get command
             command = run_action['COMMAND']
@@ -1009,19 +1076,22 @@ class TaskObject(QThread):
             if re.search(r'gnome-terminal', run_method):
                 command = str(command) + "; exit'"
                 # command = str(command) + f"; exec {str(os.environ['SHELL'])}" + "'"
-            elif re.search(r'terminator', run_method):
+            elif re.search(r'terminator', run_method) and re.search(r'bsub', run_method):
                 command = str(command) + r"'"
 
             if ('PATH' in run_action) and run_action['PATH']:
                 if os.path.exists(run_action['PATH']):
                     command = 'cd ' + str(run_action['PATH']) + '; ' + str(command)
-                    command_dir = '%s/.ifp/' % str(run_action['PATH'])
+                    cwd = run_action['PATH']
+                    command_dir = '%s/%s/' % (str(run_action['PATH']), os.path.basename(self.ifp_cache_dir))
                 else:
+                    cwd = os.getcwd()
                     # self.msg_signal.emit({'message': '*Warning*: {} PATH "'.format(action) + str(run_action['PATH']) + '" not exists.', 'color': 'orange'})
-                    command_dir = '%s/.ifp/' % os.getcwd()
+                    command_dir = '%s/%s/' % (os.getcwd(), os.path.basename(self.ifp_cache_dir))
             else:
+                cwd = os.getcwd()
                 self.msg_signal.emit({'message': '*Warning*: {} PATH is not defined for task "'.format(action) + str(self.task) + '".', 'color': 'orange'})
-                command_dir = '%s/.ifp/' % os.getcwd()
+                command_dir = '%s/%s/' % (os.getcwd(), os.path.basename(self.ifp_cache_dir))
 
             # Record command
             if not os.path.exists(command_dir):
@@ -1062,11 +1132,12 @@ class TaskObject(QThread):
 
                             if job_status in ['RUN', 'EXIT', 'DONE']:
                                 if action in [common.action.run]:
+                                    self.start_in_process_check(job_id=current_job)
                                     self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
 
                                 break
 
-                        time.sleep(1)
+                        time.sleep(10)
                 else:
                     self.job_id = 'submit fail'
                     self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s submit fail : %s "%s"' % (self.block, self.version, self.flow, self.task, action, run_method, run_action['COMMAND']),
@@ -1081,8 +1152,30 @@ class TaskObject(QThread):
                     self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:00")
 
             self.action_progress[action].job_id = self.job_id
+            task_job = {
+                'job_id': self.job_id,
+                'block': self.block,
+                'version': self.version,
+                'flow': self.flow,
+                'task': self.task,
+                'submitted_time': datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
+                'cwd': cwd if cwd is not None else os.getcwd(),
+                'command': command,
+                'command_file': command_file
+            }
             stdout, stderr = process.communicate()
             return_code = process.returncode
+
+            task_job.update({
+                'finished_time': datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
+                'status': 'DONE' if not process.returncode else 'EXIT',
+                'exit_code': process.returncode
+            })
+
+            # Save job data to database
+            save_db_thread = threading.Thread(target=common_db.save_task_job, args=(task_job, ))
+            save_db_thread.daemon = True
+            save_db_thread.start()
 
             stdout = str(stdout, 'utf-8').strip()
             stderr = str(stderr, 'utf-8').strip()
@@ -1097,9 +1190,16 @@ class TaskObject(QThread):
                 if return_code == 0:
                     self.status = '{} {}'.format(action, common.status.passed)
                     self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s done' % (self.block, self.version, self.flow, self.task, action), 'color': 'green'})
+
+                    # Save job data to database
+                    save_db_thread = threading.Thread(target=common_db.analysis_and_save_job, args=(self.job_id, self.block, self.version, self.flow, self.task))
+                    save_db_thread.daemon = True
+                    save_db_thread.start()
                 else:
                     self.status = '{} {}'.format(action, common.status.failed)
                     self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s failed: %s "%s"' % (self.block, self.version, self.flow, self.task, action, run_method, run_action['COMMAND']), 'color': 'red'})
+                    if action == common.action.run or action == common.action.check:
+                        self.send_result_signal.emit(self.block, self.version, self.flow, self.task, action)
                     self.print_task_progress(self.task, '[RUN_RESULT] : %s' % stderr)
                     self.print_task_progress(self.task, '[RUN_RESULT] : %s' % stdout)
 
@@ -1109,6 +1209,67 @@ class TaskObject(QThread):
                 self.summarize_status = self.status
 
             self.update_status_signal.emit(self, action, self.status)
+
+    def start_in_process_check(self, job_id: str):
+        if not self.in_process_check:
+            return
+
+        if not self.in_process_check_server:
+            self.ifp_obj.update_message_text({
+                'message': 'In Process Check Server not found.',
+                'color': 'red'})
+
+        task_var_dic = {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task}
+        path = common.expand_var(self.task_obj.InProcessCheck.get('PATH', os.getcwd()), ifp_var_dic=self.ifp_obj.config_obj.var_dic, **task_var_dic)
+        command = common.expand_var(self.task_obj.InProcessCheck.get('COMMAND'), ifp_var_dic=self.ifp_obj.config_obj.var_dic, **task_var_dic)
+        interval = self.task_obj.InProcessCheck.get('INTERVAL')
+        notification = common.expand_var(self.task_obj.InProcessCheck.get('NOTIFICATION'), ifp_var_dic=self.ifp_obj.config_obj.var_dic, **task_var_dic)
+        start_interval = self.task_obj.InProcessCheck.get('START_INTERVAL', 120)
+
+        if command is None or notification is None or not interval:
+            self.ifp_obj.update_message_text({
+                'message': 'Definition of COMMAND or NOTIFICATION not found or INTERVAL is invalid.',
+                'color': 'red'})
+
+        url = f'http://{str(self.in_process_check_server)}:12345/add_task'
+        data = {
+            'id': job_id,
+            'path': path,
+            'command': command,
+            'notification': notification,
+            'interval': interval,
+            'start_interval': start_interval
+        }
+
+        response = requests.post(url, json=data)
+
+        if not self.in_process_check_server:
+            self.ifp_obj.update_message_text({
+                'message': str(response),
+                'html': True})
+
+    def update_predict_info(self, run_method: str, cwd: str, command: str) -> Dict[str, str]:
+        predict_job_info = {'job_name': '',
+                            'project': self.ifp_obj.config_obj.PROJECT,
+                            'user': getpass.getuser(),
+                            'queue': '',
+                            'cwd': cwd,
+                            'command': command,
+                            'started_time': datetime.datetime.now().strftime('%a %b %d %H:%M:%S'),
+                            'res_req': ''
+                            }
+
+        run_info_list = run_method.split()
+
+        for i, item in enumerate(run_info_list):
+            if item == '-q' and not predict_job_info['queue']:
+                predict_job_info['queue'] = run_info_list[i + 1]
+            elif item == '-J' and not predict_job_info['job_name']:
+                predict_job_info['job_name'] = run_info_list[i + 1]
+            elif item == '-R' and not predict_job_info['res_req']:
+                predict_job_info['res_req'] = run_info_list[i + 1]
+
+        return predict_job_info
 
     def manage_action(self):
         """
@@ -1126,7 +1287,9 @@ class TaskObject(QThread):
             return
 
         if self.run_all_steps and not self.skipped:
+            self.action = common.action.build
             self.execute_action(common.action.build)
+            self.action = common.action.run
 
         # Execute action
         self.print_task_progress(self.task, '[ACTION] : Start execute %s action' % self.action)
@@ -1137,7 +1300,7 @@ class TaskObject(QThread):
         if self.action == common.action.run or (self.action == common.action.kill and self.killed_action == common.action.run):
 
             # Force execute CHECK after RUN
-            if self.action == common.action.run and not self.skipped and self.ifp_obj.auto_check:
+            if self.action == common.action.run and not self.skipped and self.ifp_obj.auto_check and not self.run_all_steps:
                 check_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(common.action.check.upper(), None),
                                                {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
 
@@ -1192,6 +1355,7 @@ class TaskObject(QThread):
                 else:
                     self.parent[task_obj] = 'True'
 
+            self.job_manager.current_running_jobs -= 1
         elif self.action == common.action.kill:
             self.action = None
             self.killed_action = None
@@ -1205,10 +1369,22 @@ class TaskObject(QThread):
 
         # If user defined run_all_steps and all run times have finished which means RUN action has finished and need to execute CHECK and SUMMARIZE
         if self.run_all_steps and all_finished_flag and not self.skipped:
+            check_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(common.action.check.upper(), None),
+                                           {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
+
+            if (not check_action) or (not check_action.get('COMMAND')):
+                pass
+            else:
+                self.action = common.action.check
+                self.execute_action(common.action.check)
+
             if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed)] or \
                     ((self.ifp_obj.ignore_fail or self.ignore_fail) and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
+
                 self.action = common.action.summarize
                 self.execute_action(common.action.summarize)
+                self.action = common.action.release
+                self.execute_action(common.action.release)
                 self.action = None
 
             self.run_all_steps = False
@@ -1224,8 +1400,13 @@ class TaskObject(QThread):
         self.msg_signal.emit({'message': '[%s/%s/%s/%s] is %s' % (self.block, self.version, self.flow, self.task, common.status.killing), 'color': 'red'})
         self.update_status_signal.emit(self, self.killed_action, common.status.killing)
 
+        timeout = 0
         while self.killed_action and not self.job_id:
             time.sleep(2)
+
+            timeout += 2
+            if timeout >= 30:
+                break
 
         if str(self.job_id).startswith('b'):
             jobid = str(self.job_id)[2:]
@@ -1242,7 +1423,7 @@ class TaskObject(QThread):
         self.run_all_steps = False
 
     def view(self):
-        if self.rerun_command_before_view:
+        if not self.ifp_obj.read_mode and self.rerun_command_before_view:
             self.execute_action(self.rerun_command_before_view)
 
         # Run viewer command under task check directory.
@@ -1280,10 +1461,11 @@ class TaskObject(QThread):
     def set_cancel_for_child_tasks(self):
         for child_task in self.child:
             if child_task.parent[self] == 'False':
-                if child_task.action:
-                    child_task.parent[self] = 'Cancel'
-                else:
-                    child_task.parent[self] = 'True'
+                child_task.parent[self] = 'Cancel'
+                # if child_task.action:
+                #     child_task.parent[self] = 'Cancel'
+                # else:
+                #     child_task.parent[self] = 'True'
                 self.update_debug_info_signal.emit(child_task)
 
     def print_output(self, block, version, flow, task, result, output):

@@ -4,15 +4,19 @@ import os
 import re
 import traceback
 from string import Template
+from typing import Tuple
 
 import psutil
 import signal
 import subprocess
 import threading
+from ansi2html import Ansi2HTMLConverter
 
 import yaml
 from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QMessageBox, QAction
+from PIL import Image, ImageDraw, ImageFont
 
 import time
 import common_pyqt5
@@ -336,17 +340,23 @@ def timer(func):
     return timer_wrapper
 
 
-def run_command(command, shell=True):
+def run_command(command, shell=True, xterm=False):
     """
     Run shell command with subprocess.Popen.
     """
     SP = subprocess.Popen(command, shell=shell, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     (stdout, stderr) = SP.communicate()
     return_code = SP.returncode
-    return (return_code, stdout, stderr)
+
+    if xterm and return_code > 0 and re.search(r'Couldn\'t connect to accessibility bus', str(stdout, 'utf-8').strip(), re.I):
+        SP = subprocess.Popen('/usr/bin/dbus-launch ' + command, shell=shell, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        (stdout, stderr) = SP.communicate()
+        return_code = SP.returncode
+
+    return return_code, stdout, stderr
 
 
-def run_command_for_api(command, msg_signal, path, gating_flag=False):
+def run_command_for_api(command, msg_signal, path, info_signal=None, finish_signal=None):
     """
     Run shell command with subprocess.Popen.
     """
@@ -362,17 +372,38 @@ def run_command_for_api(command, msg_signal, path, gating_flag=False):
 
         if line:
             if msg_signal:
-                msg_signal.emit({'message': '[API] : %s' % line, 'color': 'black'})
+                conv = Ansi2HTMLConverter(inline=True)
+                line = conv.convert(line, full=False)
+
+                msg_signal.emit({'message': '[API] : %s' % line, 'color': 'black', 'html': True})
+
+                if info_signal:
+                    info_signal.emit('[API] : %s' % line)
             else:
                 print('[API] : %s' % line)
 
-    if gating_flag:
-        (stdout, stderr) = SP.communicate()
-        stderr = str(stderr, 'utf-8').strip()
-        if msg_signal:
-            msg_signal.emit({'message': '[API] : %s' % stderr, 'color': 'red'})
+    (stdout, stderr) = SP.communicate()
+    stderr = str(stderr, 'utf-8').strip()
+
+    if stderr:
+        errs = []
+
+        for line in stderr.splitlines():
+            line = line.strip()
+
+            if line.startswith('memoryPrediction') or line.startswith('<<Waiting') or line.startswith('<<Starting'):
+                continue
+
+            if line:
+                errs.append(line)
+
+        if msg_signal and errs:
+            msg_signal.emit({'message': '[API] : %s' % '\n'.join(errs), 'color': 'red'})
         else:
-            print_error(stderr)
+            print_error(errs)
+
+    if finish_signal:
+        finish_signal.emit()
 
 
 def spawn_process(command, shell=True):
@@ -470,7 +501,9 @@ def parse_user_api(api_yaml):
     try:
         with open(api_yaml, 'r') as AF:
             yaml_file = yaml.load(AF, Loader=yaml.CLoader)
-    except Exception:
+    except Exception as error:
+        print(f'*Error*: {str(error)}')
+        print(traceback.print_exc())
         yaml_file = {}
 
     if not yaml_file:
@@ -498,6 +531,9 @@ def parse_user_api(api_yaml):
                         item[key] = True
                     else:
                         item[key] = ''
+
+            item['ENABLE'] = item['ENABLE'] if item.get('ENABLE') is not None else True
+            item['COMMENT'] = item['COMMENT'] if item.get('COMMENT') is not None else ''
     else:
         yaml_file['API']['PRE_CFG'] = []
 
@@ -520,6 +556,11 @@ def parse_user_api(api_yaml):
                         item[key] = True
                     else:
                         item[key] = ''
+
+            item['ENABLE'] = item['ENABLE'] if item.get('ENABLE') is not None else True
+            item['COMMENT'] = item['COMMENT'] if item.get('COMMENT') is not None else ''
+            item['GROUP'] = item['GROUP'] if item.get('GROUP') is not None else ''
+            item['PROJECT'] = item['PROJECT'] if item.get('PROJECT') is not None else ''
     else:
         yaml_file['API']['PRE_IFP'] = []
 
@@ -529,47 +570,150 @@ def parse_user_api(api_yaml):
                 print('Please define LABEL for each API item!')
                 exit(1)
 
-            right_key_items = ['LABEL', 'PROJECT', 'GROUP', 'TAB', 'COLUMN', 'PATH', 'COMMAND', 'ENABLE', 'COMMENT']
+            right_key_items = ['LABEL', 'PROJECT', 'GROUP', 'TAB', 'COLUMN', 'PATH', 'COMMAND', 'ENABLE', 'COMMENT', 'GUI_BLOCKING', 'RELOAD']  # noqa: F841
             right_key_must_items = ['LABEL', 'TAB', 'COLUMN', 'PATH', 'COMMAND']
 
-            for key in right_key_items:
+            for key in right_key_must_items:
                 if key not in item.keys():
-                    if key in right_key_must_items:
-                        if 'API-2' in item.keys() and key == 'COMMAND':
-                            continue
-                        else:
-                            print('You must define %s for TABLE_RIGHT_KEY_MENU API, corresponding label is %s' % (key, item['LABEL']))
+                    if key == 'COMMAND' and 'API-2' in item.keys():
+                        continue
+
+                    print('You must define %s for TABLE_RIGHT_KEY_MENU API, corresponding label is %s' % (key, item['LABEL']))
+                    exit(1)
+
+            item['ENABLE'] = item['ENABLE'] if 'ENABLE' in item else True
+            item['GUI_BLOCKING'] = item['GUI_BLOCKING'] if 'GUI_BLOCKING' in item else False
+            item['RELOAD'] = item['RELOAD'] if 'RELOAD' in item else False
+            item['COMMENT'] = item['COMMENT'] if item.get('COMMENT') is not None else ''
+            item['GROUP'] = item['GROUP'] if item.get('GROUP') is not None else ''
+            item['PROJECT'] = item['PROJECT'] if item.get('PROJECT') is not None else ''
+
+            if 'API_2' in item.keys():
+                for item2 in item['API-2']:
+                    if 'LABEL' not in item2.keys():
+                        print('Please define LABEL for each API item!')
+                        exit(1)
+
+                    stage2_right_key_items = ['LABEL', 'COMMAND', 'ENABLE', 'COMMENT', 'GUI_BLOCKING', 'RELOAD']  # noqa: F841
+                    stage2_right_key_must_items = ['LABEL', 'COMMAND']
+
+                    for key in stage2_right_key_must_items:
+                        if key not in item2.keys():
+                            print('You must define %s for TABLE_RIGHT_KEY_MENU(API-2) API, corresponding label is %s' % (key, item2['LABEL']))
                             exit(1)
 
-                    if key == 'ENABLE':
-                        item[key] = True
-                    else:
-                        item[key] = ''
-
-                elif key == 'API-2':
-                    for item2 in item[key]:
-                        if 'LABEL' not in item2.keys():
-                            print('Please define LABEL for each API item!')
-                            exit(1)
-
-                        stage2_right_key_items = ['LABEL', 'COMMAND', 'ENABLE', 'COMMENT']
-                        stage2_right_key_must_items = ['LABEL', 'COMMAND']
-
-                        for key2 in stage2_right_key_items:
-                            if key2 not in item2.keys():
-                                if key2 in stage2_right_key_must_items:
-                                    print('You must define %s for TABLE_RIGHT_KEY_MENU API, corresponding label is %s' % (key, item2['LABEL']))
-                                    exit(1)
-
-                                if key == 'ENABLE':
-                                    item[key] = True
-                                else:
-                                    item2[key2] = ''
-
+                    item2['ENABLE'] = item2['ENABLE'] if 'ENABLE' in item2 else True
+                    item2['GUI_BLOCKING'] = item2['GUI_BLOCKING'] if 'GUI_BLOCKING' in item2 else False
+                    item2['RELOAD'] = item2['RELOAD'] if 'RELOAD' in item2 else False
+                    item['COMMENT'] = item['COMMENT'] if item.get('COMMENT') is not None else ''
     else:
         yaml_file['API']['TABLE_RIGHT_KEY_MENU'] = []
 
+    if 'MENU_BAR' in yaml_file['API'].keys():
+        for item in yaml_file['API']['MENU_BAR']:
+            if 'LABEL' not in item.keys():
+                print('Please define LABEL for each API item!')
+                exit(1)
+
+            menu_bar_items = ['LABEL', 'MENU_BAR_GROUP', 'PATH', 'COMMAND', 'ENABLE', 'COMMENT', 'GUI_BLOCKING', 'RELOAD']  # noqa: F841
+            menu_bar_must_items = ['LABEL', 'MENU_BAR_GROUP', 'PATH', 'COMMAND']
+
+            for key in menu_bar_must_items:
+                if key not in item.keys():
+                    print('You must define %s for MENU_BAR API, corresponding label is %s' % (key, item['LABEL']))
+                    exit(1)
+
+            item['ENABLE'] = item['ENABLE'] if 'ENABLE' in item else True
+            item['GUI_BLOCKING'] = item['GUI_BLOCKING'] if 'GUI_BLOCKING' in item else False
+            item['RELOAD'] = item['RELOAD'] if 'RELOAD' in item else False
+            item['COMMENT'] = item['COMMENT'] if item.get('COMMENT') is not None else ''
+
+    else:
+        yaml_file['API']['MENU_BAR'] = []
+
+    if 'TOOL_BAR' in yaml_file['API'].keys():
+        for item in yaml_file['API']['TOOL_BAR']:
+            if 'LABEL' not in item.keys():
+                print('Please define LABEL for each API item!')
+                exit(1)
+
+            menu_bar_items = ['LABEL', 'PATH', 'COMMAND', 'ENABLE', 'COMMENT', 'GUI_BLOCKING', 'RELOAD']  # noqa: F841
+            menu_bar_must_items = ['LABEL', 'PATH', 'COMMAND']
+
+            for key in menu_bar_must_items:
+                if key not in item.keys():
+                    print('You must define %s for MENU_BAR API, corresponding label is %s' % (key, item['LABEL']))
+                    exit(1)
+
+            item['ENABLE'] = item['ENABLE'] if 'ENABLE' in item else True
+            item['GUI_BLOCKING'] = item['GUI_BLOCKING'] if 'GUI_BLOCKING' in item else False
+            item['RELOAD'] = item['RELOAD'] if 'RELOAD' in item else False
+            item['COMMENT'] = item['COMMENT'] if item.get('COMMENT') is not None else ''
+
+    else:
+        yaml_file['API']['TOOL_BAR'] = []
+
     return yaml_file
+
+
+def add_api_menu_bar(ifp_obj, user_api, menubar):
+    if 'MENU_BAR' in user_api['API'].keys():
+        all_menus = {}
+        for item in user_api['API']['MENU_BAR']:
+            if not item['ENABLE']:
+                continue
+
+            group = item['MENU_BAR_GROUP']
+
+            if group not in all_menus.keys():
+                all_menus[group] = []
+
+            all_menus[item['MENU_BAR_GROUP']].append(item)
+
+        for group in all_menus.keys():
+            group_menu = menubar.addMenu(group)
+
+            for item in all_menus[group]:
+                action_obj = CreateAction(item['LABEL'],
+                                          expand_var(item['COMMAND'], ifp_var_dic=ifp_obj.config_obj.var_dic),
+                                          expand_var(item['PATH'], ifp_var_dic=ifp_obj.config_obj.var_dic),
+                                          ifp_obj=ifp_obj,
+                                          blocking=item['GUI_BLOCKING'],
+                                          reload=item['RELOAD'])
+                action_obj.msg_signal.connect(ifp_obj.update_message_text)
+                group_menu.addAction(action_obj.run())
+
+
+def add_api_tool_bar(ifp_obj, user_api):
+    toolbar_list = []
+
+    if 'TOOL_BAR' in user_api['API'].keys():
+        for item in user_api['API']['TOOL_BAR']:
+            if not item['ENABLE']:
+                continue
+
+            action_obj = CreateAction(item['LABEL'],
+                                      expand_var(item['COMMAND'], ifp_var_dic=ifp_obj.config_obj.var_dic),
+                                      expand_var(item['PATH'], ifp_var_dic=ifp_obj.config_obj.var_dic),
+                                      ifp_obj=ifp_obj,
+                                      blocking=item['GUI_BLOCKING'],
+                                      reload=item['RELOAD'])
+
+            if 'ICON' in item and os.path.exists(expand_var(item['ICON'], ifp_var_dic=ifp_obj.config_obj.var_dic)):
+                icon_path = expand_var(item['ICON'], ifp_var_dic=ifp_obj.config_obj.var_dic)
+            else:
+                icon_path = os.path.join(os.getcwd(), f'.ifp/API/icons/{action_obj.action_name}.png')
+                os.makedirs(os.path.dirname(icon_path), exist_ok=True)
+                create_api_icon(word=action_obj.action_name[:3], save_path=icon_path, img_size=(300, 300))
+
+            action_obj.action.setIcon(QIcon(icon_path))
+
+            action_obj.msg_signal.connect(ifp_obj.update_message_text)
+            toolbar = ifp_obj.addToolBar(action_obj.action_name)
+            toolbar.addAction(action_obj.run())
+            toolbar_list.append(toolbar)
+
+    return toolbar_list
 
 
 def add_api_menu(ifp_obj, user_api, menu, project=None, group=None, tab=None, column=None, var_dic=None):
@@ -614,28 +758,58 @@ def add_api_menu(ifp_obj, user_api, menu, project=None, group=None, tab=None, co
                         else:
                             item2['PATH'] = '${CWD}'
 
-                    action_obj = CreateAction('[API]  ' + item2['LABEL'], expand_var(item2['COMMAND'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic), expand_var(item2['PATH'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic))
+                    action_obj = CreateAction('[API]  ' + item2['LABEL'],
+                                              expand_var(item2['COMMAND'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic),
+                                              expand_var(item2['PATH'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic),
+                                              ifp_obj=ifp_obj,
+                                              blocking=item['GUI_BLOCKING'],
+                                              reload=item['RELOAD']
+                                              )
                     action_obj.msg_signal.connect(ifp_obj.update_message_text)
                     sub_menu.addAction(action_obj.run())
             else:
-                action_obj = CreateAction('[API]  ' + item['LABEL'], expand_var(item['COMMAND'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic), expand_var(item['PATH'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic))
+                action_obj = CreateAction(
+                    '[API]  ' + item['LABEL'],
+                    expand_var(item['COMMAND'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic),
+                    expand_var(item['PATH'], ifp_var_dic=ifp_obj.config_obj.var_dic, **var_dic),
+                    ifp_obj=ifp_obj,
+                    blocking=item['GUI_BLOCKING'],
+                    reload=item['RELOAD'])
                 action_obj.msg_signal.connect(ifp_obj.update_message_text)
                 menu.addAction(action_obj.run())
 
 
 class CreateAction(QThread):
     msg_signal = pyqtSignal(dict)
+    save_status_signal = pyqtSignal(str)
+    info_signal = pyqtSignal(str)
+    finish_signal = pyqtSignal()
+    blocking_signal = pyqtSignal(str)
 
-    def __init__(self, action_name, command, path, checked=None):
+    def __init__(self, action_name, command, path, checked=None, ifp_obj=None, blocking=False, reload=False):
         super().__init__()
         self.action_name = action_name
         self.command = command
-        self.action = QAction(self.action_name)
+        self.action = QAction(self.action_name, ifp_obj)
         self.path = path
+        self.blocking = blocking
+        self.reload = reload
+        self.ifp_obj = ifp_obj
+        self.progress_dialog = None
 
         if checked is not None:
             self.action.setCheckable(True)
             self.action.setChecked(checked)
+
+        if self.blocking and self.ifp_obj:
+            self.blocking_signal.connect(self.ifp_obj.blocking_gui)
+            self.finish_signal.connect(self.ifp_obj.unblocking_gui)
+
+        if self.ifp_obj and self.reload:
+            self.finish_signal.connect(self.ifp_obj.reload_config_after_finished_api)
+
+        if self.ifp_obj:
+            self.save_status_signal.connect(self.ifp_obj.save_status_file)
 
     def run(self):
         self.action.triggered.connect(lambda: self.execute_action())
@@ -643,8 +817,13 @@ class CreateAction(QThread):
 
     def execute_action(self):
         self.msg_signal.emit({'message': '[API]: %s' % self.command, 'color': 'black'})
-        thread = threading.Thread(target=run_command_for_api, args=(self.command, self.msg_signal, self.path))
+        self.save_status_signal.emit(self.ifp_obj.ifp_status_file)
+
+        thread = threading.Thread(target=run_command_for_api, args=(self.command, self.msg_signal, self.path, self.info_signal, self.finish_signal))
         thread.start()
+
+        if self.blocking:
+            self.blocking_signal.emit(self.action_name)
 
 
 def expand_var(setting_str, ifp_var_dic=None, show_warning=True, **kwargs):
@@ -658,6 +837,8 @@ def expand_var(setting_str, ifp_var_dic=None, show_warning=True, **kwargs):
 
     if type(setting_str) is str:
         settings = [setting_str]
+    elif type(setting_str) is int:
+        settings = [str(setting_str)]
     elif type(setting_str) is list:
         settings = setting_str
 
@@ -689,6 +870,8 @@ def expand_var(setting_str, ifp_var_dic=None, show_warning=True, **kwargs):
             new_settings.append(setting_str2)
 
     if type(setting_str) is str:
+        return new_settings[-1]
+    elif type(setting_str) is int:
         return new_settings[-1]
     elif type(setting_str) is list:
         return new_settings
@@ -751,17 +934,50 @@ def get_user_cache_path() -> str:
     return cache_path
 
 
+def create_api_icon(word, img_size=(300, 200), font_size=150, save_path='output.png'):
+    img = Image.new('RGBA', img_size, (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+
+    circle_radius = img_size[1] // 2
+    circle_center = (img_size[0] // 2, img_size[1] // 2)
+    circle_bounds = [
+        circle_center[0] - circle_radius, circle_center[1] - circle_radius,
+        circle_center[0] + circle_radius, circle_center[1] + circle_radius
+    ]
+    draw.ellipse(circle_bounds, fill=(255, 200, 200, 255))
+
+    # font_size = img_size[1]
+    font_path = os.path.join(str(os.environ['IFP_INSTALL_PATH']), 'data/ttf/api_icon.ttf')
+    font = ImageFont.truetype(font_path, font_size)
+    text_bbox = draw.textbbox((0, 0), word, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    text_height = text_bbox[3] - text_bbox[1]
+
+    x = (img_size[0] - text_width) / 2
+    y = (img_size[1] - text_height) / 2 - text_bbox[1]
+
+    draw.text((x, y), word, font=font, fill=(65, 105, 225, 255))
+    img.save(save_path)
+
+
+def gen_cache_file_name(config_file: str) -> Tuple[str, str]:
+    status_file = '.ifp.status.yaml' if config_file == 'ifp.cfg.yaml' else '.{}.status.yaml'.format(config_file.replace('.', '_'))
+    ifp_cache_dir = '.ifp' if config_file == 'ifp.cfg.yaml' else '.{}_ifp'.format(config_file.replace('.', '_'))
+    return status_file, ifp_cache_dir
+
+
 class ThreadRun(QThread):
     """
     This class is used to run command on a thread.
     """
 
-    def __init__(self):
+    def __init__(self, xterm=False):
         super().__init__()
+        self.xterm = xterm
 
     def run(self, command_list):
         for command in command_list:
-            thread = threading.Thread(target=run_command, args=(command,))
+            thread = threading.Thread(target=run_command, args=(command, True, self.xterm))
             thread.start()
 
 
@@ -799,7 +1015,9 @@ class ConfigSetting:
         self.admin_setting_dic = {
             'default_yaml_administrators': {'value': '', 'note': 'Only default_yaml_administrators can edit default.yaml on ifp GUI directory.'},
             'system_log_path': {'value': '', 'note': 'system log'},
-            'lmstat_path': {'value': '', 'note': 'Specify lmstat path, example "/eda/synopsys/scl/2021.03/linux64/bin/lmstat".'}
+            'lmstat_path': {'value': '', 'note': 'Specify lmstat path, example "/eda/synopsys/scl/2021.03/linux64/bin/lmstat".'},
+            'mem_prediction': {'value': False, 'note': "Enable/Disable Memory Prediction Feature"},
+            'in_process_check_server': {'value': '', 'note': "service host for Task in process check."}
         }
         self.user_setting_dic = {
             'send_result_command': {'value': '', 'note': 'send result command'},
@@ -813,9 +1031,33 @@ class ConfigSetting:
             'rerun_check_or_summarize_before_view': {'value': True, 'note': 'Auto rerun CHECK(SUMMARIZE) command before view check(summarize) report'},
             'enable_variable_interface': {'value': False, 'note': "Show variable interface and can edit variables with effect only in IFP"},
             'enable_order_interface': {'value': False, 'note': "Show run order interface and can adjust order between flows and tasks"},
-            'enable_api_interface': {'value': False, 'note': "Show API interface and can enable/disable API"}
-
+            'enable_api_interface': {'value': False, 'note': "Show API interface and can enable/disable API"},
+            'makefile_mode': {'value': False, 'note': "Automatically select the prerequisite tasks for a Task."}
         }
+
+
+class AutoVivification(dict):
+    def __getitem__(self, item):
+        try:
+            return dict.__getitem__(self, item)
+        except KeyError:
+            value = self[item] = type(self)()
+            return value
+
+    def __bool__(self):
+        return False if self == type(self)() or self == {} else True
+
+
+def convert_to_autovivification(d):
+    if isinstance(d, dict):
+        av = AutoVivification()
+        for k, v in d.items():
+            av[k] = convert_to_autovivification(v)
+        return av
+    elif isinstance(d, list):
+        return [convert_to_autovivification(v) for v in d]
+    else:
+        return d
 
 
 config = ConfigSetting()
@@ -832,3 +1074,11 @@ ING_STATUS = [status.building, status.running]
 CONFIG_DIC = {**config.admin_setting_dic, **config.user_setting_dic}
 USER = os.popen('whoami').read().strip()
 CWD = os.getcwd()
+
+
+def update_for_read_mode(cwd: str, user: str):
+    global CWD
+    CWD = cwd
+
+    global USER
+    USER = user

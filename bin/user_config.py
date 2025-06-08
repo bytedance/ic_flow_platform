@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-################################
-# File Name   : user_config.py
-# Author      : jingfuyi
-# Created On  : 2022-09-20 17:46:15
-# Description :
-################################
 import datetime
 import io
 import json
@@ -24,11 +17,11 @@ import getpass
 import graphviz
 import functools
 from dateutil import parser
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List
 from screeninfo import get_monitors
 
 from PyQt5.QtWidgets import QWidget, QMainWindow, QAction, QPushButton, QLabel, QHeaderView, QVBoxLayout, QHBoxLayout, QLineEdit, QTableView, QAbstractItemView, QMenu, QToolTip, QDesktopWidget, QMessageBox, QComboBox, QFileDialog, QApplication, QGridLayout, \
-    QTableWidget, QTableWidgetItem, QCompleter, QCheckBox, QStyledItemDelegate, QFormLayout, QScrollArea, QTabWidget, QTextEdit, QPlainTextEdit, QButtonGroup, QRadioButton, QFrame
+    QTableWidget, QTableWidgetItem, QCompleter, QCheckBox, QStyledItemDelegate, QFormLayout, QScrollArea, QTabWidget, QTextEdit, QPlainTextEdit, QButtonGroup, QRadioButton, QFrame, QSizePolicy
 from PyQt5.QtGui import QBrush, QFont, QColor, QStandardItem, QStandardItemModel, QCursor, QPalette, QPixmap, QPen, QPainter, QTextFormat, QTextDocument, QTextCursor, QTextCharFormat, QIcon
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QSize, QRegularExpression, QTimer, QProcess
 
@@ -39,22 +32,13 @@ sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/bin')
 import job_manager
 import config
 import common
+import common_db
 import common_pyqt5
 import common_lsf
+import parse_config
+from common import AutoVivification
 
 EDIT_COLOR = QColor(100, 149, 237)
-
-
-class AutoVivification(dict):
-    def __getitem__(self, item):
-        try:
-            return dict.__getitem__(self, item)
-        except KeyError:
-            value = self[item] = type(self)()
-            return value
-
-    def __bool__(self):
-        return False if self == type(self)() or self == {} else True
 
 
 def center(self):
@@ -216,16 +200,14 @@ class TaskJobInfo:
         else:
             delta = parser.parse(item).replace(year=datetime.datetime.now().year) - submit_item
 
+        return self.get_timedelta_format(delta)
+
+    @staticmethod
+    def get_timedelta_format(delta) -> str:
         days = delta.days
         hours, remainder = divmod(delta.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
-        format_item = f"{days}days {hours}:{minutes}:{seconds}"
-
-        return format_item
-
-
-class TaskJobCheckSignals(QObject):
-    job_dic = pyqtSignal(TaskJobInfo)
+        return f"{days}days {hours}:{minutes}:{seconds}"
 
 
 class TaskJobCheckWorker(QThread):
@@ -235,7 +217,6 @@ class TaskJobCheckWorker(QThread):
         super().__init__()
         self.job_id = job_id
         self.job_type = job_type.upper()
-        self.signal = TaskJobCheckSignals()
 
     def run(self):
         job_info = self._get_job_info()
@@ -270,7 +251,7 @@ class TaskJobCheckWorker(QThread):
             process = psutil.Process(int(pid))
             proc_info = {
                 'job_id': pid,
-                "cwd": process.exe(),
+                "cwd": process.cwd(),
                 "submitted_time": datetime.datetime.fromtimestamp(process.create_time()).strftime('%Y-%m-%d %H:%M:%S'),
                 "command": " ".join(process.cmdline()),
                 "status": process.status(),
@@ -285,6 +266,17 @@ class TaskJobCheckWorker(QThread):
             return proc_info
 
         except psutil.NoSuchProcess:
+            try:
+                session = common_db.setup_task_job()
+                task_job = session.query(common_db.TaskJobs).filter_by(job_id=f'l:{pid}').first()
+
+                if task_job:
+                    task_job_dict = {column.name: getattr(task_job, column.name) for column in task_job.__table__.columns}
+                    task_job_dict['job_id'] = task_job_dict['job_id'][2:]
+                    return task_job_dict
+            except Exception:
+                pass
+
             return {"error": "No process found with PID {}".format(pid)}
         except psutil.AccessDenied:
             return {"error": "Permission denied to access process with PID {}".format(pid)}
@@ -296,14 +288,14 @@ class TaskJobCheckWorker(QThread):
         try:
             status = os.popen(f'bjobs {job_id} | tail -n 1').read().split()[2]
         except Exception:
-            status = ''
+            status = ' '
 
         if status == 'RUN':
-            return common.status.running
+            return ' '
         elif status == 'DONE':
-            return '{} {}'.format(common.TaskAction.run, common.status.passed)
+            return '{} {}'.format(common.TaskAction().run, common.status.passed)
         elif status == 'EXIT':
-            return '{} {}'.format(common.TaskAction.run, common.status.failed)
+            return '{} {}'.format(common.TaskAction().run, common.status.failed)
         elif status == 'QUEUE':
             return common.status.queued
 
@@ -344,18 +336,19 @@ class UserConfig(QMainWindow):
             cls._instance = super(UserConfig, cls).__new__(cls, *args, **kwargs)
         return cls._instance
 
-    def __init__(self, ifp_obj, config_file, default_yaml, api_yaml):
+    def __init__(self, ifp_obj, config_obj: parse_config.Config, config_file, default_yaml, api_yaml):
         super().__init__()
 
         self.ifp_obj = ifp_obj
+        self.config_obj = config_obj
         self.config_file = config_file
         self.default_yaml = default_yaml
         self.api_yaml = api_yaml
-        self.default_var = AutoVivification()
-        self.default_setting = AutoVivification()
-        self.default_flow_setting = AutoVivification()
-        self.default_dependency_dic = {}
-        self.update_default_setting()
+
+        self.default_var = self.config_obj.default_var_setting
+        self.default_setting = self.config_obj.default_task_setting
+        self.default_dependency_dic = self.config_obj.default_dependency_setting
+
         self.top_widget = QWidget()
         self.top_layout = QVBoxLayout()
         self.top_widget.setLayout(self.top_layout)
@@ -389,6 +382,8 @@ class UserConfig(QMainWindow):
         self.setup_model = QStandardItemModel(1, 4)
         self.setup_table.setModel(self.setup_model)
         self.setup_table.verticalHeader().setVisible(False)
+        # Show Floating
+        # self.setup_table.horizontalHeader().hide()
 
         self.config_path_widget = QWidget()
         self.config_path_layout = QHBoxLayout()
@@ -399,17 +394,20 @@ class UserConfig(QMainWindow):
         self.config_path_edit.setEnabled(False)
 
         self.ifp_env_setting = AutoVivification()
-        self.user_input = AutoVivification()
-        self.user_var = AutoVivification()
-        self.detailed_setting = AutoVivification()
         self.blank_setting = parsing_blank_setting()
         self.state = AutoVivification()
         self.version_state = AutoVivification()
-        self.dependency_priority = AutoVivification()
+
+        self.dependency_priority = self.config_obj.real_task_dependency
+        self.task_setting = self.config_obj.user_task_setting
+        self.raw_setting = self.config_obj.user_config_dic
+        self.user_var = self.config_obj.user_var_setting
+        self.project = self.config_obj.PROJECT
+        self.group = self.config_obj.GROUP
+
         self.dependency_chart = AutoVivification()
         self.item_chart_dic = {}
         self.final_setting = {}
-        self.raw_setting = {}
         self.table_info = AutoVivification()
         self.span_info = AutoVivification()
 
@@ -455,7 +453,16 @@ class UserConfig(QMainWindow):
         self.setup_table.doubleClicked.connect(self.generate_double_clicked)
 
         self.top_layout.addWidget(self.config_path_widget)
-        self.top_layout.addWidget(self.setup_table)
+
+        container = QWidget()
+        main_layout = QGridLayout()
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        main_layout.addWidget(self.setup_table, 1, 0)
+        container.setLayout(main_layout)
+
+        self.top_layout.addWidget(container)
 
         return self.top_widget
 
@@ -490,7 +497,7 @@ class UserConfig(QMainWindow):
         if not index.column() == 3:
             QToolTip.showText(QCursor.pos(), self.setup_model.index(index.row(), index.column()).data(), self.setup_table, screen_rect, 10000)
 
-    def update_config_view(self, view_name, item_text, item_select_status):
+    def update_config_table_row_visible(self, view_name, item_text, item_select_status):
         if view_name == 'column':
             if item_text not in self.header_column_mapping.keys():
                 return
@@ -529,8 +536,12 @@ class UserConfig(QMainWindow):
                 for row in self.task_row_mapping[item_text]:
                     self.setup_table.hideRow(row)
 
-        self.view_status_dic[view_name][item_text] = item_select_status
-        self.view_status_dic[view_name][item_text] = item_select_status
+    def apply_config_view_status(self, status):
+        for view_name, view_status in status.items():
+            for item_name, item_status in view_status.items():
+                self.update_config_table_row_visible(view_name=view_name, item_text=item_name, item_select_status=item_status)
+
+        self.view_status_dic = status
         self.ifp_obj.top_tab.setCurrentIndex(0)
 
     def update_state(self, state):
@@ -561,124 +572,48 @@ class UserConfig(QMainWindow):
         self.setup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setup_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
 
-    def parsing_default_setting(self, yaml_file):
-        # Waiting modify
-        config_dic = {}
-        default_config_dic = AutoVivification()
-        default_config_flow_dic = AutoVivification()
-
-        if os.path.exists(yaml_file):
-            with open(yaml_file, 'r') as fh:
-                config_dic = yaml.load(fh, Loader=yaml.FullLoader)
-
-        if config_dic is None:
-            config_dic = {}
-
-        self.default_dependency_dic = {}
-
-        if 'TASK' in config_dic:
-            default_config_dic.update(config_dic['TASK'])
-
-            for task in config_dic['TASK']:
-                dependency = config_dic['TASK'][task].get('RUN_AFTER', {}).get('TASK', '')
-                self.default_dependency_dic[task] = dependency
-
-        if 'VAR' in config_dic:
-            self.default_var = config_dic['VAR']
-
-        if 'FLOW' in config_dic:
-            default_config_flow_dic.update(config_dic['FLOW'])
-
-        return default_config_dic, default_config_flow_dic
-
-    def update_default_setting(self):
-        self.default_setting, self.default_flow_setting = self.parsing_default_setting(self.default_yaml)
-
     """
     1. Draw table by following dict
-       a. self.user_input (GUI setting) or self.raw_setting (load ifp.cfg.yaml)
+       a. self.task_setting (GUI setting) or self.raw_setting (load ifp.cfg.yaml)
     2. Parsing self.detailed_setting[block][block_version][flow][vendor][task_branch][task] when load ifp.cfg.yaml
     """
 
-    def update_setting_dependency(self):
-        if not self.user_input:
-            return
-
-        if 'BLOCK' not in self.user_input.keys():
-            return
-
-        self.dependency_priority = {}
-
-        for block in self.user_input['BLOCK'].keys():
-            self.dependency_priority.setdefault(block, {})
-
-            for version in self.user_input['BLOCK'][block].keys():
-                self.dependency_priority[block].setdefault(version, {})
-
-                for flow in self.user_input['BLOCK'][block][version].keys():
-                    for task in self.user_input['BLOCK'][block][version][flow].keys():
-                        user_dep = self.detailed_setting.get(block, {}).get(version, {}).get(flow, {}).get(task, {}).get('RUN_AFTER', {}).get('TASK')
-
-                        if user_dep is not None:
-                            self.dependency_priority[block][version][task] = user_dep
-                        elif task in self.default_dependency_dic:
-                            self.dependency_priority[block][version][task] = self.default_dependency_dic[task]
-                        else:
-                            self.dependency_priority[block][version][task] = ''
-
-    def draw_table(self, setting, stage=''):
+    def draw_table(self, setting):
         self.setup_model.setRowCount(0)
         self.span_info = AutoVivification()
+        self.span_info_dic = {}
         self.table_info = AutoVivification()
-        default_setting_tmp = copy.deepcopy(self.default_setting)
         row = 0
 
         if setting is None:
             return
 
-        if 'BLOCK' not in setting.keys():
-            return
-
-        for block in setting['BLOCK'].keys():
+        for block in setting.keys():
             block_start_line = row
 
-            for version in setting['BLOCK'][block].keys():
+            for version in setting[block].keys():
 
                 # First time load ifp.cfg.yaml, the version may be IFP_v1.0(RUN_ORDER=gen_dir,syn,fv|sta), draw table by IFP_v1.0
                 # Other scenario, the version is IFP_v1.0 without RUN_ORDER information
-                # So setting['BLOCK'][block] must keep [version], others use [block_version] which do not have RUN_ORDER information
+                # So setting[block] must keep [version], others use [block_version] which do not have RUN_ORDER information
 
                 version_start_line = row
 
-                for flow in setting['BLOCK'][block][version].keys():
+                for flow in setting[block][version].keys():
 
                     flow_start_line = row
 
-                    for task in setting['BLOCK'][block][version][flow].keys():
+                    for task in setting[block][version][flow].keys():
                         self.setup_model.setItem(row, 0, QStandardItem(block))
                         self.setup_model.setItem(row, 1, QStandardItem(version))
                         self.setup_model.setItem(row, 2, QStandardItem(flow))
                         self.setup_model.setItem(row, 3, QStandardItem(task))
 
                         self.table_info[row] = [block, version, flow, task]
+                        self.span_info_dic[(row, 2)] = flow_start_line
+                        self.span_info_dic[(row, 1)] = version_start_line
+                        self.span_info_dic[(row, 0)] = block_start_line
                         row += 1
-
-                        if stage == 'load':
-                            if setting['BLOCK'][block][version][flow][task] is not None:
-                                check_flag = 0
-                                for category in setting['BLOCK'][block][version][flow][task].keys():
-                                    if category in default_setting_tmp[task].keys():
-                                        for item in setting['BLOCK'][block][version][flow][task][category].keys():
-                                            if item in default_setting_tmp[task][category].keys():
-                                                if not setting['BLOCK'][block][version][flow][task][category][item] == default_setting_tmp[task][category][item]:
-                                                    check_flag = 1
-                                            else:
-                                                check_flag = 1
-                                    else:
-                                        check_flag = 1
-
-                                if check_flag == 1:
-                                    self.detailed_setting[block][version][flow][task] = setting['BLOCK'][block][version][flow][task]
 
                     if row - flow_start_line > 1:
                         self.setup_table.setSpan(flow_start_line, 2, row - flow_start_line, 1)
@@ -694,7 +629,7 @@ class UserConfig(QMainWindow):
 
     """
     1. Parsing GUI user setting
-    2. Update self.user_input['BLOCK'][block][version][flow][vendor][branch][task]
+    2. Update self.task_setting[block][version][flow][vendor][branch][task]
     """
 
     def parsing_user_setting(self):
@@ -743,46 +678,47 @@ class UserConfig(QMainWindow):
                     self.setup_model.setItem(j, 2, QStandardItem(flow))
                     self.table_info[j][2] = flow
 
-            self.user_input['BLOCK'][block][version][flow][task] = {}
+            # self.task_setting[block][version][flow][task] = {}
 
     '''
     1. Parsing GUI info by def parsing_user_setting
     2. Delete repeated task setting between default.yaml and ifp.cfg.yaml
-    3. Save final setting to self.final_setting['BLOCK'][block][version][flow][vendor][branch][task][category][item]
+    3. Save final setting to self.final_setting[block][version][flow][vendor][branch][task][category][item]
     '''
 
     def parsing_final_setting(self):
         self.parsing_user_setting()
         self.final_setting['VAR'] = {}
-        default_setting_tmp = copy.deepcopy(self.default_setting)
+        default_setting_tmp = copy.deepcopy(self.config_obj.default_task_setting)
 
         for key in self.user_var.keys():
             self.final_setting['VAR'][key] = self.user_var[key]
 
         self.final_setting['BLOCK'] = {}
 
-        for block in self.user_input['BLOCK'].keys():
+        for block in self.task_setting.keys():
             if block == '' or block is None:
                 continue
 
             self.final_setting['BLOCK'].setdefault(block, {})
 
-            for version in self.user_input['BLOCK'][block].keys():
+            for version in self.task_setting[block].keys():
                 if version == '':
                     common_pyqt5.Dialog('WARNING', 'Can not save your setting to config file due to empty version!', QMessageBox.Warning)
                     return
 
                 self.final_setting['BLOCK'][block].setdefault(version, {})
 
-                for flow in self.user_input['BLOCK'][block][version].keys():
+                for flow in self.task_setting[block][version].keys():
                     if flow == '':
                         common_pyqt5.Dialog('WARNING', 'Can not save your setting to config file due to empty flow!', QMessageBox.Warning)
                         return
 
                     self.final_setting['BLOCK'][block][version].setdefault(flow, {})
-                    task_list = list(set(self.default_dependency_dic.keys()).union(self.dependency_priority[block][version].keys()))
+                    # task_list = list(set(self.config_obj.default_dependency_setting.keys()).union(self.dependency_priority[block][version].keys()))
+                    task_list = list(self.dependency_priority[block][version].keys())
 
-                    for task in self.user_input['BLOCK'][block][version][flow].keys():
+                    for task in self.task_setting[block][version][flow].keys():
                         if task == '':
                             common_pyqt5.Dialog('WARNING', 'Can not save your setting to config file due to empty task!', QMessageBox.Warning)
                             return
@@ -791,29 +727,37 @@ class UserConfig(QMainWindow):
 
                         task_dependency = self.dependency_priority.get(block, {}).get(version, {}).get(task, '')
                         default_dependency = self.default_dependency_dic.get(task, '')
+                        task_dependency = WindowForDependency.clean_dependency(item_list=task_list, item=task, dependency=task_dependency)
+                        default_dependency = WindowForDependency.clean_dependency(item_list=task_list, item=task, dependency=default_dependency)
 
-                        if default_dependency.strip() != task_dependency.strip():
+                        if isinstance(task_dependency, str) and isinstance(default_dependency, str) and default_dependency.strip() != task_dependency.strip():
                             task_dependency = WindowForDependency.clean_dependency(item_list=task_list, item=task, dependency=task_dependency)
                             self.final_setting['BLOCK'][block][version][flow][task].update({'RUN_AFTER': {'TASK': task_dependency}})
 
-                        if not self.detailed_setting[block][version][flow][task] == {}:
-                            for category in self.detailed_setting[block][version][flow][task].keys():
+                        if not self.task_setting[block][version][flow][task] == {}:
+                            for category in self.task_setting[block][version][flow][task].keys():
                                 if category == 'RUN_AFTER':
                                     continue
 
-                                if not self.detailed_setting[block][version][flow][task][category]:
+                                if category == 'RUN_MODE':
+                                    self.final_setting['BLOCK'][block][version][flow][task][category] = self.task_setting[block][version][flow][task][category]
+
+                                if not self.task_setting[block][version][flow][task][category]:
                                     continue
 
-                                for item in self.detailed_setting[block][version][flow][task][category].keys():
+                                if not isinstance(self.task_setting[block][version][flow][task][category], dict):
+                                    continue
+
+                                for item in self.task_setting[block][version][flow][task][category].keys():
                                     if default_setting_tmp.get(task, {}).get(category, {}).get(item) is not None:
-                                        if default_setting_tmp[task][category][item] == self.detailed_setting[block][version][flow][task][category][item]:
+                                        if default_setting_tmp[task][category][item] == self.task_setting[block][version][flow][task][category][item]:
                                             continue
                                     else:
-                                        if not self.detailed_setting.get(block, {}).get(version, {}).get(flow, {}).get(task, {}).get(category, {}).get(item):
+                                        if not self.task_setting.get(block, {}).get(version, {}).get(flow, {}).get(task, {}).get(category, {}).get(item):
                                             continue
 
                                     self.final_setting['BLOCK'][block][version][flow][task].setdefault(category, {})
-                                    self.final_setting['BLOCK'][block][version][flow][task][category][item] = self.detailed_setting[block][version][flow][task][category][item]
+                                    self.final_setting['BLOCK'][block][version][flow][task][category][item] = self.task_setting[block][version][flow][task][category][item]
 
     """
     1. Load ifp.cfg.yaml
@@ -823,32 +767,18 @@ class UserConfig(QMainWindow):
     """
 
     def load(self):
-        self.user_input = AutoVivification()
-        self.detailed_setting = AutoVivification()
-        file = open(self.config_file, 'r')
-        self.raw_setting = yaml.safe_load(file)
+        self.default_var = self.config_obj.default_var_setting
+        self.default_setting = self.config_obj.default_task_setting
+        self.default_dependency_dic = self.config_obj.default_dependency_setting
+        self.dependency_priority = self.config_obj.real_task_dependency
+        self.task_setting = self.config_obj.user_task_setting
+        self.raw_setting = self.config_obj.user_config_dic
+        self.user_var = self.config_obj.user_var_setting
+        self.project = self.config_obj.PROJECT
+        self.group = self.config_obj.GROUP
 
-        if self.raw_setting is None:
-            self.setup_model.setRowCount(0)
-            return
-
-        if 'VAR' in self.raw_setting.keys():
-            self.user_var = self.raw_setting['VAR']
-
-        if 'PROJECT' in self.raw_setting.keys():
-            self.user_input['PROJECT'] = self.raw_setting['PROJECT']
-        else:
-            self.user_input['PROJECT'] = ''
-
-        if 'GROUP' in self.raw_setting.keys():
-            self.user_input['GROUP'] = self.raw_setting['GROUP']
-        else:
-            self.user_input['GROUP'] = ''
-
-        # self.preprocess_setting()
-        self.draw_table(self.raw_setting, stage='load')
+        self.draw_table(self.task_setting)
         self.parsing_user_setting()
-        self.update_setting_dependency()
         self.ifp_monitor.wake_up = True
         self._catch_task_status()
 
@@ -921,7 +851,7 @@ class UserConfig(QMainWindow):
                 action2.triggered.connect(lambda: self.remove_current_item('block'))
                 action2.setDisabled(self.disable_gui_flag)
                 menu.addAction(action2)
-                common.add_api_menu(self.ifp_obj, self.user_api, menu, project=self.user_input['PROJECT'], group=self.user_input['GROUP'], tab='CONFIG', column='BLOCK', var_dic={'BLOCK': self.current_selected_block})
+                common.add_api_menu(self.ifp_obj, self.user_api, menu, project=self.project, group=self.group, tab='CONFIG', column='BLOCK', var_dic={'BLOCK': self.current_selected_block})
 
             elif self.current_selected_column == 1:
                 action1 = QAction('Add version')
@@ -941,7 +871,7 @@ class UserConfig(QMainWindow):
                 action2.triggered.connect(lambda: self.remove_current_item('version'))
                 action2.setDisabled(self.disable_gui_flag)
                 menu.addAction(action2)
-                common.add_api_menu(self.ifp_obj, self.user_api, menu, project=self.user_input['PROJECT'], group=self.user_input['GROUP'], tab='CONFIG', column='VERSION', var_dic={'BLOCK': self.current_selected_block, 'VERSION': self.current_selected_version})
+                common.add_api_menu(self.ifp_obj, self.user_api, menu, project=self.project, group=self.group, tab='CONFIG', column='VERSION', var_dic={'BLOCK': self.current_selected_block, 'VERSION': self.current_selected_version})
 
             elif self.current_selected_column == 2:
                 action1 = QAction('Add flow')
@@ -961,32 +891,42 @@ class UserConfig(QMainWindow):
                 action2.triggered.connect(lambda: self.remove_current_item('flow'))
                 action2.setDisabled(self.disable_gui_flag)
                 menu.addAction(action2)
-                common.add_api_menu(self.ifp_obj, self.user_api, menu, project=self.user_input['PROJECT'], group=self.user_input['GROUP'], tab='CONFIG', column='FLOW', var_dic={'BLOCK': self.current_selected_block, 'VERSION': self.current_selected_version,
-                                                                                                                                                                                 'FLOW': self.current_selected_flow})
+                common.add_api_menu(self.ifp_obj, self.user_api, menu, project=self.project, group=self.group, tab='CONFIG', column='FLOW', var_dic={'BLOCK': self.current_selected_block, 'VERSION': self.current_selected_version, 'FLOW': self.current_selected_flow})
             elif self.current_selected_column == 3:
                 action1 = QAction('Task information')
+                status = self.config_obj.get_task(self.current_selected_block, self.current_selected_version, self.current_selected_flow, self.current_selected_task).RunStatus
+                read_only = True if self.disable_gui_flag and status == common.status.running else False
+
                 if self.disable_gui_flag:
-                    action1.triggered.connect(lambda: self.edit_detailed_config(read_only=True,
+                    action1.triggered.connect(lambda: self.edit_detailed_config(read_only=read_only,
                                                                                 block=self.current_selected_block,
                                                                                 version=self.current_selected_version,
                                                                                 flow=self.current_selected_flow,
                                                                                 task=self.current_selected_task))
                 else:
-                    action1.triggered.connect(lambda: self.edit_detailed_config(read_only=False,
+                    action1.triggered.connect(lambda: self.edit_detailed_config(read_only=read_only,
                                                                                 block=self.current_selected_block,
                                                                                 version=self.current_selected_version,
                                                                                 flow=self.current_selected_flow,
                                                                                 task=self.current_selected_task))
 
+                task_obj_list = self.config_obj.get_block_task_list(block=self.current_selected_block)
+                running_task = False
+
+                for task_obj in task_obj_list:
+                    if task_obj.RunStatus == common.status.running:
+                        running_task = True
+                        break
+
                 menu.addAction(action1)
                 menu.addSeparator()
                 action3 = QAction('Add task')
                 action3.triggered.connect(lambda: self.add_more_item('task'))
-                action3.setDisabled(self.disable_gui_flag)
+                action3.setDisabled(running_task)
                 menu.addAction(action3)
                 action4 = QAction('Copy task')
                 action4.triggered.connect(lambda: self.copy_current_item('task'))
-                action4.setDisabled(self.disable_gui_flag)
+                action4.setDisabled(running_task)
                 menu.addAction(action4)
 
                 if len(selected_rows[5]) > 1:
@@ -995,13 +935,13 @@ class UserConfig(QMainWindow):
                     action2 = QAction('Remove task')
 
                 action2.triggered.connect(lambda: self.remove_current_item('task'))
-                action2.setDisabled(self.disable_gui_flag)
+                action2.setDisabled(running_task)
                 menu.addAction(action2)
                 common.add_api_menu(self.ifp_obj,
                                     self.user_api,
                                     menu,
-                                    project=self.user_input['PROJECT'],
-                                    group=self.user_input['GROUP'],
+                                    project=self.project,
+                                    group=self.group,
                                     tab='CONFIG',
                                     column='TASK',
                                     var_dic={'BLOCK': self.current_selected_block,
@@ -1031,46 +971,31 @@ class UserConfig(QMainWindow):
                                       flow=flow,
                                       task=task)
 
-    def set_dependency_priority(self):
-        if not self.dependency_priority:
-            title = 'Warning'
-            info = 'Please add block first!'
-            common_pyqt5.Dialog(title, info, icon=QMessageBox.Warning)
-            return
-
-        self.dependency_setting_windows = WindowForDependency(
-            dependency_priority_dic=self.dependency_priority,
-            default_dependency_dic=self.default_dependency_dic
-        )
-        self.dependency_setting_windows.setWindowModality(Qt.ApplicationModal)
-        self.dependency_setting_windows.message.connect(self.update_extension_config_setting)
-        self.dependency_setting_windows.show()
-
     def clean_dict_for_empty_key(self):
-        raw_setting = copy.deepcopy(self.user_input)
+        raw_setting = copy.deepcopy(self.task_setting)
 
-        for block in raw_setting['BLOCK'].keys():
-            if raw_setting['BLOCK'][block] == {}:
-                del self.user_input['BLOCK'][block]
+        for block in raw_setting.keys():
+            if raw_setting[block] == {}:
+                del self.task_setting[block]
                 del self.view_status_dic['block'][block]
                 del self.ifp_obj.view_status_dic['block'][block]
             else:
-                for version in raw_setting['BLOCK'][block].keys():
-                    if raw_setting['BLOCK'][block][version] == {}:
-                        del self.user_input['BLOCK'][block][version]
+                for version in raw_setting[block].keys():
+                    if raw_setting[block][version] == {}:
+                        del self.task_setting[block][version]
 
-                        if self.user_input['BLOCK'][block] == {}:
-                            del self.user_input['BLOCK'][block]
+                        if self.task_setting[block] == {}:
+                            del self.task_setting[block]
                     else:
-                        for flow in raw_setting['BLOCK'][block][version].keys():
-                            if raw_setting['BLOCK'][block][version][flow] == {}:
-                                del self.user_input['BLOCK'][block][version][flow]
+                        for flow in raw_setting[block][version].keys():
+                            if raw_setting[block][version][flow] == {}:
+                                del self.task_setting[block][version][flow]
 
-                                if self.user_input['BLOCK'][block][version] == {}:
-                                    del self.user_input['BLOCK'][block][version]
+                                if self.task_setting[block][version] == {}:
+                                    del self.task_setting[block][version]
 
-                                    if self.user_input['BLOCK'][block] == {}:
-                                        del self.user_input['BLOCK'][block]
+                                    if self.task_setting[block] == {}:
+                                        del self.task_setting[block]
 
     def clean_dependency_dict_for_empty_key(self):
         raw_dependency = copy.deepcopy(self.dependency_priority)
@@ -1086,17 +1011,17 @@ class UserConfig(QMainWindow):
     def add_more_item(self, item):
         self.parsing_user_setting()
         self.child = WindowForAddItems(item,
-                                       self.user_input,
-                                       self.detailed_setting,
-                                       self.default_setting,
-                                       default_flow_setting=self.default_flow_setting,
+                                       self.task_setting,
+                                       self.task_setting,
+                                       self.config_obj.default_task_setting,
+                                       default_flow_setting=self.config_obj.default_flow_setting,
                                        block=self.current_selected_block,
                                        version=self.current_selected_version,
                                        flow=self.current_selected_flow,
                                        task=self.current_selected_task,
                                        auto_import_tasks=self.ifp_obj.auto_import_tasks,
                                        dependency_dic=self.dependency_priority,
-                                       default_dependency_dic=self.default_dependency_dic)
+                                       default_dependency_dic=self.config_obj.default_dependency_setting)
         self.child.setWindowModality(Qt.ApplicationModal)
         self.child.message.connect(self.update_table_after_add)
         self.child.save_signal.connect(self.save)
@@ -1128,7 +1053,7 @@ class UserConfig(QMainWindow):
                 if block not in selected_block_list:
                     selected_block_list.append(block)
 
-                del self.user_input['BLOCK'][block]
+                del self.task_setting[block]
                 del self.dependency_priority[block]
 
             for block in selected_block_list:
@@ -1139,7 +1064,7 @@ class UserConfig(QMainWindow):
             for row in selected_rows[1]:
                 block = self.setup_model.index(row, 0).data()
                 version = self.setup_model.index(row, 1).data()
-                del self.user_input['BLOCK'][block][version]
+                del self.task_setting[block][version]
                 del self.dependency_priority[block][version]
 
         if item == 'flow':
@@ -1147,22 +1072,21 @@ class UserConfig(QMainWindow):
                 block = self.setup_model.index(row, 0).data()
                 version = self.setup_model.index(row, 1).data()
                 flow = self.setup_model.index(row, 2).data()
-                del self.user_input['BLOCK'][block][version][flow]
+                del self.task_setting[block][version][flow]
         if item == 'task':
             for row in selected_rows[3]:
                 block = self.setup_model.index(row, 0).data()
                 version = self.setup_model.index(row, 1).data()
                 flow = self.setup_model.index(row, 2).data()
                 task = self.setup_model.index(row, 3).data()
-                del self.user_input['BLOCK'][block][version][flow][task]
+                del self.task_setting[block][version][flow][task]
                 del self.dependency_priority[block][version][task]
                 del self.view_status_dic['task'][task]
                 del self.ifp_obj.view_status_dic['task'][task]
 
         self.clean_dict_for_empty_key()
         self.clean_dependency_dict_for_empty_key()
-        self.draw_table(self.user_input)
-        self.update_setting_dependency()
+        self.draw_table(self.task_setting)
         self.save()
 
     @staticmethod
@@ -1205,8 +1129,8 @@ class UserConfig(QMainWindow):
             selected_rows[index.column()].append(index.row())
 
         self.child = WindowForCopyItems(item,
-                                        self.user_input,
-                                        self.detailed_setting,
+                                        self.task_setting,
+                                        self.task_setting,
                                         block=self.current_selected_block,
                                         version=self.current_selected_version,
                                         flow=self.current_selected_flow,
@@ -1220,37 +1144,36 @@ class UserConfig(QMainWindow):
 
     def update_table_after_copy(self, info):
         copy_item = info[0]
-        default_setting_tmp = copy.deepcopy(self.default_setting)
-        self.draw_table(self.user_input)
+        self.task_setting = info[-1]
+        default_setting_tmp = copy.deepcopy(self.config_obj.default_task_setting)
+        self.draw_table(self.task_setting)
 
         if copy_item == 'task':
             # Copy all default setting of raw task to new task as user defined setting if new task is not a default task
             new_task = info[1]
-            self.detailed_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task] = copy.deepcopy(self.detailed_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][self.current_selected_task])
+            self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task] = copy.deepcopy(self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][self.current_selected_task])
             if new_task not in default_setting_tmp.keys():
                 for category in default_setting_tmp[self.current_selected_task].keys():
-                    if category not in self.detailed_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task].keys():
-                        self.detailed_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task].setdefault(category, {})
+                    if category not in self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task].keys():
+                        self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task].setdefault(category, {})
                         for item in default_setting_tmp[self.current_selected_task][category].keys():
-                            if item not in self.detailed_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task][category].keys():
-                                self.detailed_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task][category][item] = default_setting_tmp[self.current_selected_task][category][item]
-
-        self.update_setting_dependency()
+                            if item not in self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task][category].keys():
+                                self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task][category][item] = default_setting_tmp[self.current_selected_task][category][item]
 
     def update_table_after_add(self, info):
-        self.user_input = copy.deepcopy(info[0])
+        self.task_setting = copy.deepcopy(info[0])
+        self.dependency_priority = info[-1]
         add_item = info[1]
 
         if add_item == 'task':
-            for block in self.user_input['BLOCK']:
-                for version in self.user_input['BLOCK'][block]:
-                    for flow in self.user_input['BLOCK'][block][version]:
-                        for task in self.user_input['BLOCK'][block][version][flow]:
-                            if not self.detailed_setting.get(block, {}).get(version, {}).get(flow, {}).get(task):
-                                self.detailed_setting[block][version][flow][task] = {}
+            for block in self.task_setting:
+                for version in self.task_setting[block]:
+                    for flow in self.task_setting[block][version]:
+                        for task in self.task_setting[block][version][flow]:
+                            if not self.task_setting.get(block, {}).get(version, {}).get(flow, {}).get(task):
+                                self.task_setting[block][version][flow][task] = {}
 
-        self.draw_table(self.user_input)
-        self.update_setting_dependency()
+        self.draw_table(self.task_setting)
 
     def edit_detailed_config(self,
                              read_only=False,
@@ -1258,7 +1181,9 @@ class UserConfig(QMainWindow):
                              version=None,
                              flow=None,
                              task=None):
-        self.child = WindowForGlobalTaskInfo(task_obj=self.ifp_obj.job_manager.all_tasks[block][version][flow][task], user_config_obj=self, read_only=read_only)
+        status = self.ifp_obj.job_manager.all_tasks[block][version][flow][task].status
+        read_only = True if read_only and status == common.status.running else False
+        self.child = WindowForTaskInformation(task_obj=self.ifp_obj.job_manager.all_tasks[block][version][flow][task], user_config_obj=self, read_only=read_only)
         self.child.setWindowModality(Qt.ApplicationModal)
         self.child.detailed_task_window.message.connect(self.update_detailed_setting)
         self.child.show()
@@ -1267,38 +1192,40 @@ class UserConfig(QMainWindow):
         setting = value[0]
         new_task = value[1]
         new_setting = copy.deepcopy(setting)
-        default_setting_tmp = copy.deepcopy(self.default_setting)
+        default_setting_tmp = copy.deepcopy(self.config_obj.default_task_setting)
 
         if not self.current_selected_task == new_task:
-            if self.current_selected_task in self.detailed_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow].keys():
-                del self.detailed_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][self.current_selected_task]
-                del self.user_input['BLOCK'][self.current_selected_block][self.current_selected_version][self.current_selected_flow][self.current_selected_task]
+            if self.current_selected_task in self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow].keys():
+                del self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][self.current_selected_task]
 
-                self.user_input['BLOCK'][self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task] = {}
+                self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task] = {}
 
                 self.dependency_priority[self.current_selected_block][self.current_selected_version][new_task] = ''
                 del self.dependency_priority[self.current_selected_block][self.current_selected_version][self.current_selected_task]
                 common_pyqt5.Dialog(title='Warning', info='Task %s dependency have been reset to " "!' % new_task, icon=QMessageBox.Warning)
 
         for category in setting.keys():
+            if not isinstance(setting[category], dict):
+                new_setting[category] = setting[category]
+                continue
+
             for item in setting[category].keys():
                 if default_setting_tmp.get(new_task, {}).get(category, {}).get(item) is not None:
                     if default_setting_tmp[new_task][category][item] == setting[category][item]:
                         del new_setting[category][item]
 
             for item in setting[category].keys():
-                if setting.get(category, {}).get(item) is not None and setting[category][item] == self.default_setting.get(category, {}).get(item):
+                if setting.get(category, {}).get(item) is not None and setting[category][item] == self.config_obj.default_task_setting.get(category, {}).get(item):
                     del new_setting[category][item]
 
             if len(new_setting[category].keys()) == 0:
                 del new_setting[category]
 
-        self.detailed_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task] = copy.deepcopy(new_setting)
+        self.task_setting[self.current_selected_block][self.current_selected_version][self.current_selected_flow][new_task] = copy.deepcopy(new_setting)
 
         if not self.current_selected_task == new_task:
             self.current_selected_task = new_task
-            self.draw_table(self.user_input)
-            self.update_setting_dependency()
+            self.draw_table(self.task_setting)
 
         self.save()
 
@@ -1324,7 +1251,7 @@ class UserConfig(QMainWindow):
                 self.user_var = {}
 
                 for key, value in var_dic.items():
-                    if key in self.default_var and value == self.default_var[key]:
+                    if key in self.default_var and value == self.default_var:
                         continue
 
                     self.user_var[key] = value
@@ -1361,10 +1288,10 @@ class UserConfig(QMainWindow):
         raw_task = info[3]
         new_task = info[4]
 
-        tasks = list(self.user_input['BLOCK'][block][version][flow].keys())
+        tasks = list(self.task_setting[block][version][flow].keys())
         new_tasks = []
         for task in tasks:
-            del self.user_input['BLOCK'][block][version][flow][task]
+            del self.task_setting[block][version][flow][task]
 
             if task == raw_task:
                 new_tasks.append(new_task)
@@ -1374,10 +1301,9 @@ class UserConfig(QMainWindow):
                 new_tasks.append(task)
 
         for task in new_tasks:
-            self.user_input['BLOCK'][block][version][flow][task] = ''
+            self.task_setting[block][version][flow][task] = ''
 
-        self.draw_table(self.user_input)
-        self.update_setting_dependency()
+        self.draw_table(self.task_setting)
         self.save()
 
     def _update_task_cache(self, block: str, version: str, flow: str, task: str, _: str, job_id: str):
@@ -1400,7 +1326,7 @@ class IFPMonitor(QObject):
     def __init__(self, mainwindow):
         super(QObject, self).__init__()
         self.mainwindow = mainwindow
-        self.user_input = AutoVivification()
+        self.task_setting = AutoVivification()
         self.detailed_setting = AutoVivification()
         self.default_setting = AutoVivification()
         self.state = AutoVivification()
@@ -1409,14 +1335,14 @@ class IFPMonitor(QObject):
     def run(self):
         while True:
             if self.wake_up:
-                self.user_input = copy.deepcopy(self.mainwindow.user_input)
-                self.detailed_setting = copy.deepcopy(self.mainwindow.detailed_setting)
+                self.task_setting = copy.deepcopy(self.mainwindow.task_setting)
+                self.detailed_setting = copy.deepcopy(self.mainwindow.task_setting)
                 self.default_setting = copy.deepcopy(self.mainwindow.default_setting)
 
-                for block in self.user_input['BLOCK'].keys():
-                    for version in self.user_input['BLOCK'][block].keys():
-                        for flow in self.user_input['BLOCK'][block][version].keys():
-                            for task in self.user_input['BLOCK'][block][version][flow].keys():
+                for block in self.task_setting.keys():
+                    for version in self.task_setting[block].keys():
+                        for flow in self.task_setting[block][version].keys():
+                            for task in self.task_setting[block][version][flow].keys():
                                 if self.detailed_setting[block][version][flow][task]:
                                     self.state[block][version][flow][task] = 'user'
 
@@ -1456,7 +1382,7 @@ class WindowForAddItems(QMainWindow):
                  default_dependency_dic=None):
         super().__init__()
         self.item = item
-        self.user_input = user_input
+        self.task_setting = user_input
         self.detailed_setting = detailed_setting
         self.default_setting = default_setting
         self.default_flow_setting = default_flow_setting
@@ -1480,6 +1406,7 @@ class WindowForAddItems(QMainWindow):
 
         self.table = QTableView()
         self.table_model = QStandardItemModel(1, 4)
+        self.span_info = {}
         self.table.setModel(self.table_model)
         header = ['Block', 'Version', 'Flow', 'Task']
         self.table_model.setHorizontalHeaderLabels(header)
@@ -1593,6 +1520,7 @@ class WindowForAddItems(QMainWindow):
                     flow_item.setCheckable(True)
                     flow_item.setCheckState(Qt.Checked)
                     model.setItem(row, 2, flow_item)
+
                     for task in self.default_flow_setting[flow]:
                         if task not in self.default_setting.keys():
                             continue
@@ -1608,6 +1536,7 @@ class WindowForAddItems(QMainWindow):
 
                     if flow_end_line - flow_start_line > 1:
                         table.setSpan(flow_start_line, 2, flow_end_line - flow_start_line, 1)
+                        self.span_info[(flow_start_line, 2)] = (flow_end_line - flow_start_line, 1)
             else:
                 flow_start_line = row
                 flow_item = QStandardItem('')
@@ -1624,10 +1553,13 @@ class WindowForAddItems(QMainWindow):
 
                 if flow_end_line - flow_start_line > 1:
                     table.setSpan(flow_start_line, 2, flow_end_line - flow_start_line, 1)
+                    self.span_info[(flow_start_line, flow_end_line)] = (flow_end_line - flow_start_line, 1)
 
             if row > 1:
                 table.setSpan(0, 0, row, 1)
                 table.setSpan(0, 1, row, 1)
+                self.span_info[(0, 0)] = (row, 1)
+                self.span_info[(0, 1)] = (row, 1)
 
         if self.item == 'task' and self.auto_import_tasks:
             qitem = QStandardItem('')
@@ -1636,61 +1568,17 @@ class WindowForAddItems(QMainWindow):
             lineedit = QLineEdit2(values=self.default_setting.keys())
             table.setIndexWidget(index, lineedit)
 
-    @staticmethod
-    def clean_dependency(item_list=None, item=None, dependency=None):
-        if not item_list or not item or not dependency:
-            return ''
-
-        independent_condition_list = dependency.split(',')
-        valid_independent_condition_list = []
-
-        if not independent_condition_list:
-            return ''
-
-        for independent_condition in independent_condition_list:
-            parallel_condition_list = independent_condition.split('|')
-            valid_parallel_condition_list = []
-
-            if not parallel_condition_list:
-                continue
-
-            for parallel_condition in parallel_condition_list:
-                and_condition_list = parallel_condition.split('&')
-                valid_add_condition_list = []
-
-                if not and_condition_list:
-                    continue
-
-                for and_condition in and_condition_list:
-                    if and_condition.strip() not in item_list:
-                        continue
-                    else:
-                        valid_add_condition_list.append(and_condition.strip())
-
-                valid_parallel_condition = '&'.join(valid_add_condition_list)
-
-                if valid_parallel_condition:
-                    valid_parallel_condition_list.append(valid_parallel_condition)
-
-            valid_independent_condition = '|'.join(valid_parallel_condition_list)
-
-            if valid_independent_condition:
-                valid_independent_condition_list.append(valid_independent_condition)
-
-        valid_dependency = ','.join(valid_independent_condition_list)
-
-        return valid_dependency
-
     def save(self):
+        self.save_button.setEnabled(False)
         block = None
         version = None
         flow = None
-        raw_user_input = copy.deepcopy(self.user_input)
+        raw_user_input = copy.deepcopy(self.task_setting)
         raw_tasks = []
 
         if self.item in ['flow', 'task']:
-            for flow in self.user_input['BLOCK'][self.block][self.version].keys():
-                for task in self.user_input['BLOCK'][self.block][self.version][flow].keys():
+            for flow in self.task_setting[self.block][self.version].keys():
+                for task in self.task_setting[self.block][self.version][flow].keys():
                     raw_tasks.append(task)
 
         all_tasks = []
@@ -1717,29 +1605,36 @@ class WindowForAddItems(QMainWindow):
 
             if task in raw_tasks:
                 common_pyqt5.Dialog('Error', "Task[%s] already exist in your config, please ensure task uniqueness!" % task, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
 
             if task in all_tasks:
                 common_pyqt5.Dialog('Error', "Cant import flows which include same task, please ensure task uniqueness!", QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
             else:
                 all_tasks.append(task)
 
             if '' in [block, version, flow, task] or None in [block, version, flow, task]:
                 common_pyqt5.Dialog('Error', "Please fill in any empty item", QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
 
-            if self.item == 'block' and block in raw_user_input['BLOCK'].keys():
+            if self.item == 'block' and block in raw_user_input.keys():
                 common_pyqt5.Dialog('Error', "You add one repeated block %s" % block, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
-            elif self.item == 'version' and version in raw_user_input['BLOCK'][block].keys():
+            elif self.item == 'version' and version in raw_user_input[block].keys():
                 common_pyqt5.Dialog('Error', "You add one repeated version %s" % version, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
-            elif self.item == 'flow' and flow in raw_user_input['BLOCK'][block][version].keys():
+            elif self.item == 'flow' and flow in raw_user_input[block][version].keys():
                 common_pyqt5.Dialog('Error', "You add one repeated flow %s" % flow, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
-            elif self.item == 'task' and task in raw_user_input['BLOCK'][block][version][flow].keys():
+            elif self.item == 'task' and task in raw_user_input[block][version][flow].keys():
                 common_pyqt5.Dialog('Error', "You add one repeated task %s" % task, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
 
         for i in range(self.table_model.rowCount()):
@@ -1764,41 +1659,28 @@ class WindowForAddItems(QMainWindow):
                 self.dependency_dic[block].setdefault(version, {})
 
             if task not in self.dependency_dic[block][version]:
-                self.dependency_dic[block][version][task] = {}
+                if self.auto_import_tasks:
+                    tasks = list(set(all_tasks).union(set(raw_tasks)))
+                    self.dependency_dic[block][version][task] = WindowForDependency.clean_dependency(item_list=tasks, item=task, dependency=self.default_dependency_dic.get(task, ''))
 
             if self.item == 'task':
-                all_tasks = list(self.user_input['BLOCK'][block][version][flow].keys())
+                all_tasks = list(self.task_setting[block][version][flow].keys())
                 index = all_tasks.index(self.task)
                 all_tasks.insert(index + 1, task)
-                self.user_input['BLOCK'][block][version][flow] = {}
+                self.task_setting[block][version][flow] = {}
 
                 for k in all_tasks:
-                    self.user_input['BLOCK'][block][version][flow][k] = {}
-
-                # Update dependency
-                if not self.auto_import_tasks:
-                    self.dependency_dic[block][version][task] = {}
-                else:
-                    if task not in self.dependency_dic[block][version]:
-                        try:
-                            dependency = self.default_dependency_dic[task]
-                        except Exception:
-                            dependency = ''
-
-                        task_list = list(self.user_input['BLOCK'][block][version][flow].keys())
-                        valid_dependency = self.clean_dependency(item_list=task_list, item=task, dependency=dependency)
-                        self.dependency_dic[block][version][task] = valid_dependency
-
+                    self.task_setting[block][version][flow][k] = {}
             else:
                 if self.item in ['block', 'version', 'flow'] and self.auto_import_tasks:
                     if not self.table_model.item(i, 3).checkState() == Qt.Checked:
                         continue
 
-                self.user_input['BLOCK'][block][version][flow][task] = {}
+                self.task_setting[block][version][flow][task] = {}
 
-        self.message.emit([self.user_input, self.item, block, version])
+        self.message.emit([self.task_setting, self.item, block, version, self.dependency_dic])
         self.save_signal.emit()
-        self.close()
+        self.deleteLater()
 
 
 class WindowForCopyItems(QMainWindow):
@@ -1816,8 +1698,8 @@ class WindowForCopyItems(QMainWindow):
                  dependency_dic=None):
         super().__init__()
         self.item = item
-        self.user_input = user_input
-        self.detailed_setting = detailed_setting
+        self.task_setting = copy.deepcopy(user_input)
+        self.detailed_setting = copy.deepcopy(detailed_setting)
         self.dependency_dic = dependency_dic
         self.block = block
         self.version = version
@@ -1911,20 +1793,20 @@ class WindowForCopyItems(QMainWindow):
             block_start_line = row
 
             if self.item in ['block']:
-                versions = list(self.user_input['BLOCK'][block].keys())
+                versions = list(self.task_setting[block].keys())
             elif self.item in ['version', 'flow', 'task']:
                 versions = [self.version]
 
             for version in versions:
                 version_start_line = row
 
-                for flow in self.user_input['BLOCK'][block][version].keys():
+                for flow in self.task_setting[block][version].keys():
                     if self.item in ['flow', 'task'] and not flow == self.flow:
                         continue
 
                     flow_start_line = row
 
-                    for task in self.user_input['BLOCK'][block][version][flow].keys():
+                    for task in self.task_setting[block][version][flow].keys():
                         if self.item in ['task'] and not task == self.task:
                             continue
 
@@ -1950,7 +1832,7 @@ class WindowForCopyItems(QMainWindow):
 
                         task_item = QStandardItem(task)
 
-                        if editable and self.item in ['block', 'version', 'flow']:
+                        if editable and self.item in ['block', 'version']:
                             task_item.setFlags(Qt.ItemIsEditable)
 
                         model.setItem(row, 3, task_item)
@@ -1969,14 +1851,15 @@ class WindowForCopyItems(QMainWindow):
                 self.span_info[block_start_line][0] = row - 1
 
     def save(self):
+        self.save_button.setEnabled(False)
         update_flow_flag = False
         task_new = ''
         block, version, flow, task = None, None, None, None
         raw_tasks = []
 
         if self.item in ['flow', 'task']:
-            for flow in self.user_input['BLOCK'][self.block][self.version].keys():
-                for task in self.user_input['BLOCK'][self.block][self.version][flow].keys():
+            for flow in self.task_setting[self.block][self.version].keys():
+                for task in self.task_setting[self.block][self.version][flow].keys():
                     raw_tasks.append(task)
 
         for i in range(self.new_table_model.rowCount()):
@@ -1987,11 +1870,13 @@ class WindowForCopyItems(QMainWindow):
 
             if task_new in raw_tasks:
                 common_pyqt5.Dialog('Error', "Task[%s] already exist in your config, please ensure task uniqueness!" % task_new, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
 
             for cell in [block_new, version_new, flow_new, task_new]:
                 if re.search(r'^\s*$', cell):
                     common_pyqt5.Dialog('Error', "Empty %s name!" % list(locals().keys())[list(locals().values()).index(cell)].replace('_new', ''), QMessageBox.Critical)
+                    self.save_button.setEnabled(True)
                     return
 
             if not block_new == self.table_info[i][0] and not self.span_info[i][0] == {}:
@@ -2015,17 +1900,21 @@ class WindowForCopyItems(QMainWindow):
                     self.new_table_model.setItem(j, 2, QStandardItem(flow_new))
                     self.table_info[j][2] = flow_new
 
-            if self.item == 'block' and block_new in self.user_input['BLOCK'].keys():
+            if self.item == 'block' and block_new in self.task_setting.keys():
                 common_pyqt5.Dialog('Error', "You add one repeated block %s" % block_new, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
-            elif self.item == 'version' and version_new in self.user_input['BLOCK'][self.block].keys():
+            elif self.item == 'version' and version_new in self.task_setting[self.block].keys():
                 common_pyqt5.Dialog('Error', "You add one repeated version %s" % version_new, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
-            elif self.item == 'flow' and flow_new in self.user_input['BLOCK'][self.block][self.version].keys():
+            elif self.item == 'flow' and flow_new in self.task_setting[self.block][self.version].keys():
                 common_pyqt5.Dialog('Error', "You add one repeated flow %s" % flow_new, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
-            elif self.item == 'task' and task_new in self.user_input['BLOCK'][self.block][self.version][self.flow].keys():
+            elif self.item == 'task' and task_new in self.task_setting[self.block][self.version][self.flow].keys():
                 common_pyqt5.Dialog('Error', "You add one repeated task %s" % task_new, QMessageBox.Critical)
+                self.save_button.setEnabled(True)
                 return
 
         for i in range(self.new_table_model.rowCount()):
@@ -2064,104 +1953,173 @@ class WindowForCopyItems(QMainWindow):
             if task_new not in self.dependency_dic[block_tmp][version_tmp]:
                 self.dependency_dic[block_tmp][version_tmp][task_new] = copy.deepcopy(self.dependency_dic[raw_block][raw_version][raw_task])
 
-            if not self.user_input['BLOCK'][block_new][version_new][flow_new][task_new]:
+            if not self.task_setting[block_new][version_new][flow_new][task_new]:
                 if self.item == 'task':
-                    all_tasks = list(self.user_input['BLOCK'][block_new][version_new][flow_new].keys())
+                    all_tasks = list(self.task_setting[block_new][version_new][flow_new].keys())
                     index = all_tasks.index(self.task)
                     all_tasks.insert(index + 1, task_new)
-                    self.user_input['BLOCK'][block_new][version_new][flow_new] = {}
+                    self.task_setting[block_new][version_new][flow_new] = {}
 
                     for k in all_tasks:
-                        self.user_input['BLOCK'][block_new][version_new][flow_new][k] = {}
+                        self.task_setting[block_new][version_new][flow_new][k] = {}
                 else:
-                    self.user_input['BLOCK'][block_new][version_new][flow_new][task_new] = {}
+                    self.task_setting[block_new][version_new][flow_new][task_new] = {}
 
             if not self.detailed_setting[block_new][version_new][flow_new][task_new]:
-                self.detailed_setting[block_new][version_new][flow_new][task_new] = copy.deepcopy(self.detailed_setting[block][version][flow][task])
+                self.detailed_setting[block_new][version_new][flow_new][task_new] = copy.deepcopy(self.detailed_setting[raw_block][raw_version][raw_flow][raw_task])
 
             # if not self.item == 'branches':
             if not flow_new == flow:
                 update_flow_flag = True
 
+        for block in self.task_setting:
+            for version in self.task_setting[block]:
+                for flow in self.task_setting[block][version]:
+                    for task in self.task_setting[block][version][flow]:
+                        self.task_setting[block][version][flow][task] = self.detailed_setting[block][version][flow][task]
+
         if self.item == 'task':
-            self.message.emit([self.item, task_new])
+            self.message.emit([self.item, task_new, self.task_setting])
         elif update_flow_flag:
-            self.message.emit(['update flow'])
+            self.message.emit(['update flow', self.task_setting])
         else:
-            self.message.emit([self.item])
+            self.message.emit([self.item, self.task_setting])
 
         self.save_signal.emit()
-        self.close()
+        self.deleteLater()
 
 
-class WindowForDetailedTaskInfo(QMainWindow):
+class WindowForTaskConfig(QMainWindow):
     message = pyqtSignal(list)
     resize_signal = pyqtSignal(int, int)
     close_signal = pyqtSignal(bool)
 
     def __init__(self,
-                 user_input,
-                 default_setting,
-                 detailed_setting,
-                 blank_setting,
-                 default_var,
-                 cwd,
-                 block,
-                 version,
-                 flow,
-                 task,
-                 var,
-                 read_only,
-                 var_dic):
+                 blank_setting: dict,
+                 task_obj: job_manager.TaskObject,
+                 read_only: bool = False):
         super().__init__()
+
+        # Information
         self.close_label = 'CONFIG'
-        self.top_widget = QWidget()
-        self.top_layout = QVBoxLayout()
-        self.top_widget.setLayout(self.top_layout)
-        self.setCentralWidget(self.top_widget)
-        self.user_input = user_input
-        self.default_setting = default_setting
-        self.detailed_setting = detailed_setting
+        self.task_obj = task_obj
+        self.block = self.task_obj.block
+        self.version = self.task_obj.version
+        self.flow = self.task_obj.flow
+        self.raw_task = self.task_obj.task
+        self.new_task = self.task_obj.task
+        self.config_obj = parse_config.Config(None)
+        self.user_task_setting = self.config_obj.user_task_setting
+        self.default_task_setting = self.config_obj.default_task_setting
+        self.detailed_setting = self.user_task_setting[self.block][self.version][self.flow][self.task_obj.task]
         self.blank_setting = blank_setting
-        self.default_var = default_var
-        self.cwd = cwd
-        self.block = block
-        self.version = version
-        self.flow = flow
-        self.raw_task = task
-        self.new_task = task
-        self.var = var
+        self.default_var = self.config_obj.default_var_setting
+        self.project = self.config_obj.PROJECT
+        self.group = self.config_obj.GROUP
+        self.cwd = os.getcwd()
+        self.var = self.config_obj.var_dic
         self.raw_setting = AutoVivification()
         self.tips = AutoVivification()
         self.invalid_dic = check_task_items(self.detailed_setting)
         self.read_only = read_only
+        self.all_tasks = self.user_task_setting[self.block][self.version][self.flow].keys()
 
-        self.all_tasks = self.user_input['BLOCK'][self.block][self.version][self.flow].keys()
+        # task config
+        self.task_config_obj = self.config_obj.get_task(self.block, self.version, self.flow, self.task_obj.task)
+        self.run_mode_list = list(self.task_config_obj.RunInfo.keys())
+        self.show_run_mode = self.task_config_obj.RunMode
 
+        # Defined by system
+        self.var_mapping = {'PROJECT': self.project,
+                            'GROUP': self.group,
+                            'CWD': self.cwd,
+                            'IFP_INSTALL_PATH': os.getenv('IFP_INSTALL_PATH'),
+                            'BLOCK': self.block,
+                            'VERSION': self.version,
+                            'FLOW': self.flow,
+                            'TASK': self.raw_task,
+                            }
+        self.replace_var_mapping = {**self.var, **copy.deepcopy(self.var_mapping)}
+        self.var_mapping = {**self.default_var, **self.var, **self.var_mapping}
+
+        # Top Layout
+        self.top_widget = QWidget()
+        self.top_layout = QVBoxLayout()
+        self.main_layout = QHBoxLayout()
+        self.setup_layout = QVBoxLayout()
+
+        # Task Name
         self.widget_task_name = QWidget()
         self.layout_task_name = QHBoxLayout()
-        self.widget_task_name.setLayout(self.layout_task_name)
-
         self.label_task_name = QLabel('Task name :')
-        self.label_task_name.setStyleSheet('font-weight : bold;font-size : 15px')
-        self.line_edit_task_name = QLineEdit(task)
-        self.line_edit_task_name.setFixedWidth(100)
-        self.line_edit_task_name.textChanged.connect(self.draw_table)
+        self.line_edit_task_name = QLineEdit(self.task_obj.task)
         self.reset_to_default_button = QPushButton('Reset To Default')
+        self.title = '%s/%s/%s/%s (Read Only)' % (self.block, self.version, self.flow, self.new_task) if self.read_only else '%s/%s' % (self.flow, self.new_task)
+        self.show_env_button = QCheckBox('Parameter_mode')
+        self.float_env_button = QPushButton('Show Variable ->')
 
-        self.layout_task_name.addWidget(self.label_task_name)
-        self.layout_task_name.addWidget(self.line_edit_task_name)
-        self.layout_task_name.addWidget(self.reset_to_default_button)
-
-        self.layout_task_name.setStretch(0, 1)
-        self.layout_task_name.setStretch(1, 5)
-        self.layout_task_name.setStretch(2, 20)
-
-        header = ['Item', 'Value']
+        # Variable
         self.label_env = QLabel('Env setting (Non editable):')
         self.label_env.setStyleSheet('font-weight : bold;')
         self.env_table = QTableView()
         self.env_model = QStandardItemModel(1, 2)
+
+        var_setting_window = WindowForToolGlobalEnvEditor(default_var=self.var_mapping, user_var={}, window='edit_task')
+        self.show_var_values_flag = False
+        self.var_setting_table = var_setting_window.init_ui()
+        self.env_floating_flag = False
+
+        # Task Setting
+        self.setup_table = QTableView()
+        self.setup_model = QStandardItemModel(1, 2)
+        self.setup_delegate = CustomDelegate2()
+        self.license_dependency = QPushButton()
+        self.file_dependency = QPushButton()
+        self.run_combo = QComboBox()
+        self.run_label = QLabel()
+
+        # Save & Reset
+        self.save_button = QPushButton('save')
+        self.cancel_button = QPushButton('cancel')
+        self.button_widget = QWidget()
+        self.button_layout = QHBoxLayout()
+
+        common_pyqt5.auto_resize(self, 800, 800)
+        self.resize_signal.emit(800, 800)
+        center(self)
+
+        self.child = None
+        self.init_ui()
+        self.table_raw_setting, self.table_detailed_setting = self._read_table()
+        self.run_setting = self.table_raw_setting['RUN']
+
+        if self.read_only:
+            self.disable_gui()
+
+    def disable_gui(self):
+        self.setup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.save_button.setEnabled(False)
+        self.line_edit_task_name.setEnabled(False)
+
+    def init_ui(self):
+        # Top Layout
+        self.top_widget.setLayout(self.top_layout)
+        self.setCentralWidget(self.top_widget)
+
+        # Task name
+        self.label_task_name.setStyleSheet('font-weight : bold;font-size : 15px')
+        self.line_edit_task_name.setFixedWidth(100)
+        self.line_edit_task_name.textChanged.connect(self.draw_table)
+        self.layout_task_name.addWidget(self.label_task_name)
+        self.layout_task_name.addWidget(self.line_edit_task_name)
+        self.layout_task_name.addWidget(self.reset_to_default_button)
+        self.layout_task_name.setStretch(0, 1)
+        self.layout_task_name.setStretch(1, 5)
+        self.layout_task_name.setStretch(2, 20)
+        self.widget_task_name.setLayout(self.layout_task_name)
+
+        # Variable
+        header = ['Item', 'Value']
         self.env_table.setModel(self.env_model)
         self.env_table.setColumnWidth(0, 180)
         self.env_model.setHorizontalHeaderLabels(header)
@@ -2170,16 +2128,11 @@ class WindowForDetailedTaskInfo(QMainWindow):
         self.env_table.setShowGrid(True)
         self.env_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
 
-        self.label_setup = QLabel('Flow setting :')
-        self.label_setup.setStyleSheet('font-weight : bold')
-        self.setup_table = QTableView()
         self.setup_table.setMouseTracking(True)
         self.setup_table.entered.connect(self.show_tips)
-        self.setup_model = QStandardItemModel(1, 2)
         self.setup_table.setModel(self.setup_model)
         self.setup_table.setColumnWidth(0, 140)
         self.setup_table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.setup_delegate = CustomDelegate2()
         self.setup_table.setItemDelegate(self.setup_delegate)
 
         self.setup_model.setHorizontalHeaderLabels(header)
@@ -2187,18 +2140,13 @@ class WindowForDetailedTaskInfo(QMainWindow):
         self.setup_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.setup_table.setShowGrid(True)
 
-        # Defined by system
-        self.var_mapping = {'PROJECT': self.user_input['PROJECT'],
-                            'GROUP': self.user_input['GROUP'],
-                            'CWD': self.cwd,
-                            'IFP_INSTALL_PATH': os.getenv('IFP_INSTALL_PATH'),
-                            'BLOCK': self.block,
-                            'VERSION': self.version,
-                            'FLOW': self.flow,
-                            'TASK': self.raw_task,
-                            }
-        self.replace_var_mapping = {**var_dic, **copy.deepcopy(self.var_mapping)}
-        self.var_mapping = {**self.default_var, **self.var, **self.var_mapping}
+        self.license_dependency.clicked.connect(functools.partial(self.edit_task_requirements, 'LICENSE'))
+        self.file_dependency.clicked.connect(functools.partial(self.edit_task_requirements, 'FILE'))
+        self.run_label.setStyleSheet("QLabel { color: gray; font-size: 14px; font-style: italic; }")
+
+        if self.read_only:
+            self.license_dependency.setEnabled(False)
+            self.file_dependency.setEnabled(False)
 
         row = 0
 
@@ -2214,36 +2162,17 @@ class WindowForDetailedTaskInfo(QMainWindow):
             self.env_model.setItem(row, 1, item)
             row += 1
 
-        self.title = '%s/%s/%s/%s (Read Only)' % (self.block, self.version, self.flow, self.new_task) if self.read_only else '%s/%s' % (self.flow, self.new_task)
-        self.draw_table(self.raw_task, 'raw')
-        self.show_env_button = QCheckBox('Parameter_mode')
         self.show_env_button.setCheckState(Qt.Checked)
         self.show_env_button.stateChanged.connect(self.show_var_values)
-        self.float_env_button = QPushButton('Show Variable ->')
         self.float_env_button.clicked.connect(self.float_env_setting)
         self.reset_to_default_button.clicked.connect(self._reset_to_default)
-        self.save_button = QPushButton('save')
         self.save_button.clicked.connect(self.save)
-        self.cancel_button = QPushButton('cancel')
         self.cancel_button.clicked.connect(self.close)
 
-        var_setting_window = WindowForToolGlobalEnvEditor(default_var=self.var_mapping, user_var={}, window='edit_task')
-        self.table_raw_setting, self.table_detailed_setting = self._read_table()
-        self.show_var_values_flag = False
-        self.var_setting_table = var_setting_window.init_ui()
-
-        self.env_floating_flag = False
-
-        self.button_widget = QWidget()
-        self.button_layout = QHBoxLayout()
         self.button_widget.setLayout(self.button_layout)
-
         self.button_layout.addStretch(1)
         self.button_layout.addWidget(self.save_button)
         self.button_layout.addWidget(self.cancel_button)
-
-        self.main_layout = QHBoxLayout()
-        self.setup_layout = QVBoxLayout()
 
         setting_layout = QHBoxLayout()
         setting_layout.addWidget(self.widget_task_name)
@@ -2254,48 +2183,89 @@ class WindowForDetailedTaskInfo(QMainWindow):
         self.setup_layout.addWidget(self.label_env, 1)
         self.setup_layout.addWidget(self.env_table, 5)
         self.setup_layout.addWidget(self.setup_table, 14)
-
         self.main_layout.addLayout(self.setup_layout, 10)
         self.main_layout.addWidget(self.var_setting_table, 7)
         self.var_setting_table.hide()
-
         self.top_layout.addLayout(setting_layout)
         self.top_layout.addLayout(self.main_layout, 20)
         self.top_layout.addWidget(self.button_widget, 1)
+
+        self.draw_table(self.raw_task)
         self.hide_env()
-        common_pyqt5.auto_resize(self, 800, 800)
-        self.resize_signal.emit(800, 800)
-        center(self)
 
-        self.child = None
+    def update_table(self):
+        for row in range(self.setup_model.rowCount()):
+            standard_item = self.setup_model.item(row, 1)
 
-        if self.read_only:
-            self.setup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            self.save_button.setEnabled(False)
-            self.line_edit_task_name.setEnabled(False)
+            if standard_item is None:
+                continue
 
-    def draw_table(self, new_task: str, draw_type: str = 'new'):
+            what_is_this = standard_item.whatsThis()
+
+            if what_is_this.find('RUN') != -1 and what_is_this.find('RUN_METHOD') == -1:
+                what_is_this = what_is_this.replace('RUN', self.show_run_mode)
+
+            default_value = self.task_config_obj.DefaultSetting.get_definition(what_is_this)
+            user_value = self.task_config_obj.UserSetting.get_definition(what_is_this)
+
+            if user_value is not None:
+                standard_item.setData(user_value, Qt.DisplayRole)
+            else:
+                standard_item.setData(default_value, Qt.DisplayRole)
+
+            if default_value is not None:
+                standard_item.setData(default_value, Qt.UserRole + 1)
+
+            self.setup_model.setItem(row, 1, standard_item)
+
+        if len(self.task_config_obj.RunInfo.keys()) != 1:
+            if self.show_run_mode != self.task_config_obj.RunMode:
+                self.run_label.setText(f'<- Click to view other modes, current is {self.task_config_obj.RunMode}')
+            else:
+                self.run_label.setText('<- Click to view other modes')
+
+    def reset_to_default_table(self):
+        for row in range(self.setup_model.rowCount()):
+            standard_item = self.setup_model.item(row, 1)
+
+            if standard_item is None:
+                continue
+
+            default_value = self.task_config_obj.DefaultSetting.get_definition(standard_item.whatsThis())
+
+            if default_value is not None:
+                standard_item.setData(default_value, Qt.DisplayRole)
+                standard_item.setData(default_value, Qt.UserRole + 1)
+
+            self.setup_model.setItem(row, 1, standard_item)
+
+    def draw_table(self, new_task: str):
         self.env_model.clear()
         self.new_task = new_task
         self.env_model.setItem(7, 1, QStandardItem(new_task))
         self.setWindowTitle('Detailed setting for %s' % self.title)
+        font = QFont('Calibri', 15)
+        font.setBold(True)
 
         self.setup_model.setRowCount(0)
         row = 0
-        task_for_default_setting = ''
 
         for category in self.blank_setting.keys():
             item = QStandardItem('* %s' % category)
-            item.setTextAlignment(Qt.AlignLeft)
-            item.setTextAlignment(Qt.AlignVCenter)
+            item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
             item.setEditable(False)
-            f = QFont('Calibri', 15)
-            f.setBold(True)
-            item.setFont(f)
+            item.setFont(font)
             item.setBackground(QBrush(QColor(245, 255, 250)))
             item.setForeground(QBrush(QColor(0, 0, 0)))
             self.setup_model.setItem(row, 0, item)
             self.setup_table.setSpan(row, 0, 1, 2)
+
+            # For RUN
+            if category == 'RUN':
+                run_widget = self.gen_run_widget()
+                index = self.setup_model.index(row, 0)
+                self.setup_table.setIndexWidget(index, run_widget)
+
             row += 1
 
             for key in self.blank_setting[category].keys():
@@ -2304,92 +2274,81 @@ class WindowForDetailedTaskInfo(QMainWindow):
                 item.setTextAlignment(Qt.AlignVCenter)
                 item.setEditable(False)
                 self.setup_model.setItem(row, 0, item)
+                self.tips[row] = self.blank_setting[category][key]['example']
 
-                if category in self.invalid_dic.keys():
-                    if key in self.invalid_dic[category]:
-                        item.setForeground(QBrush(QColor(255, 0, 0)))
-                        item.setFont(QFont('Calibri', 11, 1000))
+                item = QStandardItem('')
+                item.setBackground(QBrush(QColor(255, 255, 255)))
+                item.setTextAlignment(Qt.AlignLeft)
+                item.setTextAlignment(Qt.AlignVCenter)
+                item.setForeground(QBrush(EDIT_COLOR))
+                item.setWhatsThis(f'{category} {key}')
 
-                value = ''
+                self.setup_model.setItem(row, 1, item)
 
-                if category in self.detailed_setting.keys():
-                    if key in self.detailed_setting[category].keys():
-                        if not self.detailed_setting[category][key] == {}:
-                            value = ','.join(self.detailed_setting[category][key]) if category == 'DEPENDENCY' else self.detailed_setting[category][key]
-                            item = QStandardItem(value)
-                            # item.setBackground(QBrush(QColor(100, 149, 237)))
-
-                if value == '':
-                    # Current flow/vendor not in default setting
-                    if self.default_setting == {}:
-                        pass
-                    else:
-                        if not task_for_default_setting == '':
-                            if category in self.default_setting[task_for_default_setting].keys():
-                                if key in self.default_setting[task_for_default_setting][category].keys():
-                                    if not self.default_setting[task_for_default_setting][category][key] == {}:
-                                        value = ','.join(self.default_setting[task_for_default_setting][category][key]) if category == 'DEPENDENCY' else self.default_setting[task_for_default_setting][category][key]
-                                        item = QStandardItem(value)
-                                        item.setBackground(QBrush(QColor(255, 255, 255)))
-
-                if value == '':
-                    item = QStandardItem(value)
-                    item.setBackground(QBrush(QColor(255, 255, 255)))
-
-                if category == 'DEPENDENCY':
-                    if value == '':
-                        if self.default_setting.get(self.raw_task, {}).get('DEPENDENCY', {}).get(key):
-                            value = ','.join(self.default_setting[self.raw_task]['DEPENDENCY'][key])
-
-                    item = QStandardItem(value)
-                    item.setTextAlignment(Qt.AlignCenter)
-                    button = QPushButton(value)
-                    button.setStyleSheet('text-align:left')
-
-                    button.clicked.connect(functools.partial(self.edit_task_requirements, key))
-
-                    if self.read_only:
-                        button.setEnabled(False)
-
-                    self.setup_model.setItem(row, 1, item)
+                if category == 'DEPENDENCY' and key == 'LICENSE':
                     index = self.setup_model.indexFromItem(item)
-                    self.setup_table.setIndexWidget(index, button)
-                    row += 1
-                    continue
-
-                # Record raw task setting
-                if draw_type == 'raw':
-                    self.raw_setting[category][key] = value
-
-                if 'gui_type' in self.blank_setting[category][key].keys():
-                    if self.blank_setting[category][key]['gui_type'] == 'option':
-                        item = QStandardItem('')
-                        combobox = QComboBox2()
-                        combobox.setEditable(True)
-                        combobox.lineEdit().setAlignment(Qt.AlignCenter)
-                        combobox.addItems(self.blank_setting[category][key]['options'])
-                        self.setup_model.setItem(row, 1, item)
-                        index = self.setup_model.indexFromItem(item)
-                        self.setup_table.setIndexWidget(index, combobox)
-
-                        if value == '':
-                            combobox.setCurrentText(self.blank_setting[category][key]['options'][0])
-                        else:
-                            combobox.setCurrentText(value)
-
-                else:
-                    self.tips[row] = self.blank_setting[category][key]['example']
-                    item.setTextAlignment(Qt.AlignLeft)
-                    item.setTextAlignment(Qt.AlignVCenter)
-                    default_value = self.default_setting.get(self.raw_task, {}).get(category, {}).get(key, '')
-                    value = default_value if not value else value
-
-                    item.setData(value, Qt.DisplayRole)
-                    item.setData(default_value, Qt.UserRole + 1)
-                    item.setForeground(QBrush(EDIT_COLOR))
-                    self.setup_model.setItem(row, 1, item)
+                    self.setup_table.setIndexWidget(index, self.license_dependency)
+                elif category == 'DEPENDENCY' and key == 'FILE':
+                    index = self.setup_model.indexFromItem(item)
+                    self.setup_table.setIndexWidget(index, self.file_dependency)
 
                 row += 1
+
+        self.update_table()
+
+    def change_run_mode(self, index):
+        new_run_mode = self.run_combo.itemText(index).replace('*', '').strip()
+
+        if new_run_mode != self.show_run_mode:
+            table_raw_setting, table_detailed_setting = self._read_table()
+            new_run_setting = table_raw_setting['RUN']
+
+            for key, value in new_run_setting.items():
+                if self.run_setting[key] != value:
+                    QMessageBox.critical(self, "Error", 'Configure modified, please save first!')
+                    self.run_combo.disconnect()
+                    self.run_combo.setCurrentText(f'* {self.show_run_mode}    ')
+                    self.run_combo.currentIndexChanged.connect(self.change_run_mode)
+                    return
+
+        self.show_run_mode = new_run_mode
+        self.update_table()
+        self.table_raw_setting, self.table_detailed_setting = self._read_table()
+        self.run_setting = self.table_raw_setting['RUN']
+
+    def gen_run_widget(self) -> Qt.Widget:
+        self.run_combo.addItems([f'* {mode}    ' for mode in self.run_mode_list])
+        self.run_combo.setCurrentText(f'* {self.show_run_mode}    ')
+        self.run_combo.currentIndexChanged.connect(self.change_run_mode)
+        self.run_combo.setStyleSheet("""
+        QComboBox {
+            font: bold 20px 'Calibri';
+            color: black;
+            background-color: rgb(245, 255, 250);
+            border: 1px solid transparent;
+            border-radius: 0px;
+        }
+        QComboBox::drop-down {
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 15px;
+            border-left-width: 0px;
+            border-top-right-radius: 3px;
+            border-bottom-right-radius: 3px;
+            background: transparent;
+        }
+        """)
+        run_widget = QWidget()
+        run_widget.setStyleSheet('background: transparent;')
+        run_layout = QHBoxLayout()
+        run_layout.addWidget(self.run_combo, 1)
+        run_layout.addWidget(self.run_label, 4)
+        run_layout.addStretch(4)
+        run_widget.setLayout(run_layout)
+        run_layout.setContentsMargins(0, 0, 0, 0)
+        run_layout.setSpacing(0)
+        self.run_combo.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        return run_widget
 
     def _reset_to_default(self):
         reply = QMessageBox.question(self,
@@ -2398,15 +2357,13 @@ class WindowForDetailedTaskInfo(QMainWindow):
                                      QMessageBox.Yes | QMessageBox.No)
 
         if reply == QMessageBox.Yes:
-            self.detailed_setting = copy.deepcopy(self.default_setting.get(self.raw_task, {}))
-
-            self.draw_table(self.raw_task, 'raw')
+            self.reset_to_default_table()
         elif reply == QMessageBox.No:
             return
 
     def edit_task_requirements(self, category: str = 'LICENSE'):
         row = self.setup_table.indexAt(self.sender().pos()).row()
-        text = self.setup_model.index(row, 1).data()
+        text = self.setup_model.index(row, 1).data() if self.setup_model.index(row, 1).data() else ''
         self.child = WindowForEditTaskRequirement(row, text, category)
         self.child.setWindowModality(Qt.ApplicationModal)
         self.child.message.connect(self.update_task_requirement)
@@ -2414,7 +2371,7 @@ class WindowForDetailedTaskInfo(QMainWindow):
 
     def update_task_requirement(self, row, text, category):
         if text == '':
-            if dependency := self.default_setting.get(self.raw_task, {}).get('DEPENDENCY', {}).get(category):
+            if dependency := self.default_task_setting.get(self.raw_task, {}).get('DEPENDENCY', {}).get(category):
                 text = ', '.join(dependency)
 
         self.setup_model.setItem(row, 1, QStandardItem(text))
@@ -2430,12 +2387,15 @@ class WindowForDetailedTaskInfo(QMainWindow):
             QToolTip.showText(QCursor.pos(), 'Example : ' + self.tips[index.row()], self.setup_table, screen_rect, 10000)
 
     def save(self):
+        self.save_button.setEnabled(False)
+
         if self.show_var_values_flag:
             self._show_var_values_false()
 
         if not self.raw_task == self.new_task:
             if self.new_task in self.all_tasks:
                 QMessageBox.critical(self, "Error", "%s already exist, please update task name" % self.new_task, QMessageBox.Ok)
+                self.save_button.setEnabled(True)
                 return
 
             reply = QMessageBox.question(self, "Warning", "Are you sure to change task name from %s to %s? \n Flow will copy all setting, please confirm if any special setting for %s!" % (self.raw_task, self.new_task, self.new_task), QMessageBox.Yes | QMessageBox.No)
@@ -2443,36 +2403,39 @@ class WindowForDetailedTaskInfo(QMainWindow):
             if reply == QMessageBox.Yes:
                 pass
             elif reply == QMessageBox.No:
+                self.save_button.setEnabled(True)
                 return
 
         setting = AutoVivification()
-        category = ''
         warning_info = ''
         warning_num = 0
 
         for i in range(self.setup_model.rowCount()):
-            item = self.setup_model.index(i, 0).data()
-            value = self.setup_model.index(i, 1).data()
+            model_item = self.setup_model.item(i, 1)
 
-            if re.search(r'\*\s+(.*)', item):
-                category = re.search(r'\*\s+(.*)', item).group(1)
-            else:
-                if 'gui_type' in self.blank_setting[category][item].keys():
-                    if self.blank_setting[category][item]['gui_type'] == 'option':
-                        value = self.setup_table.indexWidget(self.setup_model.index(i, 1)).currentText()
+            if model_item is None:
+                continue
 
-                setting[category][item] = value
+            what_is_this = model_item.whatsThis().split()
+            value = model_item.data(Qt.DisplayRole)
+            category = what_is_this[0]
+            item = what_is_this[1]
+
+            if category == 'RUN':
+                category = self.show_run_mode
+
+            setting[category][item] = value
 
             if category == 'DEPENDENCY' and value:
                 setting[category][item] = [item.strip() for item in value.split(',')]
 
             if value == '':
-                if category in self.detailed_setting.keys() and category in self.default_setting[self.new_task].keys():
-                    if item in self.detailed_setting[category].keys() and item in self.default_setting[self.new_task][category].keys():
-                        if not self.detailed_setting[category][item] == {} and not self.default_setting[self.new_task][category][item] == {}:
+                if category in self.detailed_setting.keys() and category in self.default_task_setting[self.new_task].keys():
+                    if item in self.detailed_setting[category].keys() and item in self.default_task_setting[self.new_task][category].keys():
+                        if not self.detailed_setting[category][item] == {} and not self.default_task_setting[self.new_task][category][item] == {}:
                             warning_num += 1
                             warning_info += '%s. Remove user_defined_setting <b>[%s]</b> for %s/%s, flow will replace it with default_setting <b>[%s]</b><br/>\n' % (
-                                warning_num, self.detailed_setting[category][item], category, item, self.default_setting[self.new_task][category][item])
+                                warning_num, self.detailed_setting[category][item], category, item, self.default_task_setting[self.new_task][category][item])
 
         if warning_info:
             warning_info += '<br/>If you want to keep your setting, please return and press cancel button'
@@ -2481,7 +2444,12 @@ class WindowForDetailedTaskInfo(QMainWindow):
             if reply == QMessageBox.Yes:
                 pass
             elif reply == QMessageBox.No:
+                self.save_button.setEnabled(True)
                 return
+
+        for cat in self.detailed_setting:
+            if cat not in setting:
+                setting[cat] = copy.deepcopy(self.detailed_setting[cat])
 
         self.message.emit([setting, self.new_task])
 
@@ -2507,10 +2475,6 @@ class WindowForDetailedTaskInfo(QMainWindow):
         self.label_env.hide()
         self.env_table.hide()
 
-    def show_env(self):
-        self.label_env.show()
-        self.env_table.show()
-
     def _read_table(self) -> Tuple[dict, dict]:
         """
         Reading current task setting
@@ -2519,19 +2483,19 @@ class WindowForDetailedTaskInfo(QMainWindow):
         detailed_setting = AutoVivification()
 
         for i in range(self.setup_model.rowCount()):
-            item = self.setup_model.index(i, 0).data()
-            value = self.setup_model.index(i, 1).data()
+            item = self.setup_model.item(i, 1)
+
+            if item is None:
+                continue
+
+            what_is_this = item.whatsThis().split()
+            category = what_is_this[0]
+            name = what_is_this[1]
+
+            value = item.data(Qt.DisplayRole)
             detailed_value = custom_format_map(value, self.replace_var_mapping) if isinstance(value, str) else value
-
-            if re.search(r'\*\s+(.*)', item):
-                category = re.search(r'\*\s+(.*)', item).group(1)
-            else:
-                if 'gui_type' in self.blank_setting[category][item].keys():
-                    if self.blank_setting[category][item]['gui_type'] == 'option':
-                        value = self.setup_table.indexWidget(self.setup_model.index(i, 1)).currentText()
-
-                setting[category][item] = value
-                detailed_setting[category][item] = detailed_value
+            setting[category][name] = value
+            detailed_setting[category][name] = detailed_value
 
         return setting, detailed_setting
 
@@ -2540,27 +2504,36 @@ class WindowForDetailedTaskInfo(QMainWindow):
         update table variable values.
         """
         for i in range(self.setup_model.rowCount()):
-            item = self.setup_model.index(i, 0).data()
+            item = self.setup_model.item(i, 1)
 
-            if re.search(r'\*\s+(.*)', item):
-                category = re.search(r'\*\s+(.*)', item).group(1)
+            if item is None:
+                continue
+
+            what_is_this = item.whatsThis().split()
+            category = what_is_this[0]
+            name = what_is_this[1]
+            new_value = self.table_detailed_setting[category][name] if show_value_flag else self.table_raw_setting[category][name]
+
+            if isinstance(new_value, list):
+                new_value = ' '.join(new_value)
+
+            self.setup_model.item(i, 1).setText(new_value)
+
+            if show_value_flag:
+                self.setup_model.item(i, 1).setForeground(QBrush(QColor(127, 127, 127)))
             else:
-                new_value = self.table_detailed_setting[category][item] if show_value_flag else self.table_raw_setting[category][item]
-                self.setup_model.item(i, 1).setText(new_value)
-
-                if show_value_flag:
-                    self.setup_model.item(i, 1).setForeground(QBrush(QColor(127, 127, 127)))
-                else:
-                    self.setup_model.item(i, 1).setForeground(QBrush(EDIT_COLOR))
+                self.setup_model.item(i, 1).setForeground(QBrush(EDIT_COLOR))
 
     def _show_var_values_true(self):
         self.table_raw_setting, self.table_detailed_setting = self._read_table()
+        self.run_combo.setDisabled(True)
         self._update_table(show_value_flag=True)
         self.setup_table.setEditTriggers(QTableView.NoEditTriggers)
         self.show_var_values_flag = True
 
     def _show_var_values_false(self):
         self.setup_table.setEditTriggers(QTableView.AllEditTriggers)
+        self.run_combo.setDisabled(False)
         self._update_table(show_value_flag=False)
         self.show_var_values_flag = False
 
@@ -2572,6 +2545,9 @@ class WindowForDetailedTaskInfo(QMainWindow):
             self._show_var_values_false()
         else:
             self._show_var_values_true()
+
+        if self.read_only:
+            self.disable_gui()
 
     def close(self):
         self.close_signal.emit(True)
@@ -2726,39 +2702,23 @@ class WindowForDependency(QMainWindow):
     message = pyqtSignal(str, dict)
     update = pyqtSignal(bool, str)
 
-    def __init__(self, dependency_priority_dic: dict = None, default_dependency_dic: dict = None, mode='window'):
+    def __init__(self, mode: str = 'window'):
         super().__init__()
 
-        self.dependency_priority_dic = dependency_priority_dic
-        self.origin_dependency_priority_dic = copy.deepcopy(self.dependency_priority_dic)
-        self.default_dependency_dic = default_dependency_dic
-        self.current_block = list(self.dependency_priority_dic.keys())[0]
-        self.current_version = list(self.dependency_priority_dic[self.current_block].keys())[0]
-        self.current_dependency_priority_dic = dependency_priority_dic[self.current_block][self.current_version]
+        self.picture_dir = None
+        self.dependency_priority_dic = {}
+        self.origin_dependency_priority_dic = {}
+        self.default_dependency_dic = {}
+        self.current_block = None
+        self.current_version = None
+        self.current_dependency_priority_dic = {}
 
-        self.dependency_clipboard = {}
-        self.table_item_condition_dic = {}
-
-        self.gen_current_picture_dir()
         self.mode = mode
         self.modify_item_set = set()
+        self.dependency_clipboard = {}
+        self.table_item_condition_dic = {}
         self.gui_enable_flag = True
-        self.current_table = None
-        self.init_ui()
-
-        self.update_flag = 'dependency'
-
-    def gen_current_picture_dir(self):
-        """
-        mkdir CWD/.picture directory in order to save flow chart
-        """
-        self.picture_dir = os.path.join(os.getcwd(), '.ifp/pictures/%s/%s/' % (self.current_block, self.current_version))
-
-        if not os.path.exists(self.picture_dir):
-            os.makedirs(self.picture_dir)
-
-    def init_ui(self):
-        title = 'Dependency Setting'
+        self.current_table = QTableWidget()
 
         screen_resolutions = self.get_screen_resolutions()
 
@@ -2769,41 +2729,26 @@ class WindowForDependency(QMainWindow):
             height_rate = int((height / 650) * 10) / 10 if height < 650 else 1
             self.height_scale_rate = height_rate if height_rate < 1 else 1
 
-        self.setWindowTitle(title)
-
         self.top_widget = QWidget()
         self.top_layout = QVBoxLayout()
-        self.top_widget.setLayout(self.top_layout)
-        self.setCentralWidget(self.top_widget)
 
         self.selection_widget = QWidget()
+        self.selection_layout = QGridLayout()
+        self.block_combo = QComboBox()
+        self.version_combo = QComboBox()
+        self.reset_to_default_button = QPushButton('Reset to Default', self.selection_widget)
 
         self.main_widget = QWidget()
         self.main_layout = QHBoxLayout()
-        self.main_widget.setLayout(self.main_layout)
 
-        label = QLabel('* Display complete tasks here, you can adjust the run order but IFP will ignore removed tasks in relation chain.')
-        label.setStyleSheet("QLabel { color : gray; }")
-
-        self.top_layout.addWidget(self.selection_widget, 0)
-        self.top_layout.addWidget(label, 1)
-        self.top_layout.addWidget(self.main_widget, 1)
-        self.top_layout.setStretch(0, 2)
-        self.top_layout.setStretch(1, 1)
-        self.top_layout.setStretch(2, 10)
-
-        self.current_table = QTableWidget()
+        self.label_widget = QWidget()
+        self.label_layout = QHBoxLayout()
+        self.eog_button = QPushButton('Open Image')
         self.current_chart = QLabel()
 
-        self.gen_selection_button()
-        self.gen_table()
-        self.gen_dependency_chart()
-
-        self.main_layout.addWidget(self.current_table, 1)
-        self.main_layout.addWidget(self.current_chart, 2)
-
+        self.button_widget = QWidget()
+        self.button_layout = QHBoxLayout()
         self.save_button = QPushButton('SAVE')
-        self.save_button.clicked.connect(self.save)
 
         if self.mode == 'window':
             self.cancel_button = QPushButton('CANCEL')
@@ -2813,8 +2758,73 @@ class WindowForDependency(QMainWindow):
             self.reset_button.clicked.connect(self.reset)
             self.save_button.setEnabled(False)
 
-        self.button_widget = QWidget()
-        self.button_layout = QHBoxLayout()
+        self.vis = []
+        self.trace = []
+
+        self.update_flag = 'dependency'
+
+    def update_setting(self, dependency_priority_dic: dict = None, default_dependency_dic: dict = None):
+        self.dependency_priority_dic = dependency_priority_dic
+        self.origin_dependency_priority_dic = copy.deepcopy(self.dependency_priority_dic)
+        self.default_dependency_dic = default_dependency_dic
+
+        if self.dependency_priority_dic and self.dependency_priority_dic.get(self.current_block, {}).get(self.current_version) is None:
+            self.current_block = list(self.dependency_priority_dic.keys())[0]
+            self.current_version = list(self.dependency_priority_dic[self.current_block].keys())[0]
+
+        if not self.current_block or not self.current_version or not dependency_priority_dic.get(self.current_block, {}).get(self.current_version):
+            self.current_dependency_priority_dic = {}
+            self.picture_dir = os.path.join(os.getcwd(), '.ifp/pictures')
+            self.gen_current_picture_dir()
+        else:
+            self.current_dependency_priority_dic = copy.deepcopy(dependency_priority_dic[self.current_block][self.current_version])
+            self.picture_dir = os.path.join(os.getcwd(), '.ifp/pictures/%s/%s/' % (self.current_block, self.current_version))
+            self.gen_current_picture_dir()
+
+        self.update_ui()
+
+    def update_ui(self):
+        self._update_selection_button()
+        self._update_table()
+        self._update_dependency_chart()
+
+    def gen_current_picture_dir(self):
+        """
+        mkdir CWD/.picture directory in order to save flow chart
+        """
+        if not os.path.exists(self.picture_dir):
+            os.makedirs(self.picture_dir)
+
+    def init_ui(self):
+        title = 'Dependency Setting'
+        self.setWindowTitle(title)
+
+        label = QLabel('* Display complete tasks here, you can adjust the run order but IFP will ignore removed tasks in relation chain.')
+        label.setStyleSheet("QLabel { color : gray; }")
+
+        self.top_widget.setLayout(self.top_layout)
+        self.setCentralWidget(self.top_widget)
+        self.main_widget.setLayout(self.main_layout)
+
+        self.eog_button.clicked.connect(self._eog_graph)
+        self.label_widget.setLayout(self.label_layout)
+        self.label_layout.addWidget(label, 10)
+        self.label_layout.addWidget(self.eog_button, 1)
+
+        self.top_layout.addWidget(self.selection_widget, 0)
+        self.top_layout.addWidget(self.label_widget, 1)
+        self.top_layout.addWidget(self.main_widget, 1)
+        self.top_layout.setStretch(0, 2)
+        self.top_layout.setStretch(1, 1)
+        self.top_layout.setStretch(2, 10)
+
+        self.gen_selection_button()
+        self.gen_table()
+
+        self.main_layout.addWidget(self.current_table, 1)
+        self.main_layout.addWidget(self.current_chart, 2)
+
+        self.save_button.clicked.connect(self.save)
         self.button_widget.setFixedHeight(50 * self.height_scale_rate)
 
         self.button_widget.setLayout(self.button_layout)
@@ -2830,7 +2840,13 @@ class WindowForDependency(QMainWindow):
 
         common_pyqt5.center_window(self)
 
-        return self
+        return self.top_widget
+
+    def _eog_graph(self):
+        try:
+            os.popen('/bin/eog {}'.format(os.path.join(self.picture_dir, 'full_dependency.png')))
+        except Exception as error:
+            print(error)
 
     def gen_selection_button(self):
         """
@@ -2839,32 +2855,38 @@ class WindowForDependency(QMainWindow):
         block_label = QLabel('Block', self.selection_widget)
         block_label.setStyleSheet("font-weight: bold;")
         block_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.block_combo = QComboBox(self.selection_widget)
-        self.block_combo.addItems(list(self.dependency_priority_dic.keys()))
-        self.block_combo.activated.connect(self.set_version_combo)
 
         version_label = QLabel('Version', self.selection_widget)
         version_label.setStyleSheet("font-weight: bold;")
         version_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.version_combo = QComboBox(self.selection_widget)
-        self.version_combo.addItems(list(self.dependency_priority_dic[self.current_block].keys()))
-        self.version_combo.activated.connect(self.update_table_frame)
 
-        self.reset_to_default_button = QPushButton('Reset to Default', self.selection_widget)
         self.reset_to_default_button.clicked.connect(self.reset_to_default)
+        self.selection_layout.addWidget(block_label, 0, 0)
+        self.selection_layout.addWidget(self.block_combo, 0, 1)
+        self.selection_layout.addWidget(version_label, 0, 2)
+        self.selection_layout.addWidget(self.version_combo, 0, 3)
+        self.selection_layout.addWidget(self.reset_to_default_button, 0, 4)
+        self.selection_layout.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+
+        self.selection_widget.setLayout(self.selection_layout)
+
+    def _update_selection_button(self):
+        self.block_combo.clear()
+        self.version_combo.clear()
+        self.block_combo.addItems(list(self.dependency_priority_dic.keys()))
+
+        if self.current_block and self.dependency_priority_dic.get(self.current_block):
+            self.block_combo.setCurrentText(self.current_block)
+            self.version_combo.addItems(list(self.dependency_priority_dic[self.current_block].keys()))
+
+        if self.current_version:
+            self.version_combo.setCurrentText(self.current_version)
+
+        self.block_combo.activated.connect(self.set_version_combo)
+        self.version_combo.activated.connect(self.update_table_frame)
 
         if not set(self.default_dependency_dic.keys()).intersection(set(self.current_dependency_priority_dic.keys())):
             self.reset_to_default_button.setEnabled(False)
-
-        button_layout = QGridLayout()
-        button_layout.addWidget(block_label, 0, 0)
-        button_layout.addWidget(self.block_combo, 0, 1)
-        button_layout.addWidget(version_label, 0, 2)
-        button_layout.addWidget(self.version_combo, 0, 3)
-        button_layout.addWidget(self.reset_to_default_button, 0, 4)
-        button_layout.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-
-        self.selection_widget.setLayout(button_layout)
 
     def reset_to_default(self):
         modify_item_list = []
@@ -2898,9 +2920,10 @@ class WindowForDependency(QMainWindow):
         else:
             self.reset_to_default_button.setEnabled(True)
 
-        self.current_dependency_priority_dic = self.dependency_priority_dic[self.current_block][self.current_version]
-        self.gen_table()
-        self.gen_dependency_chart()
+        if self.current_block and self.current_version:
+            self.current_dependency_priority_dic = self.dependency_priority_dic[self.current_block][self.current_version]
+            self._update_table()
+            self._update_dependency_chart()
 
     def post_dependency_check(self):
         for task in self.current_dependency_priority_dic.keys():
@@ -2922,7 +2945,7 @@ class WindowForDependency(QMainWindow):
 
             self.current_dependency_priority_dic[task] = ','.join(new_repeat_condition_list)
 
-        self.dependency_priority_dic[self.current_block][self.current_version] = self.current_dependency_priority_dic
+        self.dependency_priority_dic[self.current_block][self.current_version] = copy.deepcopy(self.current_dependency_priority_dic)
 
     def gen_chart_frame(self, image_path, full_image_path):
         self.current_chart.clear()
@@ -2935,94 +2958,25 @@ class WindowForDependency(QMainWindow):
         self.current_chart.setStyleSheet("background-color: white ;border: 1px solid lightgray ;")
         self.current_chart.setFixedWidth(600 * self.width_scale_rate)
 
-    def gen_dependency_chart(self, graph_size=None):
+    def _update_dependency_chart(self, graph_size=None):
         if graph_size is None:
             graph_size = [4.8, 3.2]
 
         dependency_dic = {**self.default_dependency_dic, **self.current_dependency_priority_dic}
-        node_list = list(dependency_dic.keys())
-        flow_chart_dic = {}
+        flow_chart_dic, node_list, edge_list = self.gen_dependency_chart_info(block=self.current_block, version=self.current_version, dependency_dic=dependency_dic)
         dot = graphviz.Digraph('round-table', comment='The Round Table')
 
         width = graph_size[0] * self.width_scale_rate
         height = graph_size[1] * self.height_scale_rate
 
-        # basic element
         for node in node_list:
-            if not re.match(r'^\s+$', node):
-                dot.node(node, node, shape='box')
-                flow_chart_dic.setdefault(node, [])
+            if re.match(r'\d+', node['id']):
+                dot.node(node['id'], node['label'], **{'width': '0.15', 'height': '0.15'})
+            else:
+                dot.node(node['id'], node['label'], shape='box')
 
-        # num
-        link_node = 0
-
-        # dependencies
-        for node in dependency_dic:
-            condition = dependency_dic[node]
-
-            if not condition:
-                continue
-
-            # ^ the third priority
-            third_condition_list = condition.split(',')
-
-            if '' in third_condition_list:
-                third_condition_list.remove('')
-
-            second_link_list = []
-
-            for third_condition in third_condition_list:
-                # | the second priority
-                second_condition_list = third_condition.split('|')
-
-                if '' in second_condition_list:
-                    second_condition_list.remove('')
-
-                first_link_list = []
-
-                for second_condition in second_condition_list:
-                    # & the first priority
-                    first_condition_list = second_condition.split('&')
-
-                    if '' in first_condition_list:
-                        first_condition_list.remove('')
-
-                    if len(first_condition_list) == 1:
-                        first_link_node = first_condition_list[0]
-                    elif len(first_condition_list) > 1:
-                        dot.node(str(link_node), '&', **{'width': '0.15', 'height': '0.15'})
-                        flow_chart_dic.setdefault(str(link_node), [])
-                        first_link_node = str(link_node)
-
-                        for first_item in first_condition_list:
-                            dot.edge(first_item, str(link_node))
-                            flow_chart_dic[first_item].append(str(link_node))
-                    else:
-                        continue
-
-                    link_node += 1
-                    first_link_list.append(first_link_node)
-
-                if len(first_link_list) == 1:
-                    second_link_node = first_link_list[0]
-                elif len(first_link_list) > 1:
-                    dot.node(str(link_node), '|', **{'width': '0.15', 'height': '0.15'})
-                    flow_chart_dic.setdefault(str(link_node), [])
-                    second_link_node = str(link_node)
-
-                    for second_item in first_link_list:
-                        dot.edge(second_item, str(link_node))
-                        flow_chart_dic[second_item].append(str(link_node))
-                else:
-                    continue
-
-                link_node += 1
-                second_link_list.append(second_link_node)
-
-            for third_link_node in second_link_list:
-                dot.edge(third_link_node, node)
-                flow_chart_dic.setdefault(third_link_node, [])
-                flow_chart_dic[third_link_node].append(node)
+        for edge in edge_list:
+            dot.edge(edge['from'], edge['to'])
 
         dot.graph_attr['size'] = '10, 10'
         dot.render(os.path.join(self.picture_dir, 'full_dependency'), format='png')
@@ -3042,13 +2996,219 @@ class WindowForDependency(QMainWindow):
             return True
 
         check_status = True
-        node_list = list(dependency_dic.keys())
+        flow_chart_dic, _, _ = self.gen_dependency_chart_info(block=self.current_block, version=self.current_version, dependency_dic=dependency_dic)
+
+        self.vis = []
+        self.trace = []
+
+        for node in flow_chart_dic.keys():
+            check_status = self.dfs_check_loop(node, flow_chart_dic)
+
+            if not check_status:
+                return check_status
+
+        return check_status
+
+    @staticmethod
+    def gen_full_dependency_chart_info(dependency_dic: Dict[str, Dict[str, Dict[str, str]]]) -> Tuple[Dict[str, Dict[str, Dict[str, List[str]]]], List[Dict[str, str]], List[Dict[str, str]]]:
+        """
+        Args:
+            dependency_dic: ex {<block>: {<version>: {'task1': 'task2&task3|task4, task5'}}}
+        Returns:
+            flow_chart_dic: ex {'task1': ['task2', '& link', '| link'], ...}
+            node_list: ex [{'id': <node_id>, 'label': <node_name>}, ...]
+            edge_list: ex [{'from': <start_node_id>, 'to': <end_node_id>}, ...]
+        """
+        full_node_list = []
+        full_edge_list = []
+        full_chart_dic = {}
+
+        for block in dependency_dic:
+            full_node_list.append({'id': f'{block}', 'label': block, 'size': 200, 'shape': 'box', 'color': {'background': 'white'}})
+            full_chart_dic.setdefault(block, {})
+
+            for version in dependency_dic[block]:
+                full_edge_list.append({'from': f'{block}', 'to': f'{block}-{version}', 'length': 100})
+                full_node_list.append({'id': f'{block}-{version}', 'label': version, 'size': 200, 'shape': 'box', 'color': {'background': 'white'}})
+                full_chart_dic[block].setdefault(version, {})
+
+                version_dependency_dic = dependency_dic[block][version]
+                task_list = list(version_dependency_dic.keys())
+
+                for task in version_dependency_dic.keys():
+                    version_dependency_dic[task] = WindowForDependency.clean_dependency(item_list=task_list, item=task, dependency=version_dependency_dic[task])
+
+                flow_chart_dic, node_list, edge_list = WindowForDependency.gen_dependency_chart_info(block=block, version=version, dependency_dic=version_dependency_dic)
+                full_chart_dic[block][version] = flow_chart_dic
+                node_dic = {node['id']: node for node in node_list}
+                node_level_dic = WindowForDependency.gen_node_level(flow_chart_dic)
+
+                for node, r_level in node_level_dic.items():
+                    if max(node_level_dic.values()) == r_level:
+                        edge_list.append({'from': f'{block}-{version}', 'to': f'{block}-{version}-{node}', 'length': 100})
+
+                full_node_list += [node for node_id, node in node_dic.items()]
+                full_edge_list += edge_list
+
+        return full_chart_dic, full_node_list, full_edge_list
+
+    @staticmethod
+    def _discover_path(graph: Dict[str, List[str]], target_task: str, special_nodes: Dict[str, List[str]]) -> List[List[str]]:
+        special_node_paths = {}
+        final_paths = []
+
+        for node in special_nodes:
+            special_node_paths[node] = WindowForDependency.find_all_paths_to_node(graph=graph, target_node=node)
+
+        target_paths = WindowForDependency.find_all_paths_to_node(graph=graph, target_node=target_task)
+
+        for path in target_paths:
+            final_paths += WindowForDependency.replace_special_nodes(path=path, special_node_paths=special_node_paths)
+
+        unique_sublists = []
+        seen_sublists = set()
+
+        for sublist in final_paths:
+            frozenset_sublist = frozenset(sublist)
+
+            if frozenset_sublist not in seen_sublists:
+                unique_sublists.append(sublist)
+                seen_sublists.add(frozenset_sublist)
+
+        return unique_sublists
+
+    @staticmethod
+    def discover_path(block: str, version: str, task_list: List[str], dependency: Dict[str, Dict[str, Dict[str, str]]]):
+        paths = []
+        flow_chart_dic, nodes, edges = WindowForDependency.gen_dependency_chart_info(block=block, version=version, dependency_dic=dependency[block][version])
+
+        add_nodes = []
+
+        for node in nodes:
+            if node['label'] == '&':
+                add_node = re.search(r'\d+$', node['id']).group(0)
+
+                if add_node not in flow_chart_dic:
+                    continue
+
+                add_nodes.append(add_node)
+
+        for task in task_list:
+            discover_paths = WindowForDependency._discover_path(graph=flow_chart_dic, target_task=task, special_nodes={node: flow_chart_dic[node] for node in add_nodes})
+
+            if len(discover_paths) > 1:
+                return []
+
+            paths += discover_paths
+
+        path_set = set()
+
+        for path in paths:
+            path_set = path_set.union(set(path))
+
+        return list(path_set)
+
+    @staticmethod
+    def replace_special_nodes(path: List[str], special_node_paths: Dict[str, List[List[str]]]) -> List[List[str]]:
+        result = [[]]
+
+        for element in path:
+            if element in special_node_paths:
+                temp_result = []
+
+                for sublist in special_node_paths[element]:
+                    for existing_list in result:
+                        new_list = existing_list + [item for item in sublist if item not in existing_list]
+
+                        if new_list not in temp_result:
+                            temp_result.append(new_list)
+
+                result = temp_result
+            else:
+                result = [existing_list + [element] if element not in existing_list else existing_list for existing_list in result]
+
+        intermediate_result = []
+
+        for list_a in result:
+            if not any(set(list_a) < set(list_b) for list_b in result if list_a != list_b):
+                intermediate_result.append(list_a)
+
+        final_result = []
+
+        for lst in intermediate_result:
+            new_lst = [item for item in lst if not item.isdigit()]
+            final_result.append(new_lst)
+
+        return final_result
+
+    @staticmethod
+    def find_all_paths_to_node(graph, target_node) -> List[List[str]]:
+        reverse_graph = {node: [] for node in graph}
+        for node in graph:
+            for neighbor in graph[node]:
+                reverse_graph[neighbor].append(node)
+
+        def dfs_reverse(node, path, all_paths):
+            path.append(node)
+            if len(reverse_graph[node]) == 0:
+                all_paths.append(path.copy())
+            else:
+                for prev_node in reverse_graph[node]:
+                    dfs_reverse(prev_node, path, all_paths)
+            path.pop()
+
+        all_paths = []
+        dfs_reverse(target_node, [], all_paths)
+        return all_paths
+
+    @staticmethod
+    def gen_node_level(graph) -> Dict[str, int]:
+        levels = {}
+
+        def assign_level(node):
+            if node in levels:
+                return levels[node]
+
+            if node not in graph:
+                levels[node] = 0
+                return 0
+
+            max_level = max((assign_level(child) for child in graph[node]), default=-1) + 1
+            levels[node] = max_level
+            return max_level
+
+        for node in set(graph).union(set().union(*graph.values())):
+            if node not in levels:
+                assign_level(node)
+
+        return levels
+
+    @staticmethod
+    def gen_dependency_chart_info(block: str, version: str, dependency_dic: Dict[str, str]) -> Tuple[Dict[str, List[str]], List[Dict[str, str]], List[Dict[str, str]]]:
+        """
+        Args:
+            block: block,
+            version: version,
+            dependency_dic: ex {'task1': 'task2&task3|task4, task5'}
+        Returns:
+            flow_chart_dic: ex {'task1': ['task2', '& link', '| link'], ...}
+            node_list: ex [{'id': <node_id>, 'label': <node_name>}, ...]
+            edge_list: ex [{'from': <start_node_id>, 'to': <end_node_id>}, ...]
+        """
         flow_chart_dic = {}
+        node_list = []
+        edge_list = []
+        tag = f'{block}-{version}'
 
         # basic element
-        for node in node_list:
+        for node in dependency_dic.keys():
             if not re.match(r'^\s+$', node):
                 flow_chart_dic.setdefault(node, [])
+                node_list.append({'id': f'{tag}-{node}',
+                                  'label': node,
+                                  'size': 100,
+                                  'shape': 'box',
+                                  })
 
         # num
         link_node = 0
@@ -3062,10 +3222,6 @@ class WindowForDependency(QMainWindow):
 
             # ^ the third priority
             third_condition_list = condition.split(',')
-            check_status = self.check_same_condition(third_condition_list)
-
-            if not check_status:
-                return check_status
 
             if '' in third_condition_list:
                 third_condition_list.remove('')
@@ -3075,10 +3231,6 @@ class WindowForDependency(QMainWindow):
             for third_condition in third_condition_list:
                 # | the second priority
                 second_condition_list = third_condition.split('|')
-                check_status = self.check_same_condition(third_condition_list)
-
-                if not check_status:
-                    return check_status
 
                 if '' in second_condition_list:
                     second_condition_list.remove('')
@@ -3088,10 +3240,6 @@ class WindowForDependency(QMainWindow):
                 for second_condition in second_condition_list:
                     # & the first priority
                     first_condition_list = second_condition.split('&')
-                    check_status = self.check_same_condition(third_condition_list)
-
-                    if not check_status:
-                        return check_status
 
                     if '' in first_condition_list:
                         first_condition_list.remove('')
@@ -3099,10 +3247,22 @@ class WindowForDependency(QMainWindow):
                     if len(first_condition_list) == 1:
                         first_link_node = first_condition_list[0]
                     elif len(first_condition_list) > 1:
+                        node_list.append({'id': f'{tag}-{str(link_node)}',
+                                          'label': '&',
+                                          'size': 20,
+                                          'shape': 'text',
+                                          'disableContextMenu': True,
+                                          'color': {'background': 'lightgrey',
+                                                    'border': 'grey',
+                                                    'highlight': 'lightgrey',
+                                                    'hover': 'lightgrey'},
+                                          'font': {'size': 20, 'vadjust': 0}
+                                          })
                         flow_chart_dic.setdefault(str(link_node), [])
                         first_link_node = str(link_node)
 
                         for first_item in first_condition_list:
+                            edge_list.append({'from': f'{tag}-{first_item}', 'to': f'{tag}-{str(link_node)}'})
                             flow_chart_dic[first_item].append(str(link_node))
                     else:
                         continue
@@ -3113,10 +3273,22 @@ class WindowForDependency(QMainWindow):
                 if len(first_link_list) == 1:
                     second_link_node = first_link_list[0]
                 elif len(first_link_list) > 1:
+                    node_list.append({'id': f'{tag}-{str(link_node)}',
+                                      'label': '|',
+                                      'size': 20,
+                                      'shape': 'text',
+                                      'disableContextMenu': 'true',
+                                      'color': {'background': 'lightgrey',
+                                                'border': 'grey',
+                                                'highlight': 'lightgrey',
+                                                'hover': 'lightgrey'},
+                                      'font': {'size': 20, 'vadjust': 0}
+                                      })
                     flow_chart_dic.setdefault(str(link_node), [])
                     second_link_node = str(link_node)
 
                     for second_item in first_link_list:
+                        edge_list.append({'from': f'{tag}-{second_item}', 'to': f'{tag}-{str(link_node)}'})
                         flow_chart_dic[second_item].append(str(link_node))
                 else:
                     continue
@@ -3125,18 +3297,11 @@ class WindowForDependency(QMainWindow):
                 second_link_list.append(second_link_node)
 
             for third_link_node in second_link_list:
+                edge_list.append({'from': f'{tag}-{third_link_node}', 'to': f'{tag}-{node}'})
+                flow_chart_dic.setdefault(third_link_node, [])
                 flow_chart_dic[third_link_node].append(node)
 
-        self.vis = []
-        self.trace = []
-
-        for node in flow_chart_dic.keys():
-            check_status = self.dfs_check_loop(node, flow_chart_dic)
-
-            if not check_status:
-                return check_status
-
-        return check_status
+        return flow_chart_dic, node_list, edge_list
 
     @staticmethod
     def check_same_condition(check_list):
@@ -3158,7 +3323,6 @@ class WindowForDependency(QMainWindow):
         return check_status
 
     def gen_table(self):
-        self.current_table.clear()
         self.current_table.setMouseTracking(True)
 
         # table format
@@ -3180,6 +3344,15 @@ class WindowForDependency(QMainWindow):
         # table menu for add repeat setting
         self.current_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.current_table.customContextMenuRequested.connect(functools.partial(self.generate_table_menu, self.current_table))
+
+    def _update_table(self):
+        if isinstance(self.current_table, QTableWidget):
+            self.current_table.clear()
+
+        self.current_table.setHorizontalHeaderLabels(['task', 'add', 'del', 'run_after'])
+
+        if not self.current_dependency_priority_dic:
+            return
 
         # table context
         row_len = 0
@@ -3219,6 +3392,16 @@ class WindowForDependency(QMainWindow):
 
         self.current_table.setRowCount(row_len)
         row = 0
+
+        not_selectable_items = []
+
+        for item in item_condition_dic.keys():
+            item_name, _ = self.get_item_name(item)
+
+            if item_name in self.current_dependency_priority_dic:
+                continue
+
+            not_selectable_items.append(item_name)
 
         for item in item_condition_dic.keys():
             item_name, _ = self.get_item_name(item)
@@ -3280,6 +3463,7 @@ class WindowForDependency(QMainWindow):
 
                     dependency_item.addCheckBoxItems(selectable_item_list)
                     dependency_item.setItemsCheckStatus(item_condition_dic[item][parallel_condition])
+                    dependency_item.setItemsCheckState(item_list=not_selectable_items, state=False)
                     dependency_item.stateChangedconnect(functools.partial(self.change_condition_dependency_list, dependency_item, item, same_item_line))
 
                     if not self.gui_enable_flag:
@@ -3471,8 +3655,8 @@ class WindowForDependency(QMainWindow):
             for item in modify_item_list:
                 self.modify_item_set.add((r'%s-%s-task' % (self.current_block, self.current_version), item))
 
-        self.gen_table()
-        self.gen_dependency_chart()
+        self._update_table()
+        self._update_dependency_chart()
 
         if self.mode == 'widget':
             if self.modify_item_set:
@@ -3511,7 +3695,7 @@ class WindowForDependency(QMainWindow):
             self.close()
         elif self.mode == 'widget':
             self.modify_item_set = set()
-            self.init_ui()
+            self.update_ui()
             self.save_button.setEnabled(False)
             self.update.emit(False, 'Order')
 
@@ -3576,9 +3760,9 @@ class WindowForDependency(QMainWindow):
 
     def reset(self):
         self.dependency_priority_dic = copy.deepcopy(self.origin_dependency_priority_dic)
-        self.current_dependency_priority_dic = self.dependency_priority_dic[self.current_block][self.current_version]
+        # self.current_dependency_priority_dic = self.dependency_priority_dic[self.current_block][self.current_version]
         self.modify_item_set = set()
-        self.init_ui()
+        self.update_setting(dependency_priority_dic=self.dependency_priority_dic, default_dependency_dic=self.default_dependency_dic)
         self.update.emit(False, 'Order')
 
     def disable_gui(self):
@@ -3759,12 +3943,12 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
                     comment_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
                     comment_item.setForeground(QBrush(QColor(192, 192, 192)))
 
-                    if key.strip() == 'BSUB_QUEUE':
+                    if key.strip() == 'BSUB_QUEUE' or key.strip() == 'MAX_RUNNING_JOBS':
                         key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
                         value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
                         key_item.setForeground(QBrush(QColor(125, 125, 125)))
                         value_item.setForeground(QBrush(QColor(125, 125, 125)))
-                        comment_item = QTableWidgetItem('Modify BSUB_QUEUE in Setting -> Cluster Managerment')
+                        comment_item = QTableWidgetItem(f'Modify {key.strip()} in Setting -> Cluster Management')
                         comment_item.setFlags(comment_item.flags() & ~Qt.ItemIsEditable)
                         comment_item.setForeground(QBrush(QColor(192, 192, 192)))
 
@@ -3784,12 +3968,12 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
                 key_item = QTableWidgetItem(key)
                 value_item = QTableWidgetItem(value)
 
-                if key.strip() == 'BSUB_QUEUE':
+                if key.strip() == 'BSUB_QUEUE' or key.strip() == 'MAX_RUNNING_JOBS':
                     key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
                     value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
                     key_item.setForeground(QBrush(QColor(125, 125, 125)))
                     value_item.setForeground(QBrush(QColor(125, 125, 125)))
-                    comment_item = QTableWidgetItem('Modify BSUB_QUEUE in Setting -> Cluster Managerment')
+                    comment_item = QTableWidgetItem(f'Modify {key.strip()} in Setting -> Cluster Management')
                 else:
                     comment_item = QTableWidgetItem('User customized variables, it could be edited/added/deleted')
 
@@ -4059,7 +4243,7 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
             for column in range(column_count):
                 item = self.table.item(row, column)
 
-                if item.text() == 'BSUB_QUEUE':
+                if item.text() == 'BSUB_QUEUE' or item.text() == 'MAX_RUNNING_JOBS':
                     break
 
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
@@ -4076,6 +4260,7 @@ class WindowForAPI(QMainWindow):
 
         self.gui_enable_signal = True
         self.api_dic = common.parse_user_api(api_yaml)
+        self.old_api_dic = copy.deepcopy(self.api_dic)
 
         self.title = 'API Setting'
         self.update_flag = 'API'
@@ -4225,26 +4410,25 @@ class WindowForAPI(QMainWindow):
         current_selected_row = self.table.currentIndex().row()
         current_selected_column = self.table.currentIndex().column()
 
-        if current_selected_row == -1 and current_selected_column == -1:
+        if self.table.item(current_selected_row, current_selected_column):
+            current_selected_item_row = self.table.item(current_selected_row, current_selected_column).row()
+
+            menu = QMenu()
+            edit_action = menu.addAction('Add API')
+            edit_action.triggered.connect(self.add_api)
+            edit_action = menu.addAction('Edit API')
+            edit_action.triggered.connect(functools.partial(self.edit_api, current_selected_item_row))
+            delete_action = menu.addAction('Delete API')
+            delete_action.triggered.connect(functools.partial(self.delete_api, current_selected_item_row))
+
+            menu.exec_(self.table.mapToGlobal(pos))
+        else:
             menu = QMenu()
             edit_action = menu.addAction('Add API')
             edit_action.triggered.connect(self.add_api)
 
             menu.exec_(self.table.mapToGlobal(pos))
             return
-        else:
-            if self.table.item(current_selected_row, current_selected_column):
-                current_selected_item_row = self.table.item(current_selected_row, current_selected_column).row()
-
-                menu = QMenu()
-                edit_action = menu.addAction('Add API')
-                edit_action.triggered.connect(self.add_api)
-                edit_action = menu.addAction('Edit API')
-                edit_action.triggered.connect(functools.partial(self.edit_api, current_selected_item_row))
-                delete_action = menu.addAction('Delete API')
-                delete_action.triggered.connect(functools.partial(self.delete_api, current_selected_item_row))
-
-                menu.exec_(self.table.mapToGlobal(pos))
 
     def add_api(self):
         self.api_edit_window = WindowForAPIEdit(title='ADD API')
@@ -4292,7 +4476,9 @@ class WindowForAPI(QMainWindow):
                     self.api_dic['API'][api_type].append(new_api_dic)
 
         self.update_api_table()
-        self.save()
+        self.reset_button.setEnabled(True)
+        self.save_button.setEnabled(True)
+        self.update.emit(True, self.update_flag)
 
     def _get_api_dic_from_row(self, row: int) -> Tuple[dict, str]:
         result_dic = {}
@@ -4332,7 +4518,10 @@ class WindowForAPI(QMainWindow):
             if del_api_index is not None:
                 self.api_dic['API'][del_api_type].pop(del_api_index)
 
-        self.save()
+        self.update_api_table()
+        self.reset_button.setEnabled(True)
+        self.save_button.setEnabled(True)
+        self.update.emit(True, self.update_flag)
 
     def gen_api_content(self, api_dic: dict = None) -> str:
         if not api_dic or not isinstance(api_dic, dict):
@@ -4362,11 +4551,14 @@ class WindowForAPI(QMainWindow):
             self.message.emit(self.update_flag, self.api_dic, self.user_api_yaml)
             self.update.emit(False, self.update_flag)
             self.update_api_table()
+            self.old_api_dic = copy.deepcopy(self.api_dic)
 
             self.save_button.setEnabled(False)
 
     def reset(self):
+        self.api_dic = copy.deepcopy(self.old_api_dic)
         self.update_api_table()
+        self.old_api_dic = copy.deepcopy(self.api_dic)
         self.save_button.setStyleSheet("")
         self.update.emit(False, self.update_flag)
         self.save_button.setEnabled(False)
@@ -4439,7 +4631,7 @@ class WindowForAPI(QMainWindow):
         """
         Enable status_item in table
         """
-        self.gui_enable_signal = False
+        self.gui_enable_signal = True
         row_count = self.table.rowCount()
 
         for row in range(row_count):
@@ -4652,7 +4844,7 @@ class WindowForAPIEdit(QMainWindow):
                 if re.match(r'(\S+)_NAME', api_item) and self.temp_api_dic[api_item]:
                     column = re.match(r'(\S+)_NAME', api_item).group(1)
 
-                api_widget = QLineEdit(api_content)
+                api_widget = QLineEdit(str(api_content))
 
             label = QLabel(api_item)
 
@@ -4818,453 +5010,7 @@ class WindowForAPIEdit(QMainWindow):
         self.close()
 
 
-class DefaultConfig(QMainWindow):
-    save_signal = pyqtSignal(str)
-
-    def __init__(self, default_yaml):
-        super().__init__()
-
-        self.admin_flag = 0
-
-        if os.popen('whoami').read().strip() in config.default_yaml_administrators.split():
-            self.admin_flag = 1
-
-        self.default_yaml = default_yaml
-        [self.default_setting, self.combs, self.flows, self.vendors, self.tasks] = self.parsing_default_setting(self.default_yaml)
-        self.blank_setting = parsing_blank_setting()
-        self.top_widget = QWidget()
-        self.top_layout = QVBoxLayout()
-        self.top_widget.setLayout(self.top_layout)
-        self.setCentralWidget(self.top_widget)
-
-        self.setting = AutoVivification()
-
-        self.label_path = QLabel('Config path :')
-        self.label_path.setStyleSheet('font-weight : bold')
-        self.edit_path = QLineEdit()
-        self.edit_path.setText(self.default_yaml)
-        self.edit_path.setEnabled(False)
-        self.save_yaml_button = QPushButton('Save')
-        self.save_yaml_button.clicked.connect(self.save_to_yaml)
-        self.yaml_widget = QWidget()
-        self.yaml_layout = QHBoxLayout()
-        self.yaml_widget.setLayout(self.yaml_layout)
-
-        header = ['Item', 'Value']
-        self.label_env = QLabel('Var setting :')
-        self.label_env.setStyleSheet('font-weight : bold')
-        self.env_table = QTableView()
-        self.env_model = QStandardItemModel(5, 2)
-        self.env_table.setModel(self.env_model)
-        self.env_table.setColumnWidth(0, 120)
-        self.env_model.setHorizontalHeaderLabels(header)
-        self.env_table.setStyleSheet('font-family : calibri; font-size : 15px')
-        self.env_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.env_table.setShowGrid(True)
-
-        self.env_table.setSelectionMode(QAbstractItemView.NoSelection)
-
-        self.label_setup = QLabel('Flow setting :')
-        self.label_setup.setStyleSheet('font-weight : bold')
-        self.setup_table = QTableView()
-        self.setup_model = QStandardItemModel(1, 2)
-        self.setup_table.setModel(self.setup_model)
-        self.setup_table.setColumnWidth(0, 120)
-
-        self.setup_model.setHorizontalHeaderLabels(header)
-        self.setup_table.setStyleSheet('font-family : calibri; font-size : 15px')
-        self.setup_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.setup_table.setShowGrid(True)
-
-        self.save_button = QPushButton('update setting')
-        self.save_button.clicked.connect(self.save)
-        self.remove_button = QPushButton('delete')
-        self.remove_button.clicked.connect(self.delete)
-        self.cancel_button = QPushButton('cancel')
-        self.cancel_button.clicked.connect(self.closeEvent)
-
-        self.button_widget = QWidget()
-        self.button_layout = QHBoxLayout()
-        self.button_widget.setLayout(self.button_layout)
-
-        self.comb_widget = QWidget()
-        self.comb_layout = QHBoxLayout()
-        self.comb_widget.setLayout(self.comb_layout)
-        self.label_comb = QLabel('All')
-        self.comb_all = QComboBox()
-        self.comb_all.addItems(self.combs)
-        self.comb_all.activated.connect(self.update_table)
-
-        self.items_widget = QWidget()
-        self.items_layout = QHBoxLayout()
-        self.items_widget.setLayout(self.items_layout)
-        self.label_flow = QLabel('FLow')
-        self.label_vendor = QLabel('Vendor')
-        self.label_task = QLabel('Task')
-
-        self.edit_flow = QLineEdit()
-        self.edit_flow.setFixedWidth(150)
-        self.edit_flow.setEnabled(True)
-        self.edit_flow.setAlignment(Qt.AlignCenter)
-        self.edit_flow.textChanged.connect(self.update_add_button)
-        self.edit_vendor = QLineEdit()
-        self.edit_vendor.setFixedWidth(150)
-        self.edit_vendor.setEnabled(True)
-        self.edit_vendor.setAlignment(Qt.AlignCenter)
-        self.edit_vendor.textChanged.connect(self.update_add_button)
-        self.edit_task = QLineEdit()
-        self.edit_task.setFixedWidth(150)
-        self.edit_task.setEnabled(True)
-        self.edit_task.setAlignment(Qt.AlignCenter)
-        self.edit_task.textChanged.connect(self.update_add_button)
-
-        self.current_flow = ''
-        self.current_vendor = ''
-        self.current_task = ''
-
-        self.update_flag = 0
-
-        if self.admin_flag == 0:
-            self.env_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            self.setup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-            self.edit_flow.setEnabled(False)
-            self.edit_vendor.setEnabled(False)
-            self.edit_task.setEnabled(False)
-            self.save_yaml_button.hide()
-            self.save_button.hide()
-            self.remove_button.hide()
-        else:
-            self.env_table.setEditTriggers(QAbstractItemView.AllEditTriggers)
-            self.setup_table.setEditTriggers(QAbstractItemView.AllEditTriggers)
-            self.edit_flow.setEnabled(True)
-            self.edit_vendor.setEnabled(True)
-            self.edit_task.setEnabled(True)
-            self.save_yaml_button.show()
-            self.save_button.show()
-            self.remove_button.show()
-
-        self.init_ui()
-
-    def init_ui(self):
-        row = 0
-
-        for key in self.default_setting['VAR'].keys():
-            item = QStandardItem('%s' % key)
-            item.setTextAlignment(Qt.AlignLeft)
-            item.setTextAlignment(Qt.AlignVCenter)
-            self.env_model.setItem(row, 0, item)
-
-            item = QStandardItem('%s' % self.default_setting['VAR'][key])
-            item.setTextAlignment(Qt.AlignLeft)
-            item.setTextAlignment(Qt.AlignVCenter)
-            self.env_model.setItem(row, 1, item)
-            row += 1
-
-        self.draw_table({'TASK': {}})
-
-        self.yaml_layout.addWidget(self.edit_path)
-        self.yaml_layout.addWidget(self.save_yaml_button)
-        self.items_layout.addWidget(self.label_flow)
-        self.items_layout.addWidget(self.edit_flow)
-        self.items_layout.addStretch(1)
-        self.items_layout.addWidget(self.label_vendor)
-        self.items_layout.addWidget(self.edit_vendor)
-        self.items_layout.addStretch(1)
-        self.items_layout.addWidget(self.label_task)
-        self.items_layout.addWidget(self.edit_task)
-        self.items_layout.setStretch(0, 1)
-        self.items_layout.setStretch(1, 2)
-        self.items_layout.setStretch(2, 3)
-        self.items_layout.setStretch(3, 1)
-        self.items_layout.setStretch(4, 2)
-        self.items_layout.setStretch(5, 3)
-        self.items_layout.setStretch(6, 1)
-        self.items_layout.setStretch(7, 2)
-
-        self.button_layout.addStretch(10)
-        self.button_layout.addWidget(self.save_button)
-        self.button_layout.addWidget(self.remove_button)
-        self.button_layout.addWidget(self.cancel_button)
-
-        self.comb_layout.addWidget(self.label_comb)
-        self.comb_layout.addWidget(self.comb_all)
-        self.comb_layout.addStretch(1)
-        self.comb_layout.setStretch(0, 1)
-        self.comb_layout.setStretch(1, 2)
-        self.comb_layout.setStretch(2, 15)
-
-        self.top_layout.addWidget(self.label_path)
-        self.top_layout.addWidget(self.yaml_widget)
-        self.top_layout.addStretch(1)
-        self.top_layout.addWidget(self.label_env)
-        self.top_layout.addWidget(self.env_table)
-        self.top_layout.addStretch(1)
-        self.top_layout.addWidget(self.label_setup)
-        self.top_layout.addWidget(self.comb_widget)
-        self.top_layout.addWidget(self.items_widget)
-        self.top_layout.addWidget(self.setup_table)
-        self.top_layout.addWidget(self.button_widget)
-        self.top_layout.setStretch(3, 1)
-        self.top_layout.setStretch(4, 4)
-        self.top_layout.setStretch(6, 1)
-        self.top_layout.setStretch(7, 1)
-        self.top_layout.setStretch(8, 1)
-        self.top_layout.setStretch(9, 8)
-        self.resize(800, 600)
-        self.setWindowTitle('Default Config')
-        center(self)
-
-        if not len(self.combs) == 0:
-            self.update_table(0)
-
-    def closeEvent(self, event):
-        if self.update_flag == 1:
-            reply = QMessageBox.question(
-                self, "Message",
-                "Are you sure to quit? Any unsaved setting will be lost.",
-                QMessageBox.Save | QMessageBox.Close | QMessageBox.Cancel,
-                QMessageBox.Save)
-
-            if reply == QMessageBox.Save:
-                self.save_to_yaml()
-            elif reply == QMessageBox.Close:
-                if type(event) is bool:
-                    self.destroy()
-                else:
-                    event.accept()
-            elif reply == QMessageBox.Cancel:
-                if type(event) is bool:
-                    return
-                else:
-                    event.ignore()
-        else:
-            self.destroy()
-
-    def update_table(self, index):
-        self.current_flow = self.comb_all.itemText(index).split(':')[0]
-        self.current_vendor = self.comb_all.itemText(index).split(':')[1]
-        self.current_task = self.comb_all.itemText(index).split(':')[2]
-
-        self.edit_flow.setText(self.current_flow)
-        self.edit_vendor.setText(self.current_vendor)
-        self.edit_task.setText(self.current_task)
-
-        if self.current_flow in self.default_setting['TASK'].keys():
-            if self.current_vendor in self.default_setting['TASK'][self.current_flow].keys():
-                if self.current_task in self.default_setting['TASK'][self.current_flow][self.current_vendor].keys():
-                    self.draw_table(self.default_setting['TASK'][self.current_flow][self.current_vendor][self.current_task])
-
-    def update_add_button(self):
-        flow = self.edit_flow.text()
-        vendor = self.edit_vendor.text()
-        task = self.edit_task.text()
-
-        if flow in self.default_setting['TASK'].keys():
-            if vendor in self.default_setting['TASK'][self.current_flow].keys():
-                if task in self.default_setting['TASK'][self.current_flow][self.current_vendor].keys():
-                    self.save_button.setText('Update setting for %s/%s/%s' % (flow, vendor, task))
-                    self.save_button.setEnabled(True)
-                    self.remove_button.setEnabled(True)
-                    return
-
-        if not flow == '-' and not vendor == '-' and not task == '-':
-            self.save_button.setText('Create setting for %s/%s/%s' % (flow, vendor, task))
-            self.save_button.setEnabled(True)
-            self.remove_button.setEnabled(False)
-
-    def draw_table(self, setting):
-        row = 0
-        self.setup_model.setRowCount(0)
-
-        for category in self.blank_setting.keys():
-            item = QStandardItem('* %s' % category)
-            item.setTextAlignment(Qt.AlignLeft)
-            item.setTextAlignment(Qt.AlignVCenter)
-            item.setEditable(False)
-            f = QFont('Calibri', 10)
-            f.setBold(True)
-            item.setFont(f)
-            item.setBackground(QBrush(QColor(245, 255, 250)))
-            item.setForeground(QBrush(QColor(0, 0, 0)))
-            self.setup_model.setItem(row, 0, item)
-            self.setup_table.setSpan(row, 0, 1, 2)
-            row += 1
-
-            for key in self.blank_setting[category].keys():
-                item = QStandardItem(key)
-                item.setTextAlignment(Qt.AlignLeft)
-                item.setTextAlignment(Qt.AlignVCenter)
-                item.setEditable(False)
-                self.setup_model.setItem(row, 0, item)
-
-                value = ''
-
-                if category in setting.keys():
-                    if key in setting[category].keys():
-                        value = setting[category][key]
-                        item = QStandardItem(value)
-                        item.setBackground(QBrush(QColor(255, 255, 255)))
-
-                if value == '':
-                    item = QStandardItem(value)
-                    item.setBackground(QBrush(QColor(255, 255, 255)))
-
-                item.setTextAlignment(Qt.AlignLeft)
-                item.setTextAlignment(Qt.AlignVCenter)
-                self.setup_model.setItem(row, 1, item)
-                row += 1
-
-    def parsing_default_setting(self, yaml_file):
-        task_dic = {'VAR': {}, 'TASK': {}}
-        combs = []
-        flows = []
-        vendors = []
-        tasks = []
-
-        if os.path.exists(yaml_file):
-            default_dic = yaml.safe_load(open(yaml_file, 'r'))
-
-            if default_dic:
-                if 'VAR' in default_dic:
-                    task_dic['VAR'] = copy.deepcopy(default_dic['VAR'])
-
-                if 'TASK' in default_dic:
-                    for key in default_dic['TASK'].keys():
-                        combs.append(key)
-                        flow = key.split(':')[0]
-                        vendor = key.split(':')[1]
-                        task = key.split(':')[2]
-                        task_dic['TASK'].setdefault(flow, {})
-                        task_dic['TASK'][flow].setdefault(vendor, {})
-                        task_dic['TASK'][flow][vendor].setdefault(task, {})
-
-                        if flow not in flows:
-                            flows.append(flow)
-
-                        if vendor not in vendors:
-                            vendors.append(vendor)
-
-                        if task not in tasks:
-                            tasks.append(task)
-
-                        for category in default_dic['TASK'][key].keys():
-                            task_dic['TASK'][flow][vendor][task].setdefault(category, {})
-                            for item in default_dic['TASK'][key][category].keys():
-                                task_dic['TASK'][flow][vendor][task][category][item] = default_dic['TASK'][key][category][item]
-
-        return [task_dic, combs, flows, vendors, tasks]
-
-    def save(self):
-        flow = self.edit_flow.text()
-        vendor = self.edit_vendor.text()
-        task = self.edit_task.text()
-        setting = {}
-        category = ''
-
-        reply = QMessageBox.question(self, "Warning", "Are you sure to update default setting for %s/%s/%s" % (flow, vendor, task), QMessageBox.Yes | QMessageBox.No)
-
-        if reply == QMessageBox.No:
-            return
-
-        for i in range(self.setup_model.rowCount()):
-            item = self.setup_model.index(i, 0).data()
-            value = self.setup_model.index(i, 1).data()
-
-            if re.search(r'\*\s+(.*)', item):
-                if not category == '' and setting[category] == {}:
-                    del setting[category]
-
-                category = re.search(r'\*\s+(.*)', item).group(1)
-                setting.setdefault(category, {})
-            else:
-                if value == '':
-                    continue
-
-                setting[category].setdefault(item, value)
-
-        if not category == '' and setting[category] == {}:
-            del setting[category]
-
-        if flow not in self.default_setting['TASK'].keys():
-            self.default_setting['TASK'].setdefault(flow, {})
-
-        if vendor not in self.default_setting['TASK'][flow].keys():
-            self.default_setting['TASK'][flow].setdefault(vendor, {})
-
-        self.default_setting['TASK'][flow][vendor][task] = copy.deepcopy(setting)
-        self.update_flag = 1
-
-        if '%s:%s:%s' % (flow, vendor, task) not in [self.comb_all.itemText(i) for i in range(self.comb_all.count())]:
-            self.comb_all.addItem('%s:%s:%s' % (flow, vendor, task))
-            self.comb_all.setCurrentIndex(self.comb_all.count() - 1)
-            self.update_table(self.comb_all.count() - 1)
-            self.remove_button.setEnabled(True)
-        else:
-            self.comb_all.setCurrentIndex([self.comb_all.itemText(i) for i in range(self.comb_all.count())].index('%s:%s:%s' % (flow, vendor, task)))
-            self.update_table([self.comb_all.itemText(i) for i in range(self.comb_all.count())].index('%s:%s:%s' % (flow, vendor, task)))
-
-    def save_to_yaml(self):
-        (yaml_file, file_type) = QFileDialog.getSaveFileName(self, 'Save Default Config', self.edit_path.text(), 'Default Config Files (*)')
-
-        if yaml_file:
-            final_setting = {'VAR': {}}
-
-            for i in range(self.env_model.rowCount()):
-                item = self.env_model.index(i, 0).data()
-                value = self.env_model.index(i, 1).data()
-
-                if item:
-                    if not item.strip() == '':
-                        final_setting['VAR'].setdefault(item, value)
-
-            final_setting.setdefault('TASK', {})
-
-            for flow in self.default_setting['TASK'].keys():
-                for vendor in self.default_setting['TASK'][flow].keys():
-                    for task in self.default_setting['TASK'][flow][vendor].keys():
-                        final_setting['TASK']['%s:%s:%s' % (flow, vendor, task)] = copy.deepcopy(self.default_setting['TASK'][flow][vendor][task])
-
-            try:
-                with open(yaml_file, 'w', encoding='utf-8') as f:
-                    yaml.dump(dict(final_setting), f, indent=4, sort_keys=False)
-            except Exception:
-                QMessageBox.warning(self, "Warning", "Cant save setting to %s" % yaml_file, QMessageBox.Ok)
-            else:
-                QMessageBox.warning(self, "Done", "Successfully save setting to %s" % yaml_file, QMessageBox.Ok)
-
-            self.save_signal.emit('update')
-
-            self.edit_path.setText(yaml_file)
-            self.update_flag = 0
-
-    def delete(self):
-        flow = self.edit_flow.text()
-        vendor = self.edit_vendor.text()
-        task = self.edit_task.text()
-        reply = QMessageBox.question(self, "Warning", "Are you sure to delete default setting for %s/%s/%s" % (flow, vendor, task), QMessageBox.Yes | QMessageBox.No)
-
-        if reply == QMessageBox.Yes:
-            del self.default_setting['TASK'][flow][vendor][task]
-            self.update_flag = 1
-            self.comb_all.removeItem([self.comb_all.itemText(i) for i in range(self.comb_all.count())].index('%s:%s:%s' % (flow, vendor, task)))
-
-            if self.comb_all.count() == 0:
-                self.comb_all.setCurrentText('-')
-                self.draw_table({'TASK': {}})
-                self.edit_flow.setText('-')
-                self.edit_vendor.setText('-')
-                self.edit_task.setText('-')
-                self.save_button.setText('-')
-                self.save_button.setEnabled(False)
-                self.remove_button.setEnabled(False)
-            else:
-                self.comb_all.setCurrentIndex(0)
-                self.update_table(0)
-        else:
-            pass
-
-
-class WindowForGlobalTaskInfo(QMainWindow):
+class WindowForTaskInformation(QMainWindow):
     def __init__(self, task_obj: job_manager.TaskObject = None, user_config_obj: UserConfig = None, read_only: bool = False):
         super().__init__()
         self.task_obj = task_obj
@@ -5333,19 +5079,9 @@ class WindowForGlobalTaskInfo(QMainWindow):
 
     def init_ui(self):
         # Detailed Task Info
-        self.detailed_task_window = WindowForDetailedTaskInfo(self.user_config_obj.user_input,
-                                                              self.user_config_obj.default_setting if self.user_config_obj.default_setting else AutoVivification(),
-                                                              self.user_config_obj.detailed_setting[self.task_obj.block][self.task_obj.version][self.task_obj.flow][self.task_obj.task],
-                                                              self.user_config_obj.blank_setting,
-                                                              self.user_config_obj.default_var,
-                                                              self.user_config_obj.cwd,
-                                                              self.task_obj.block,
-                                                              self.task_obj.version,
-                                                              self.task_obj.flow,
-                                                              self.task_obj.task,
-                                                              self.user_config_obj.user_var if self.user_config_obj.default_setting.get(self.task_obj.flow, {}) else self.user_config_obj.raw_setting['VAR'] if 'VAR' in self.user_config_obj.raw_setting.keys() else {},
-                                                              self.read_only,
-                                                              self.user_config_obj.ifp_obj.config_obj.var_dic)
+        self.detailed_task_window = WindowForTaskConfig(blank_setting=self.user_config_obj.blank_setting,
+                                                        task_obj=self.task_obj,
+                                                        read_only=self.read_only)
         self.detailed_task_window.resize_signal.connect(self.resize_window)
         self.detailed_task_window.close_signal.connect(self.close_window)
 
@@ -5353,7 +5089,7 @@ class WindowForGlobalTaskInfo(QMainWindow):
         self.detailed_job_window = WindowForTaskJobInfo(task_obj=self.task_obj, user_obj=self.user_config_obj, cache=self.cache)
 
         # Task Log Info
-        log_file = self.user_config_obj.detailed_setting[self.task_obj.block][self.task_obj.version][self.task_obj.flow][self.task_obj.task].get('RUN', {}).get('LOG', '')
+        log_file = self.user_config_obj.task_setting[self.task_obj.block][self.task_obj.version][self.task_obj.flow][self.task_obj.task].get('RUN', {}).get('LOG', '')
         log_file = log_file if log_file else self.user_config_obj.default_setting.get(self.task_obj.task, {}).get('RUN', {}).get('LOG', '')
         log_file = custom_format_map(log_file, {**self.user_config_obj.ifp_obj.config_obj.var_dic, **{'BLOCK': self.task_obj.block,
                                                                                                       'VERSION': self.task_obj.version,
@@ -5671,9 +5407,10 @@ class WindowForTaskJobInfo(QMainWindow):
             if self.timer.isActive():
                 self.timer.stop()
 
-    def _get_history_job_id(self) -> Tuple[bool, str]:
+    def _get_history_job_id(self) -> Tuple[bool, str, dict]:
         job_id = ''
         find = False
+        job_info = {}
 
         try:
             if os.path.exists(self.user_obj.history_cache_path):
@@ -5683,6 +5420,8 @@ class WindowForTaskJobInfo(QMainWindow):
                                  (df['flow'] == self.task_obj.flow) &
                                  (df['task'] == self.task_obj.task)]
 
+                job_info = filtered_df.to_dict(orient='records')
+
                 if not filtered_df.empty:
                     max_index = filtered_df['timestamp'].idxmax()
                     job_id = filtered_df.loc[max_index, 'job_id']
@@ -5690,9 +5429,9 @@ class WindowForTaskJobInfo(QMainWindow):
                     if job_id:
                         find = True
         except Exception:
-            return False, ''
+            return False, '', {}
 
-        return bool(find), str(job_id)
+        return bool(find), str(job_id), job_info
 
     @staticmethod
     def tail_csv_with_headers(filename: str, n: int = 1000) -> pd.DataFrame:
@@ -5705,7 +5444,7 @@ class WindowForTaskJobInfo(QMainWindow):
         return pd.read_csv(io.StringIO(''.join(last_lines)), header=None, skiprows=1, names=headers)
 
     def _load_cache(self):
-        find, job_id = self._get_history_job_id()
+        find, job_id, job_info = self._get_history_job_id()
 
         if find:
             check, job_dic = TaskJobCheckWorker.check_job_id(job_id=f'b:{job_id}')
@@ -5763,7 +5502,7 @@ class WindowForTaskJobInfo(QMainWindow):
         self.job_fin_time_line.setText(job_info.finish_time)
         self.job_cwd_line.setText(job_info.cwd)
 
-        run_method = self.user_obj.detailed_setting[self.task_obj.block][self.task_obj.version][self.task_obj.flow][self.task_obj.task].get('RUN', {}).get('RUN_METHOD', '')
+        run_method = self.user_obj.task_setting[self.task_obj.block][self.task_obj.version][self.task_obj.flow][self.task_obj.task].get('RUN', {}).get('RUN_METHOD', '')
         cmd = '{} {}'.format(custom_format_map(run_method, {**self.user_obj.ifp_obj.config_obj.var_dic, **{'BLOCK': self.task_obj.block,
                                                                                                            'VERSION': self.task_obj.version,
                                                                                                            'FLOW': self.task_obj.flow,
@@ -5839,6 +5578,7 @@ class WindowForTaskLogInfo(QMainWindow):
 
         self._load_cache()
         self.init_ui()
+        self._check_error_and_warning()
 
     def _load_cache(self):
         if self.cache.log.error:
@@ -5944,7 +5684,7 @@ class WindowForTaskLogInfo(QMainWindow):
     def _open_file_to_check(self):
         options = QFileDialog.Options()
         file_path, _ = QFileDialog.getOpenFileName(self,
-                                                   "Open Log File", "",
+                                                   "Open Log File", self.task_obj.task_obj.PATH if self.task_obj.task_obj.PATH else '',
                                                    "All Files (*);;Python Files (*.py)", options=options)
 
         self.file_path = file_path if os.path.exists(str(file_path)) else self.file_path
@@ -5953,12 +5693,41 @@ class WindowForTaskLogInfo(QMainWindow):
     def _load_file(self):
         log_file = self.log_path_line.text().strip()
 
+        if not os.path.isabs(log_file):
+            log_file = os.path.join(self.task_obj.task_obj.PATH if self.task_obj.task_obj.PATH else os.getcwd(), log_file)
+
         # For Test
         if os.path.exists(log_file):
             self.file_path = log_file
+            last_lines = self.read_last_lines(self.file_path, 10000)
 
-            with open(self.file_path, 'r', encoding='utf-8') as file:
-                self.file_editor.setPlainText(file.read())
+            if len(last_lines) >= 10000:
+                last_lines.insert(0, "Show last 10000 lines Only")
+
+            self.file_editor.setPlainText("\n".join(last_lines))
+
+    @staticmethod
+    def read_last_lines(file_path, num_lines=10000, buffer_size=8192):
+        with open(file_path, 'rb') as file:
+            file.seek(0, 2)
+            file_size = file.tell()
+            block_count = file_size // buffer_size
+            last_block_size = file_size % buffer_size
+
+            lines = []
+            for i in range(block_count, -1, -1):
+                if i == 0:
+                    file.seek(0)
+                    block = file.read(last_block_size)
+                else:
+                    file.seek(i * buffer_size)
+                    block = file.read(buffer_size)
+
+                lines = block.splitlines() + lines
+                if len(lines) >= num_lines:
+                    break
+
+            return [line.decode('utf-8', errors='replace') for line in lines]
 
     def _search_file(self):
         search_word = self.search_line.text().strip()
@@ -6141,13 +5910,17 @@ class CustomDelegate2(QStyledItemDelegate):
         default_value = index.model().data(index, Qt.UserRole + 1)
 
         if value == default_value:
-            painter.save()
-            painter.setPen(QPen(Qt.black))
-            font = option.font
-            font.setItalic(True)
-            painter.setFont(font)
-            painter.drawText(option.rect, Qt.AlignLeft | Qt.AlignVCenter, value)
-            painter.restore()
+            try:
+                painter.save()
+                painter.setPen(QPen(Qt.black))
+                font = option.font
+                font.setItalic(True)
+                painter.setFont(font)
+                painter.drawText(option.rect, Qt.AlignLeft | Qt.AlignVCenter, value)
+                painter.restore()
+            except Exception as error:
+                print(str(error))
+                super().paint(painter, option, index)
         else:
             super().paint(painter, option, index)
 

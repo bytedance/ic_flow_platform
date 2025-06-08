@@ -1,6 +1,9 @@
 VAR:
   BSUB_QUEUE: normal
   DEFAULT_PATH: ${CWD}/${BLOCK}/${VERSION}
+  SYN_RUN: RUN
+  STA_RUN: RUN
+  MAX_RUNNING_JOBS: ''
 TASK:
   syn_dc:
     BUILD:
@@ -11,6 +14,10 @@ TASK:
       COMMAND: make syn_dc
       RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
       LOG: ${DEFAULT_PATH}/dc/logs/log.dc.${BLOCK}
+    RUN.DBG:
+      PATH: ${DEFAULT_PATH}
+      COMMAND: make debug_syn_dc
+      RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
     CHECK:
       PATH: ${DEFAULT_PATH}/dc
       COMMAND: python3 ${DEMO_PATH}/project_setting/check/syn/synopsys/syn_synopsys.syn_dc.py
@@ -22,11 +29,12 @@ TASK:
       COMMAND: python3 ${DEMO_PATH}/project_setting/summary/collect_syn_qor.py
       VIEWER: /bin/soffice
       REPORT_FILE: ${DEFAULT_PATH}/dc/syn_qor.xlsx
+    RUN_MODE: ${SYN_RUN}
     RUN_AFTER:
       TASK: ''
     DEPENDENCY:
-      LICENSE: ''
-      FILE: ''
+      FILE: []
+      LICENSE: []
   fm_rtl2gate:
     BUILD:
       PATH: ${CWD}
@@ -45,8 +53,8 @@ TASK:
     RUN_AFTER:
       TASK: syn_dc
     DEPENDENCY:
-      LICENSE: ''
-      FILE: ''
+      FILE: []
+      LICENSE: []
   fm_rtl2pg:
     BUILD:
       PATH: ${CWD}
@@ -65,8 +73,8 @@ TASK:
     RUN_AFTER:
       TASK: syn_dc
     DEPENDENCY:
-      LICENSE: ''
-      FILE: ''
+      FILE: []
+      LICENSE: []
   presta:
     BUILD:
       PATH: ${CWD}
@@ -75,6 +83,10 @@ TASK:
       PATH: ${DEFAULT_PATH}
       COMMAND: make presta
       RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
+    RUN.CLEAN:
+      PATH: ${DEFAULT_PATH}
+      COMMAND: make clean_sta
+      RUN_METHOD: bsub -q ${BSUB_QUEUE} -Is
       LOG: ${DEFAULT_PATH}/pt/logs/log.pt.${BLOCK}
     CHECK:
       PATH: ${DEFAULT_PATH}/pt
@@ -82,11 +94,12 @@ TASK:
         -b ${BLOCK}
       VIEWER: ${IFP_INSTALL_PATH}/action/check/scripts/view_checklist_report -i
       REPORT_FILE: ${DEFAULT_PATH}/pt/file_check/file_check.rpt
+    RUN_MODE: ${STA_RUN}
     RUN_AFTER:
       TASK: syn_dc
     DEPENDENCY:
-      LICENSE: ''
-      FILE: ''
+      FILE: []
+      LICENSE: []
 FLOW:
   syn:
   - syn_dc

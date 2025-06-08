@@ -1,30 +1,38 @@
 # -*- coding: utf-8 -*-
 import copy
+import inspect
 import json
 import os
+import pwd
 import re
 import sys
 import stat
+import time
+import traceback
+
+import jinja2
 import shutil
 import argparse
 import datetime
 import getpass
 import importlib
-from typing import Dict
+from typing import Dict, Tuple, List
 
+from PyQt5.QtWebChannel import QWebChannel
+from PyQt5.QtWebEngineWidgets import QWebEngineView
 from matplotlib import colors
 import functools
 
 # Import PyQt5 libraries.
 import yaml
-from PyQt5.QtCore import pyqtSignal, QTimer, Qt, QProcess, QRect, QPoint
+from PyQt5.QtCore import pyqtSignal, QTimer, Qt, QProcess, QRect, QPoint, QUrl, QThread, pyqtSlot, QObject, QEvent
 from PyQt5.QtWidgets import QMainWindow, QApplication, QAction, QMessageBox, QTabWidget, QWidget, QFrame, QGridLayout, QTextEdit, QTableWidget, QHeaderView, QTableWidgetItem, QFileDialog, QTreeWidget, QTreeWidgetItem, QDialog, QCheckBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, \
-    QMenu, QTableView, QProgressDialog, QSplitter, QTabBar, QStylePainter, QStyleOptionTab, QStyle, QStatusBar
+    QMenu, QTableView, QProgressDialog, QSplitter, QTabBar, QStylePainter, QStyleOptionTab, QStyle, QStatusBar, QButtonGroup, QRadioButton, QActionGroup
 from PyQt5.QtGui import QIcon, QBrush, QColor, QFont, QStandardItem, QStandardItemModel, QPixmap
 
 # Import local python files.
 import parse_config
-from user_config import UserConfig, DefaultConfig, WindowForDependency, WindowForToolGlobalEnvEditor, WindowForAPI, WindowForGlobalTaskInfo, TaskJobCheckWorker
+from user_config import UserConfig, WindowForDependency, WindowForToolGlobalEnvEditor, WindowForAPI, WindowForTaskInformation, TaskJobCheckWorker
 from job_manager import JobManager
 
 # Import common python files.
@@ -40,7 +48,7 @@ QT_DEVICE_PIXEL_RATIO = 1
 os.environ['PYTHONUNBUFFERED'] = '1'
 CWD = os.getcwd()
 USER = getpass.getuser()
-IFP_VERSION = 'V1.4 (2024.11.30)'
+IFP_VERSION = 'V1.4.2 (2025.05.25)'
 
 # Solve some unexpected warning message.
 if 'XDG_RUNTIME_DIR' not in os.environ:
@@ -67,25 +75,53 @@ def readArgs():
                         default=False,
                         action='store_true',
                         help='Enable debug mode, will print more useful messages.')
+    parser.add_argument('-r', '--read',
+                        default=False,
+                        action='store_true',
+                        help='Read-Only Mode.')
     parser.add_argument('-a', '--action',
                         default='',
                         choices=['build', 'run', 'check', 'summarize'],
                         help='Execute action after launch IFP')
+    parser.add_argument('-t', '--title',
+                        default='IC Flow Platform %s' % IFP_VERSION,
+                        help='Specify GUI title')
+
     args = parser.parse_args()
 
     # get config_file.
-    args.config_file = os.path.abspath(args.config_file)
+    config_file_path = os.path.abspath(args.config_file)
+    status_file_name, cache_dir_name = common.gen_cache_file_name(config_file=os.path.basename(args.config_file))
 
-    if not os.path.exists(args.config_file):
-        gen_config_file(args.config_file)
+    if not args.read:
+        if os.path.exists(config_file_path):
+            if not os.access(os.getcwd(), os.W_OK) or not os.access(config_file_path, os.W_OK):
+                print('*Error*: You do not have write permission in this path or ifp.cfg.yaml')
+                print('*Error*: add \'-r\', and IFP will launch in Read-Only Mode.')
+                sys.exit(1)
 
-    if not os.path.exists('%s/.ifp.status.yaml' % os.path.dirname(args.config_file)):
-        gen_config_file('%s/.ifp.status.yaml' % os.path.dirname(args.config_file))
+        # Normal Mode: Generating status & cache from current directory
+        status_file_path = os.path.join(os.getcwd(), status_file_name)
+        cache_dir_path = os.path.join(os.getcwd(), cache_dir_name)
+
+        if not os.path.exists(config_file_path):
+            gen_config_file(config_file_path)
+
+        if not os.path.exists(status_file_path):
+            gen_config_file(status_file_path)
+
+        try:
+            os.makedirs(os.path.join(os.path.dirname(args.config_file), cache_dir_path), exist_ok=True)
+        except Exception as error:
+            print('*Error*: Failed on creating .ifp.')
+            print('*Error*: add \'-r\', and IFP will launch in Read-Only Mode.')
+            print('         ' + str(error))
+            sys.exit(1)
 
     if os.environ.get('IFP_DEMO_MODE', 'FALSE') == 'TRUE':
         print('>>> IFP Demo mode, you can set $IFP_DEMO_MODE=FALSE to exit')
 
-    return args.config_file, args.debug, args.action
+    return config_file_path, args.read, args.debug, args.action, args.title
 
 
 def gen_config_file(config_file):
@@ -99,6 +135,7 @@ def gen_config_file(config_file):
 
     except Exception as error:
         print('*Error*: Failed on creating config file "' + str(config_file) + '".')
+        print('*Error*: add \'-r\', and IFP will launch in Read-Only Mode.')
         print('         ' + str(error))
         sys.exit(1)
 
@@ -130,13 +167,35 @@ class MainWindow(QMainWindow):
     >>> action = task_obj.action
     >>> job_id = task_obj.job_id
     """
-    def __init__(self, config_file, debug, auto_execute_action):
+
+    def __init__(self, config_file, read, debug, auto_execute_action, title):
         super().__init__()
+        self.waiting_window = common_pyqt5.WaitingWindow(message='Loading IFP ...')
+        self.waiting_window.run()
 
         # IFP input parameters
-        self.ifp_config_file = config_file
+        self.read_mode = read
         self.debug = debug
         self.auto_execute_action = auto_execute_action
+        self.title = title if not self.read_mode else f'{title} (Read Only)'
+
+        self.ifp_config_file = config_file
+        status_file_name, cache_dir_name = common.gen_cache_file_name(config_file=os.path.basename(self.ifp_config_file))
+
+        if not self.read_mode:
+            dir_path = os.getcwd()
+            self.ifp_status_file = os.path.join(dir_path, status_file_name)
+            self.ifp_cache_dir = os.path.join(dir_path, cache_dir_name)
+        else:
+            dir_path = os.path.dirname(self.ifp_config_file)
+
+            if os.path.exists(os.path.join(dir_path, status_file_name)):
+                self.ifp_status_file = os.path.join(os.path.join(dir_path, status_file_name))
+            else:
+                self.ifp_status_file = os.path.join(os.getcwd(), f'{status_file_name}.read_mode_temp_file')
+                gen_config_file(self.ifp_status_file)
+
+            self.ifp_cache_dir = os.path.join(dir_path, cache_dir_name)
 
         # Parsing IFP System settings from user home directory and create parameters
         self.setting_parameters_obj = SystemSetting()
@@ -175,7 +234,6 @@ class MainWindow(QMainWindow):
         # Initial job_manager.py dict
         self.job_manager = JobManager(self, debug=self.debug)
         self.job_manager.disable_gui_signal.connect(self.disable_gui)
-        self.job_manager.finish_signal.connect(self.send_result_to_user)
         self.job_manager.close_signal.connect(self.final_close)
         # Initial ifp.py dict
         self.update_dict_by_load_config_file(self.ifp_config_file)
@@ -183,7 +241,7 @@ class MainWindow(QMainWindow):
 
         # Initial user_config.py dict and GUI
         self.task_window = None
-        self.task_window = UserConfig(self, self.ifp_config_file, self.default_config_file, self.api_yaml)
+        self.task_window = UserConfig(self, self.config_obj, self.ifp_config_file, self.default_config_file, self.api_yaml)
         self.task_window.load()
         self.task_window.save_flag.connect(lambda: self.save(save_mode='keep'))
 
@@ -191,7 +249,7 @@ class MainWindow(QMainWindow):
         self.config_tab_index = {}
         self.guide_window = GuideWindow()
         self.setting_window = None
-        self.dependency_window = None
+        self.dependency_window = WindowForDependency(mode='widget')
         self.var_window = None
         self.api_window = None
         self.config_view_window = None
@@ -199,11 +257,17 @@ class MainWindow(QMainWindow):
         self.default_config_window = None
         self.task_multiple_select_window = None
 
+        # User Setting
         self.setting_widget = None
         self.task_widget = None
-        self.dependency_widget = None
+        self.dependency_widget = self.dependency_window.init_ui()
         self.var_widget = None
         self.api_widget = None
+
+        # Main
+        self.toolbar_list = []
+        self.control_menu = None
+        self.file_menu = None
 
         # Generate the GUI.
         self.main_table_title_list = ['Block', 'Version', 'Flow', 'Task', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm', 'Build Status', 'Run Status', 'Check Status', 'Summarize Status', 'Release Status']
@@ -212,7 +276,7 @@ class MainWindow(QMainWindow):
         # Initial ifp.py GUI
 
         self.gen_gui()
-        self.load_status_file('./.ifp.status.yaml')
+        self.load_status_file(self.ifp_status_file)
 
         # System log
         self.ifp_start_time = datetime.datetime.now()
@@ -226,6 +290,9 @@ class MainWindow(QMainWindow):
         # Init close dialog
         self.close_dialog = QProgressDialog()
         self.init_close_dialog()
+
+        self.resize_filter = ResizeEventFilter(self)
+        self.installEventFilter(self.resize_filter)
 
         if self.ifp_env_setting['System settings']['Appearance']['Fullscreen mode']['value']:
             self.showMaximized()
@@ -246,13 +313,48 @@ class MainWindow(QMainWindow):
         self.current_selected_task_dic = None
         self.current_selected_task_obj = None
 
-        self.export_complete_ifp_cfg_yaml()
-        self.execute_action_after_launch_ifp()
+        self.progress_dialog = None
 
-        self.cache_view_path = os.path.join(common.get_user_cache_path(), 'VIEW/{TAB}/view_status.json')
+        if not self.read_mode:
+            self.export_complete_ifp_cfg_yaml()
+
+        self.execute_action_after_launch_ifp()
+        self.flow_chart_window = FlowChartWindow(config_obj=self.config_obj, width=925, height=750)
+        self.flow_chart_window.block_version_task.connect(self.open_task_information)
+
+        self.full_flowchart_window = FlowChartWindow(config_obj=self.config_obj,
+                                                     width=int(self.width() * 0.78) if not self.isMaximized() else int(common_pyqt5.get_monitors()[0].width * 0.76),
+                                                     height=int(self.height() * 0.52) if not self.isMaximized() else int(common_pyqt5.get_monitors()[0].height * 0.52))
+        self.full_flowchart_window.block_version_task.connect(self.open_task_information)
+        self.gen_full_flowchart()
+
+        self.cache_view_path = os.path.join(os.getcwd(), f'{os.path.basename(self.ifp_cache_dir)}/VIEW/{{TAB}}/view_status.json')
         self.tab_name = 'MAIN'
 
         self._load_cache()
+        self.sidebar_tree.update()
+
+        if self.read_mode:
+            self.set_read_mode()
+
+        self.waiting_window.close()
+
+    def set_read_mode(self):
+        # Disable User Config
+        self.disable_gui_flag = True
+        self.disable_gui(True)
+
+        # Disable Main Window
+        # Toolbar
+        for toolbar in self.toolbar_list:
+            toolbar.setEnabled(False)
+
+        # Window Menu
+        for control_action in self.control_menu.actions():
+            control_action.setEnabled(False)
+
+        for file_action in self.file_menu.actions():
+            file_action.setEnabled(False)
 
     def _load_cache(self):
         self._load_view_status_cache()
@@ -270,8 +372,22 @@ class MainWindow(QMainWindow):
 
             self.view_status_dic['block'].update({key: update_dic['block'][key] for key in self.view_status_dic['block'] if key in update_dic['block']})
             self.view_status_dic['task'].update({key: update_dic['task'][key] for key in self.view_status_dic['task'] if key in update_dic['task']})
+            self.view_status_dic['column'].update({key: update_dic['column'][key] for key in self.view_status_dic['column'] if key in update_dic['column']})
         except Exception:
             return
+
+        for column in self.view_status_dic['column']:
+            if not self.view_status_dic['column'][column]:
+                self.update_main_table_row_visible('column', column, self.view_status_dic['column'][column])
+
+        self.update_main_table_status()
+        self.apply_main_table_status(status=self.view_status_dic)
+
+    def gen_full_flowchart(self):
+        layout = QVBoxLayout()
+        self.flow_chart_widget.setLayout(layout)
+        layout.addWidget(self.full_flowchart_window)
+        self.full_flowchart_window.gen_full_flow_graph(dependency_dic=self.task_window.dependency_priority)
 
     # GUI (start)
     def gen_gui(self):
@@ -290,11 +406,13 @@ class MainWindow(QMainWindow):
         self.main_tab = QWidget()
         self.top_tab.addTab(self.main_tab, 'MAIN')
 
+        self.flow_chart_widget = QWidget()
+
         self.gen_main_tab()
         self.gen_config_tab()
 
         # Gen message frame
-        self.message_frame = QFrame()
+        self.message_frame = QFrame(self.main_tab)
         self.message_frame.setFrameShadow(QFrame.Raised)
         self.message_frame.setFrameShape(QFrame.Box)
         self.gen_message_frame()
@@ -311,11 +429,12 @@ class MainWindow(QMainWindow):
 
         # Set GUI size, title and icon.
         self.gui_width = 1200
-        self.gui_height = 650
-        self.resize(self.gui_width, self.gui_height)
-        self.setWindowTitle('IC Flow Platform %s' % IFP_VERSION)
+        self.gui_height = 800
+        common_pyqt5.auto_resize(self, self.gui_width, self.gui_height)
+        self.setWindowTitle(self.title)
         self.setWindowIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/logo/ifp.png'))
         common_pyqt5.center_window(self)
+        self.resize_table_column()
 
     def gen_menubar(self):
         menubar = self.menuBar()
@@ -350,18 +469,18 @@ class MainWindow(QMainWindow):
         exit_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/exit.png'))
         exit_action.triggered.connect(self.close)
 
-        file_menu = menubar.addMenu('File')
-        file_menu.addSeparator()
-        file_menu.addAction(self.save_status_file_action)
-        file_menu.addAction(self.load_status_file_action)
-        file_menu.addSeparator()
-        file_menu.addAction(save_config_file_action)
-        file_menu.addAction(load_config_file_action)
-        file_menu.addSeparator()
-        file_menu.addAction(save_default_yaml_action)
-        file_menu.addAction(save_api_yaml_action)
-        file_menu.addSeparator()
-        file_menu.addAction(exit_action)
+        self.file_menu = menubar.addMenu('File')
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.save_status_file_action)
+        self.file_menu.addAction(self.load_status_file_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(save_config_file_action)
+        self.file_menu.addAction(load_config_file_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(save_default_yaml_action)
+        self.file_menu.addAction(save_api_yaml_action)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(exit_action)
 
         # View
         config_view_action = QAction('Config View', self)
@@ -407,52 +526,48 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(detail_status_action)
 
-        # Contral
-        contral_all_action = QAction('&All_Steps', self)
-        contral_all_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/all.png'))
-        contral_all_action.triggered.connect(lambda: self.execute_action(common.action.run, run_all_steps=True))
+        # Control
+        control_all_action = QAction('&All_Steps', self)
+        control_all_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/all.png'))
+        control_all_action.triggered.connect(lambda: self.execute_action(common.action.run, run_all_steps=True))
 
-        contral_build_action = QAction('&' + common.action.build, self)
-        contral_build_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/build.png'))
-        contral_build_action.triggered.connect(lambda: self.execute_action(common.action.build))
+        control_build_action = QAction('&' + common.action.build, self)
+        control_build_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/build.png'))
+        control_build_action.triggered.connect(lambda: self.execute_action(common.action.build))
 
-        contral_run_action = QAction('&' + common.action.run, self)
-        contral_run_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/run.png'))
-        contral_run_action.triggered.connect(lambda: self.execute_action(common.action.run))
+        control_run_action = QAction('&' + common.action.run, self)
+        control_run_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/run.png'))
+        control_run_action.triggered.connect(lambda: self.execute_action(common.action.run))
 
-        contral_kill_action = QAction('&' + common.action.kill, self)
-        contral_kill_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/kill.png'))
-        contral_kill_action.triggered.connect(lambda: self.execute_action(common.action.kill))
+        control_kill_action = QAction('&' + common.action.kill, self)
+        control_kill_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/kill.png'))
+        control_kill_action.triggered.connect(lambda: self.execute_action(common.action.kill))
 
-        contral_check_action = QAction('&' + common.action.check, self)
-        contral_check_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/checklist.png'))
-        contral_check_action.triggered.connect(lambda: self.execute_action(common.action.check))
+        control_check_action = QAction('&' + common.action.check, self)
+        control_check_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/checklist.png'))
+        control_check_action.triggered.connect(lambda: self.execute_action(common.action.check))
 
-        contral_summary_action = QAction('&' + common.action.summarize, self)
-        contral_summary_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary.png'))
-        contral_summary_action.triggered.connect(lambda: self.execute_action(common.action.summarize))
+        control_summary_action = QAction('&' + common.action.summarize, self)
+        control_summary_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary.png'))
+        control_summary_action.triggered.connect(lambda: self.execute_action(common.action.summarize))
 
-        contral_release_action = QAction('&' + common.action.release, self)
-        contral_release_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/release.png'))
-        contral_release_action.triggered.connect(lambda: self.execute_action(common.action.release))
+        control_release_action = QAction('&' + common.action.release, self)
+        control_release_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/release.png'))
+        control_release_action.triggered.connect(lambda: self.execute_action(common.action.release))
 
-        contral_menu = menubar.addMenu('Control')
-        contral_menu.addAction(contral_all_action)
-        contral_menu.addAction(contral_build_action)
-        contral_menu.addAction(contral_run_action)
-        contral_menu.addAction(contral_kill_action)
-        contral_menu.addAction(contral_check_action)
-        contral_menu.addAction(contral_summary_action)
-        contral_menu.addAction(contral_release_action)
+        self.control_menu = menubar.addMenu('Control')
+        self.control_menu.addAction(control_all_action)
+        self.control_menu.addAction(control_build_action)
+        self.control_menu.addAction(control_run_action)
+        self.control_menu.addAction(control_kill_action)
+        self.control_menu.addAction(control_check_action)
+        self.control_menu.addAction(control_summary_action)
+        self.control_menu.addAction(control_release_action)
 
         # Tool
         lsf_monitor_action = QAction('LSF monitor', self)
         lsf_monitor_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/chart.png'))
         lsf_monitor_action.triggered.connect(self.show_lsf_monitor)
-
-        config_default_action = QAction('Config Default Yaml', self)
-        config_default_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/edit_file.png'))
-        config_default_action.triggered.connect(self.edit_config_default)
 
         tool_menu = menubar.addMenu('Tool')
         tool_menu.addAction(lsf_monitor_action)
@@ -470,9 +585,18 @@ class MainWindow(QMainWindow):
         help_menu.addAction(about_action)
         help_menu.addAction(guide_action)
 
+        common.add_api_menu_bar(self, self.user_api, menubar)
+
     def gen_status_bar(self):
         self.statusBar = QStatusBar()
         self.setStatusBar(self.statusBar)
+
+    def resizeEvent(self, a0):
+        # This method is called when the window state changes
+        if hasattr(self, 'full_flowchart_window'):
+            self.full_flowchart_window.resize_graph(width=int(self.width() * 0.76), height=int(self.height() * 0.52))
+
+        super().changeEvent(a0)
 
     def update_status_bar(self, message):
         self.statusBar.showMessage(message)
@@ -483,64 +607,77 @@ class MainWindow(QMainWindow):
         run_all_steps_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/all.png'))
         run_all_steps_action.triggered.connect(lambda: self.execute_action(common.action.run, run_all_steps=True))
 
-        self.toolbar = self.addToolBar('Run All Steps')
-        self.toolbar.addAction(run_all_steps_action)
+        toolbar = self.addToolBar('Run All Steps')
+        toolbar.addAction(run_all_steps_action)
+        self.toolbar_list.append(toolbar)
 
         # Build
         build_action = QAction(common.action.build, self)
         build_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/build.png'))
         build_action.triggered.connect(lambda: self.execute_action(common.action.build))
 
-        self.toolbar = self.addToolBar(common.action.build)
-        self.toolbar.addAction(build_action)
+        toolbar = self.addToolBar(common.action.build)
+        toolbar.addAction(build_action)
+        self.toolbar_list.append(toolbar)
 
         # Run
         run_action = QAction(common.action.run, self)
         run_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/run.png'))
         run_action.triggered.connect(lambda: self.execute_action(common.action.run))
 
-        self.toolbar = self.addToolBar(common.action.run)
-        self.toolbar.addAction(run_action)
+        toolbar = self.addToolBar(common.action.run)
+        toolbar.addAction(run_action)
+        self.toolbar_list.append(toolbar)
 
         # Kill
         kill_action = QAction(common.action.kill, self)
         kill_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/kill.png'))
         kill_action.triggered.connect(lambda: self.execute_action(common.action.kill))
 
-        self.toolbar = self.addToolBar(common.action.kill)
-        self.toolbar.addAction(kill_action)
+        toolbar = self.addToolBar(common.action.kill)
+        toolbar.addAction(kill_action)
+        self.toolbar_list.append(toolbar)
 
         # Check
         check_action = QAction(common.action.check, self)
         check_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/checklist.png'))
         check_action.triggered.connect(lambda: self.execute_action(common.action.check))
 
-        self.toolbar = self.addToolBar(common.action.check)
-        self.toolbar.addAction(check_action)
+        toolbar = self.addToolBar(common.action.check)
+        toolbar.addAction(check_action)
+        self.toolbar_list.append(toolbar)
 
         # Summary
         summary_action = QAction(common.action.summarize, self)
         summary_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary.png'))
         summary_action.triggered.connect(lambda: self.execute_action(common.action.summarize))
 
-        self.toolbar = self.addToolBar(common.action.summarize)
-        self.toolbar.addAction(summary_action)
+        toolbar = self.addToolBar(common.action.summarize)
+        toolbar.addAction(summary_action)
+        self.toolbar_list.append(toolbar)
 
         # Release
         release_action = QAction(common.action.release, self)
         release_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/release.png'))
         release_action.triggered.connect(lambda: self.execute_action(common.action.release))
 
-        self.toolbar = self.addToolBar('Release')
-        self.toolbar.addAction(release_action)
+        toolbar = self.addToolBar('Release')
+        toolbar.addAction(release_action)
+        self.toolbar_list.append(toolbar)
+
+        # self.toolbar = self.addToolBar('API')
+        self.toolbar_list += common.add_api_tool_bar(self, self.user_api)
 
     def show_about(self):
         QMessageBox.about(self, 'IC flow Platform', """                                                       Version """ + str(IFP_VERSION) + """
 
 Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
-    def _cache_view_window_status(self, save: bool, tab_name: str, view_status_dic: Dict[str, Dict[str, bool]]):
+    def cache_view_window_status(self, save: bool, tab_name: str, view_status_dic: Dict[str, Dict[str, bool]]):
         if not save:
+            return
+
+        if self.read_mode:
             return
 
         cache_path = self.cache_view_path.format_map({'TAB': tab_name})
@@ -614,9 +751,12 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.write_system_log("close ifp, total runtime %02d:%02d:%02d" % (hours, minutes, seconds))
 
         self.task_window.thread.quit()
-        self.save_status_file('./.ifp.status.yaml')
+        self.save_status_file(self.ifp_status_file)
+        self.cache_view_window_status(save=True, tab_name=self.tab_name, view_status_dic=self.view_status_dic)
+
         self.timer.stop()
         event.accept()
+
     # CloseDialog (end)
 
     # SettingWindow (start) to show IFP system settings
@@ -643,13 +783,16 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                                                                                        'value': self.fullscreen_flag,
                                                                                        'description': 'Launch IFP in fullscreen mode'}},
                                                     'Cluster management': {'$BSUB_QUEUE': {'widget_type': 'edit',
-                                                                                           'value': self.config_dic['VAR']['BSUB_QUEUE'] if 'BSUB_QUEUE' in self.config_dic['VAR'].keys() else None}},
+                                                                                           'value': self.config_dic['VAR']['BSUB_QUEUE'] if 'BSUB_QUEUE' in self.config_dic['VAR'].keys() else None},
+                                                                           '$MAX_RUNNING_JOBS': {'widget_type': 'edit',
+                                                                                                 'value': self.config_obj.var_dic.get('MAX_RUNNING_JOBS')}
+                                                                           },
                                                     'Process management': {'Ignore fail tasks': {'widget_type': 'select',
                                                                                                  'value': self.ignore_fail,
                                                                                                  'description': 'Even if dependent tasks failed, selected task can start on schedule'},
                                                                            'Rerun before view': {'widget_type': 'select',
                                                                                                  'value': self.rerun_check_or_summarize_before_view,
-                                                                                                 'description': 'Auto rerun CHECK(SUMMARIZE) command before view check(summarize) report'},
+                                                                                                 'description': 'Auto re-check/re-summarize before view report'},
                                                                            'Send results': {'widget_type': 'select',
                                                                                             'value': self.send_result,
                                                                                             'description': 'Send result to users after action done'},
@@ -658,7 +801,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                                                                                                    'description': 'Remind user to confirm if rerun PASSED tasks'},
                                                                            'Auto check': {'widget_type': 'select',
                                                                                           'value': self.auto_check,
-                                                                                          'description': 'Auto execute check action after run finish'}
+                                                                                          'description': 'Auto execute check action after run finish'},
+                                                                           'Makefile Mode': {'widget_type': 'select',
+                                                                                             'value': self.makefile_mode,
+                                                                                             'description': 'Automatically select the prerequisite tasks for a Task.'},
                                                                            },
 
                                                     },
@@ -674,13 +820,12 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
                                                       }}
 
-    def update_ifp_setting(self, settings, need_reload_flag):
+    def update_ifp_setting(self, settings, need_reload_flag, ignore_fail_flag=True):
         self.ifp_env_setting = settings
 
         if not settings['Project settings']['Project']['Default setting']['value'] == self.default_config_file:
             self.default_config_file = settings['Project settings']['Project']['Default setting']['value']
             self.task_window.default_yaml = settings['Project settings']['Project']['Default setting']['value']
-            self.task_window.update_default_setting()
 
         if not settings['Project settings']['Project']['API setting']['value'] == self.api_yaml:
             self.api_yaml = settings['Project settings']['Project']['API setting']['value']
@@ -701,7 +846,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if not settings['System settings']['Process management']['Ignore fail tasks']['value'] == self.ignore_fail:
             self.setting_parameters_obj.update_local_config('ignore_fail', settings['System settings']['Process management']['Ignore fail tasks']['value'])
             self.ignore_fail = settings['System settings']['Process management']['Ignore fail tasks']['value']
-            self.set_ignore_fail_for_all_tasks()
+
+            if ignore_fail_flag:
+                self.set_ignore_fail_for_all_tasks()
 
         if not settings['System settings']['Process management']['Send results']['value'] == self.send_result:
             self.setting_parameters_obj.update_local_config('send_result', settings['System settings']['Process management']['Send results']['value'])
@@ -710,6 +857,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if not settings['System settings']['Process management']['Auto check']['value'] == self.auto_check:
             self.setting_parameters_obj.update_local_config('auto_check', settings['System settings']['Process management']['Auto check']['value'])
             self.auto_check = settings['System settings']['Process management']['Auto check']['value']
+
+        if not settings['System settings']['Process management']['Makefile Mode']['value'] == self.makefile_mode:
+            self.setting_parameters_obj.update_local_config('makefile_mode', settings['System settings']['Process management']['Makefile Mode']['value'])
+            self.makefile_mode = settings['System settings']['Process management']['Makefile Mode']['value']
 
         if not settings['System settings']['Appearance']['Fullscreen mode']['value'] == self.fullscreen_flag:
             self.setting_parameters_obj.update_local_config('fullscreen_flag', settings['System settings']['Appearance']['Fullscreen mode']['value'])
@@ -753,12 +904,22 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     def gen_main_view_gui(self):
         self.config_view_window = ViewWindow(status_dic=self.view_status_dic, disable_list=self.view_disable_item_list, title=f'{self.tab_name} View')
         self.config_view_window.setWindowModality(Qt.ApplicationModal)
-        self.config_view_window.item_select_status_signal.connect(self.update_main_view)
-        self.config_view_window.save_cache.connect(functools.partial(self._cache_view_window_status, tab_name=self.tab_name, view_status_dic=self.view_status_dic))
+        # self.config_view_window.item_select_status_signal.connect(self.update_main_view)
+        self.config_view_window.status.connect(self.apply_main_table_status)
+        self.config_view_window.save_cache.connect(functools.partial(self.cache_view_window_status, tab_name=self.tab_name, view_status_dic=self.view_status_dic))
         self.config_view_window.init_ui()
         self.config_view_window.show()
 
-    def update_main_view(self, view_name, item_text, item_select_status, mode='update'):
+    def apply_main_table_status(self, status: dict):
+        for view_name, view_status in status.items():
+            for item_name, item_status in view_status.items():
+                self.update_main_table_row_visible(view_name=view_name, item_text=item_name, item_select_status=item_status)
+
+        self.view_status_dic = status
+        self.config_obj.update_batch_visible(view_status=self.view_status_dic)
+        self.update_main_table_status()
+
+    def update_main_table_row_visible(self, view_name, item_text, item_select_status):
         if view_name == 'column':
             if item_text not in self.header_column_mapping.keys():
                 return
@@ -800,30 +961,33 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                 for row in self.task_row_mapping[item_text]:
                     self.main_table_info_list[row]['Visible'] = False
 
-        self.view_status_dic[view_name][item_text] = item_select_status
+    def update_main_table_status(self):
+        self.update_main_table()
+        self.update_status_table()
+        self.sidebar_tree.update()
 
-        if mode == 'update':
-            self.update_main_table()
-            self.update_status_table()
+    def _show_hide_table_row(self, row: int, column: int, enable: bool):
+        if column == 3:
+            self.main_table_info_list[row]['Visible'] = enable
+        elif column == 0:
+            block = self.main_table_info_list[row]['Block']
+            self.update_main_table_row_visible('block', self.main_table_info_list[row]['Block'], enable)
+            self.view_status_dic['block'][block] = enable
+            self.config_obj.update_batch_visible(view_status=self.view_status_dic)
+        else:
+            return
 
+        self.update_main_table_status()
         self.top_tab.setCurrentIndex(1)
 
     def gen_config_view_gui(self):
         self.config_view_window = ViewWindow(status_dic=self.task_window.view_status_dic, title=f'{self.task_window.tab_name} View')
         self.config_view_window.setWindowModality(Qt.ApplicationModal)
-        self.config_view_window.item_select_status_signal.connect(self.task_window.update_config_view)
+        self.config_view_window.status.connect(self.task_window.apply_config_view_status)
         self.config_view_window.init_ui()
         self.config_view_window.show()
 
     # ViewWindow (end)
-
-    # DefaultConfigWindow (start) for admins to edit config
-    def edit_config_default(self):
-        self.default_config_window = DefaultConfig(self.default_config_file)
-        self.default_config_window.save_signal.connect(self.task_window.update_default_setting)
-        self.default_config_window.show()
-
-    # DefaultConfigWindow (end)
 
     # MultipleSelectWindow (start)
     def select_flows(self):
@@ -884,11 +1048,19 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     # Process status/config files (start) #
     def save_status_file(self, status_file=''):
+        if self.read_mode:
+            return
+
         if not status_file:
             (status_file, file_type) = QFileDialog.getSaveFileName(self, 'Save status file', '.', 'YAML (*.yaml)')
 
         if status_file:
-            self.update_message_text({'message': 'Save status into file "' + str(status_file) + '".', 'color': 'black'})
+            frame = inspect.currentframe()
+            caller_frame = frame.f_back
+            caller_info = inspect.getframeinfo(caller_frame)
+
+            if not caller_info.function == 'generate_main_tab_api_menu':
+                self.update_message_text({'message': 'Save status into file "' + str(status_file) + '".', 'color': 'black'})
 
             # Seitch self.main_table_info_list into a dict.
             main_table_info_dic = {}
@@ -912,6 +1084,8 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             with open(status_file, 'w', encoding='utf-8') as SF:
                 yaml.dump(main_table_info_dic, SF, indent=4, sort_keys=False)
 
+        self.save_api_for_read_mode()
+
     def load_status_file(self, status_file=''):
         if not status_file:
             (status_file, file_type) = QFileDialog.getOpenFileName(self, 'Load status file', '.', '*')
@@ -920,8 +1094,8 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.update_message_text({'message': 'Load status with file "' + str(status_file) + '".', 'color': 'black'})
 
             # Get status from status file.
-            with open(status_file, 'rb') as SF:
-                saved_status_dic = yaml.load(SF, Loader=yaml.FullLoader)
+            with open(status_file, 'r', encoding='utf-8') as SF:
+                saved_status_dic = yaml.load(SF, Loader=yaml.CLoader)
 
             if not saved_status_dic:
                 saved_status_dic = {}
@@ -939,7 +1113,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                         runtime = status_dic['Runtime']
                         job = status_dic['Job']
 
-                        if status == common.status.running and runtime and runtime != "pending":
+                        if status == common.status.running and runtime != "pending":
                             status = self._update_main_tab_job_status(status=status, job=job)
 
                         self.main_table_info_list[i]['Status'] = status
@@ -986,6 +1160,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.task_window.final_setting['DEFAULT_YAML'] = self.default_config_file
             self.task_window.final_setting['API_YAML'] = self.api_yaml
             self.task_window.final_setting['VAR']['BSUB_QUEUE'] = self.ifp_env_setting['System settings']['Cluster management']['$BSUB_QUEUE']['value']
+            self.task_window.final_setting['VAR']['MAX_RUNNING_JOBS'] = self.ifp_env_setting['System settings']['Cluster management']['$MAX_RUNNING_JOBS']['value']
 
             with open(config_file, 'w', encoding='utf-8') as SF:
                 yaml.dump(dict(self.task_window.final_setting), SF, indent=4, sort_keys=False)
@@ -1000,17 +1175,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if not config_file:
             (config_file, file_type) = QFileDialog.getOpenFileName(self, 'Load config file', '.', '*')
 
-        progress_dialog = QProgressDialog("Load ...", "Cancel", 0, 0, self)
-        progress_dialog.setWindowTitle('Please Wait')
-        progress_dialog.setCancelButton(None)
-        progress_dialog.setWindowModality(Qt.WindowModal)
-        progress_dialog.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.CustomizeWindowHint)
-        progress_dialog.setRange(0, 0)
-        progress_dialog.show()
-        progress_dialog.raise_()
-        progress_dialog.activateWindow()
-
-        QApplication.processEvents()
+        self.waiting_window.run()
 
         if config_file:
             try:
@@ -1018,30 +1183,60 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                     yaml.load(fh, Loader=yaml.FullLoader)
             except Exception:
                 self.update_message_text({'message': 'Failed load config file "' + str(config_file) + '".', 'color': 'red'})
-                progress_dialog.close()
+                self.progress_dialog.close()
                 return
 
-            self.save_status_file('./.ifp.status.yaml')
+            self.save_status_file(self.ifp_status_file)
             self.update_message_text({'message': 'Load config file "' + str(config_file) + '".', 'color': 'black'})
             # Update self.config_dic and self.main_table_info_list with new config_file.
             self.update_dict_by_load_config_file(config_file)
+            self.config_obj.save_ifp_records()
             # Update related GUI parts.
             self._load_cache()
             self.update_sidebar_tree()
             self.update_status_table()
             self.update_tab_index_dic()
             self.update_main_table()
-            self.load_status_file('./.ifp.status.yaml')
+            self.full_flowchart_window.gen_full_flow_graph(dependency_dic=self.task_window.dependency_priority, update=True)
+            self.load_status_file(self.ifp_status_file)
             self.task_window.config_file = config_file
             self.task_window.config_path_edit.setText(config_file)
             self.task_window.load()
             self.update_config_tab()
 
         self.export_complete_ifp_cfg_yaml()
-        progress_dialog.close()
+        self.waiting_window.close()
+
+    def reload_config_after_finished_api(self):
+        while True:
+            if self.progress_dialog is None:
+                break
+
+            time.sleep(1)
+
+        self.load(self.task_window.config_file)
+        self.progress_dialog = None
+
+    def blocking_gui(self, action_name: str):
+        self.progress_dialog = QProgressDialog(f"Executing {action_name} and blocking main GUI", "Cancel", 0, 0, self)
+        self.progress_dialog.setWindowTitle('Executing API')
+        self.progress_dialog.setCancelButton(None)
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.CustomizeWindowHint | Qt.WindowStaysOnTopHint)
+        self.progress_dialog.setRange(0, 0)
+        self.progress_dialog.show()
+        self.progress_dialog.raise_()
+        self.progress_dialog.activateWindow()
+        QApplication.processEvents()
+
+    def unblocking_gui(self):
+        if self.progress_dialog is not None:
+            self.progress_dialog.close()
+
+        self.progress_dialog = None
 
     def export_complete_ifp_cfg_yaml(self):
-        complete_ifp_cfg_yaml_path = '%s/.ifp/ifp.cfg.complete.yaml' % CWD
+        complete_ifp_cfg_yaml_path = f'{self.ifp_cache_dir}/ifp.cfg.complete.yaml'
         complete_dict = {'PROJECT': self.ifp_env_setting['Project settings']['Project']['Project name']['value'], 'GROUP': self.ifp_env_setting['Project settings']['Project']['User group']['value'], 'DEFAULT_YAML': self.default_config_file, 'API_YAML': self.api_yaml, 'BLOCK': {}, 'VAR': {}}
 
         for block in self.config_dic['BLOCK'].keys():
@@ -1063,10 +1258,16 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     def update_dict_by_load_config_file(self, config_file):
         self.ifp_config_file = config_file
+
+        if self.read_mode:
+            common.update_for_read_mode(cwd=os.path.dirname(self.ifp_config_file), user=pwd.getpwuid(os.stat(self.ifp_config_file).st_uid).pw_name)
+
         self.config_obj = parse_config.Config(config_file)
+        self.config_obj.update_for_read_mode(cwd=os.path.dirname(self.ifp_config_file), user=pwd.getpwuid(os.stat(self.ifp_config_file).st_uid).pw_name)
         self.default_config_file = self.config_obj.default_config_file
         self.api_yaml = self.config_obj.api_yaml
         self.user_api = common.parse_user_api(self.api_yaml)
+        self.save_api_for_read_mode()
         self.config_dic = self.config_obj.config_dic
         self.main_table_info_list = self.config_obj.main_table_info_list
         self.job_manager.update(self.config_dic)
@@ -1100,6 +1301,21 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.main_table_info_list[i]['Task_obj'] = self.job_manager.all_tasks[block][version][flow][task]
 
         self.set_ignore_fail_for_all_tasks()
+
+    def save_api_for_read_mode(self):
+        if self.read_mode:
+            return
+
+        if self.api_yaml:
+            try:
+                dir_path = os.path.join(os.getcwd(), '.ifp/config')
+                os.makedirs(dir_path, exist_ok=True)
+
+                with open(os.path.join(dir_path, os.path.basename(self.api_yaml)), 'w') as ap:
+                    ap.write(yaml.dump(self.user_api, allow_unicode=True))
+            except Exception as error:
+                print(f'*Error*: {str(error)}')
+
     # Process status/config files (end) #
 
     # Toolbar functions (start)
@@ -1157,17 +1373,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.var_widget.setWhatsThis('saved')
 
         # dependency tab -> task/flow dependency setting
-        if not self.task_window.dependency_priority:
-            self.dependency_widget = QWidget()
-        else:
-            self.dependency_window = WindowForDependency(
-                dependency_priority_dic=self.task_window.dependency_priority,
-                default_dependency_dic=self.task_window.default_dependency_dic,
-                mode='widget'
-            )
-            self.dependency_widget = self.dependency_window.init_ui()
-            self.dependency_widget.message.connect(self.task_window.update_extension_config_setting)
-            self.dependency_widget.update.connect(self.update_config_tab_name)
+        self.dependency_window.update_setting(dependency_priority_dic=self.task_window.dependency_priority,
+                                              default_dependency_dic=self.task_window.default_dependency_dic)
+        self.dependency_window.message.connect(self.task_window.update_extension_config_setting)
+        self.dependency_window.update.connect(self.update_config_tab_name)
         self.dependency_widget.setWhatsThis('saved')
 
         # API -> ifp api setting
@@ -1224,17 +1433,8 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.var_widget.setWhatsThis('saved')
 
         # dependency tab -> task/flow dependency setting
-        if not self.task_window.dependency_priority:
-            self.dependency_widget = QWidget()
-        else:
-            self.dependency_window = WindowForDependency(
-                dependency_priority_dic=self.task_window.dependency_priority,
-                default_dependency_dic=self.task_window.default_dependency_dic,
-                mode='widget'
-            )
-            self.dependency_widget = self.dependency_window.init_ui()
-            self.dependency_widget.message.connect(self.task_window.update_extension_config_setting)
-            self.dependency_widget.update.connect(self.update_config_tab_name)
+        self.dependency_window.update_setting(dependency_priority_dic=self.task_window.dependency_priority,
+                                              default_dependency_dic=self.task_window.default_dependency_dic)
 
         self.dependency_widget.setWhatsThis('saved')
 
@@ -1366,30 +1566,32 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     # main_tab (start) #
     def gen_main_tab(self):
         # self.sidebar_tree
-        self.sidebar_tree = QTreeWidget(self.main_tab)
+        # self.sidebar_tree = QTreeWidget(self.main_tab)
+        self.tree_frame = QFrame(self.main_tab)
+        self.tree_frame.setFrameShadow(QFrame.Raised)
+        self.tree_frame.setFrameShape(QFrame.Box)
+
+        self.sidebar_tree = SidebarTree()
+        self.sidebar_tree.go_to_msg.connect(self._go_to_table_row)
+        self.sidebar_tree.show_hide_item.connect(self._show_hide_table_row)
 
         # self.status_table
         self.status_table = QTableWidget(self.main_tab)
 
-        # self.main_frame
         self.main_frame = QFrame(self.main_tab)
         self.main_frame.setFrameShadow(QFrame.Raised)
         self.main_frame.setFrameShape(QFrame.Box)
 
-        # Grid
-        main_tab_grid = QGridLayout()
+        splitter = QSplitter()
+        splitter.setOrientation(Qt.Horizontal)
+        splitter.addWidget(self.tree_frame)
+        splitter.addWidget(self.main_frame)
 
-        main_tab_grid.addWidget(self.sidebar_tree, 0, 0, 3, 1)
-        # main_tab_grid.addWidget(self.status_table, 1, 0, 2, 1)
-        main_tab_grid.addWidget(self.main_frame, 0, 1, 3, 2)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 5)
 
-        main_tab_grid.setRowStretch(0, 5)
-        main_tab_grid.setRowStretch(1, 1)
-        main_tab_grid.setRowStretch(2, 1)
-
-        main_tab_grid.setColumnStretch(0, 1)
-        main_tab_grid.setColumnStretch(1, 6)
-
+        main_tab_grid = QVBoxLayout()
+        main_tab_grid.addWidget(splitter)
         self.main_tab.setLayout(main_tab_grid)
 
         # Gen sub-frames.
@@ -1425,37 +1627,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     # sidebar_tree (start) #
     def gen_sidebar_tree(self):
-        self.sidebar_tree.setColumnCount(1)
-        self.sidebar_tree.setHeaderLabels(['     %s' % self.config_dic['PROJECT'], ])
-        self.sidebar_tree.header().setSectionResizeMode(QHeaderView.Stretch)
-        self.sidebar_tree.header().setStretchLastSection(False)
+        layout = QVBoxLayout()
+        self.tree_frame.setLayout(layout)
 
-        # Update self.sidebar_tree
-        self.update_sidebar_tree()
-
-    def sidebar_tree_item_click_behavior(self, item=None, column=0):
-        if item is not None:
-            if item.childCount():
-                for child_item in item.takeChildren():
-                    if item.checkState(column):
-                        child_item = self.get_sidebar_tree_block_item(child_item.text(column), Qt.Checked)
-                    else:
-                        child_item = self.get_sidebar_tree_block_item(child_item.text(column), Qt.Unchecked)
-
-                    item.addChild(child_item)
-                    self.update_main_table_block_visible_status(child_item.text(column), child_item.checkState(column))
-
-                if item.checkState(column):
-                    self.update_message_text({'message': 'All blocks are selected.', 'color': 'black'})
-                else:
-                    self.update_message_text({'message': 'All blocks are un-selected.', 'color': 'black'})
-            else:
-                if item.checkState(column):
-                    self.update_message_text({'message': 'Block ' + str(item.text(column)) + ' is selected.', 'color': 'black'})
-                else:
-                    self.update_message_text({'message': 'Block ' + str(item.text(column)) + ' is un-selected.', 'color': 'black'})
-
-                self.update_main_table_block_visible_status(item.text(column), item.checkState(column))
+        layout.addWidget(self.sidebar_tree)
 
     def update_main_table_block_visible_status(self, block, status):
         # Update self.main_table_info_list (Visible or not).
@@ -1472,37 +1647,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.update_main_table()
 
     def update_sidebar_tree(self):
-        # Clear
-        self.sidebar_tree.clear()
-
-        for block in self.config_dic['BLOCK'].keys():
-
-            block_item = self.get_sidebar_tree_block_item(block)
-            self.sidebar_tree.addTopLevelItem(block_item)
-
-            for version in self.config_dic['BLOCK'][block].keys():
-                version_item = self.get_sidebar_tree_block_item(version)
-                block_item.addChild(version_item)
-
-                for flow in self.config_dic['BLOCK'][block][version].keys():
-                    flow_item = self.get_sidebar_tree_block_item(flow)
-                    version_item.addChild(flow_item)
-
-                    for task in self.config_dic['BLOCK'][block][version][flow].keys():
-                        task_item = self.get_sidebar_tree_block_item(task, icon_type='T')
-                        flow_item.addChild(task_item)
-
-        self.sidebar_tree.expandAll()
-
-    def get_sidebar_tree_block_item(self, text, icon_type=''):
-        item = QTreeWidgetItem()
-        item.setText(0, text)
-        # if icon_type == 'T':
-        #     item.setIcon(0, QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/tree/icons8-t-67_副本.png'))
-        # else:
-        item.setIcon(0, QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/blue/block.png'))
-
-        return item
+        self.sidebar_tree.update()
 
     # sidebar_tree (end) #
 
@@ -1573,7 +1718,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             status = main_table_info['RunStatus']
             check_status = main_table_info['CheckStatus']
 
-            if check_status in [common.status.checking, common.status.passed, common.status.failed]:
+            if not status == common.status.running and check_status in [common.status.checking, common.status.passed, common.status.failed]:
                 status = check_status
 
             if status:
@@ -1622,33 +1767,64 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
     def gen_main_frame(self):
         self.main_table = QTableWidget(self.main_frame)
         self.main_table.horizontalHeader().sectionClicked.connect(self.main_table_title_click_behavior)
+        # Gen self.main_table title.
+        self.main_table.setColumnCount(len(self.main_table_title_list))
+        self.main_table.setHorizontalHeaderLabels(self.main_table_title_list)
+
+        # Clear main table Selections.
+        self.event_filter = GlobalEventFilter(self.main_table)
+        QApplication.instance().installEventFilter(self.event_filter)
 
         self.main_table.itemClicked.connect(self.main_table_item_click_behavior)
         self.main_table.doubleClicked.connect(self.main_table_item_double_click_behavior)
+        self.filter_row = common_pyqt5.TableFilterRow(self.main_table, parent=self, filter_columns=[0, 1, 2, 3, 4])
+
+        main_table_widget = QWidget(self)
+        main_table_layout = QVBoxLayout()
+        main_table_widget.setLayout(main_table_layout)
+        main_table_layout.addWidget(self.filter_row)
+        main_table_layout.addWidget(self.main_table)
 
         # Grid
+        main_frame_tab = QTabWidget()
+        main_frame_tab.addTab(main_table_widget, 'TableView')
+        main_frame_tab.addTab(self.flow_chart_widget, 'FlowChart')
+
         main_frame_grid = QGridLayout()
-        main_frame_grid.addWidget(self.main_table, 0, 0)
+        main_frame_grid.addWidget(main_frame_tab, 0, 0)
         self.main_frame.setLayout(main_frame_grid)
+
+        # self.main_frame.setLayout(main_frame_layout)
 
         # Gen self.main_table.
         self.gen_main_table()
 
     def main_table_title_click_behavior(self, index):
         if index == 3:
+            handle_row_list = []
             status = Qt.Unchecked
+            main_table_row = 0
 
-            for main_table_info in self.main_table_info_list:
+            for row, main_table_info in enumerate(self.main_table_info_list):
                 if main_table_info['Visible'] and self.filt_task_status(main_table_info):
+                    main_table_row += 1
+
+                    if self.main_table.isRowHidden(main_table_row - 1):
+                        continue
+
                     if not main_table_info['Selected']:
                         status = Qt.Checked
+
+                    handle_row_list.append(row)
 
             if status == Qt.Checked:
                 self.update_message_text({'message': 'All tasks are selected.', 'color': 'black'})
             else:
                 self.update_message_text({'message': 'All tasks are un-selected.', 'color': 'black'})
 
-            for main_table_info in self.main_table_info_list:
+            for row in handle_row_list:
+                main_table_info = self.main_table_info_list[row]
+
                 if main_table_info['Visible'] and self.filt_task_status(main_table_info):
                     if status == Qt.Checked:
                         main_table_info['Selected'] = True
@@ -1722,7 +1898,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     def main_table_item_double_click_behavior(self, item):
         if self.current_selected_column == 3:
-            self.edit_detailed_config(read_only=self.disable_gui_flag, block=self.current_selected_task_dic['Block'], version=self.current_selected_task_dic['Version'], flow=self.current_selected_task_dic['Flow'], task=self.current_selected_task_dic['Task'])
+            status = self.main_table.item(item.row(), 4).text().strip()
+            read_only = True if self.disable_gui_flag and status == common.status.running else False
+            self.edit_detailed_config(read_only=read_only, block=self.current_selected_task_dic['Block'], version=self.current_selected_task_dic['Version'], flow=self.current_selected_task_dic['Flow'], task=self.current_selected_task_dic['Task'])
         else:
             pass
 
@@ -1767,11 +1945,12 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         path = common.expand_var(str(task.PATH), ifp_var_dic=self.config_obj.var_dic, **{'BLOCK': item.Block, 'VERSION': item.Version, 'FLOW': item.Flow, 'TASK': item.Task})
 
         if 'COMMON' in task.ACTION:
-            command = str(self.xterm_command) + ' "cd ' + path + '; ' + str(task.ACTION['COMMON']['XTERM_COMMAND']) + '; exec ' + str(os.environ['SHELL']) + '"'
+            xterm_command = common.expand_var(str(task.ACTION['COMMON']['XTERM_COMMAND']), ifp_var_dic=self.config_obj.var_dic, **{'BLOCK': item.Block, 'VERSION': item.Version, 'FLOW': item.Flow, 'TASK': item.Task})
+            command = str(self.xterm_command) + ' "cd ' + path + '; ' + xterm_command + '; exec ' + str(os.environ['SHELL']) + '"'
         else:
             command = str(self.xterm_command) + ' "cd ' + path + '; exec ' + str(os.environ['SHELL']) + '"'
 
-        thread_run = common.ThreadRun()
+        thread_run = common.ThreadRun(xterm=True)
         thread_run.run([command, ])
 
     def gen_main_table(self):
@@ -1779,29 +1958,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.main_table.verticalHeader().setVisible(True)
         self.main_table.setEditTriggers(QTableWidget.NoEditTriggers)
 
-        # Gen self.main_table title.
-        self.main_table.setColumnCount(len(self.main_table_title_list))
-        self.main_table.setHorizontalHeaderLabels(self.main_table_title_list)
-
-        self.main_table.setItemDelegate(common_pyqt5.CustomDelegate(wrap_columns=[0, 1]))
-
-        self.main_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.main_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.main_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.main_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-
+        self.main_table.setItemDelegate(common_pyqt5.CustomDelegate(wrap_columns=[0, 1, 2], check_available=True))
         self.main_table_header = self.main_table.horizontalHeader()
         self.main_table_header.setContextMenuPolicy(Qt.CustomContextMenu)
         self.main_table_header.customContextMenuRequested.connect(self.generate_select_menu)
-
-        # self.main_table.setColumnWidth(2, 60)
-        # self.main_table.setColumnWidth(3, 140)
-        self.main_table.setColumnWidth(4, 140)
-        self.main_table.setColumnWidth(5, 50)
-        self.main_table.setColumnWidth(6, 70)
-        self.main_table.setColumnWidth(7, 70)
-        self.main_table.setColumnWidth(8, 70)
-        self.main_table.setColumnWidth(9, 50)
 
         # gen open file menu
         self.main_table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1809,6 +1969,20 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
         # Update self.main_table.
         self.hide_detail_status()
+
+    def _go_to_table_row(self, row: int, column: int):
+        count = 0
+
+        for i, main_table_info in enumerate(self.main_table_info_list):
+            if not main_table_info['Visible']:
+                continue
+
+            if i == row:
+                break
+
+            count += 1
+
+        self.main_table.setCurrentCell(count, column)
 
     def generate_select_menu(self, pos):
         menu = QMenu()
@@ -1825,12 +1999,82 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             select_steps_action.triggered.connect(self.select_tasks)
             menu.addAction(select_steps_action)
 
+            task_run_modes = {}
+
+            for ifp_item in self.main_table_info_list:
+                if len(ifp_item.RunModes) <= 1:
+                    continue
+
+                task_run_modes[ifp_item.Task] = ifp_item.RunModes
+
+            if task_run_modes:
+                select_mode_action = QMenu('Select Run Mode', self)
+                select_mode_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/red/T.png'))
+
+                for task, run_modes in task_run_modes.items():
+                    task_menu = QMenu(task, self)
+                    action_group = QActionGroup(task_menu)
+                    action_group.setExclusive(True)
+
+                    for run_mode in run_modes:
+                        run_mode_action = QAction(run_mode, task_menu)
+                        action_group.addAction(run_mode_action)
+                        task_menu.addAction(run_mode_action)
+                        run_mode_action.triggered.connect(functools.partial(self.select_task_run_mode, task, run_mode))
+
+                    select_mode_action.addMenu(task_menu)
+
+                menu.addMenu(select_mode_action)
+
         menu.exec_(self.main_table.mapToGlobal(pos))
+
+    def select_task_run_mode(self, task, run_mode):
+        t_list = []
+
+        for i, ifp_item in enumerate(self.main_table_info_list):
+            if ifp_item.Task != task:
+                continue
+
+            read_only = True if self.disable_gui_flag and ifp_item.Status == common.status.running else False
+
+            if read_only:
+                QMessageBox.warning(self, 'IFP Warning', 'Could not change Run Mode when task(s) is running!')
+                return
+
+            t_list.append(i)
+
+        for i in t_list:
+            self.main_table_info_list[i].RunMode = run_mode
+
+        self.update_main_table()
+
+    def show_version_flowchart(self, block: str, version: str):
+        dependency_dic = self.task_window.dependency_priority[block][version]
+        task_list = list(dependency_dic.keys())
+
+        for task in dependency_dic.keys():
+            dependency_dic[task] = WindowForDependency.clean_dependency(item_list=task_list, item=task, dependency=dependency_dic[task])
+
+        self.flow_chart_window.gen_flow_graph(dependency_dic=dependency_dic, version=version, block=block)
+        self.flow_chart_window.show()
+
+    def show_flow_flowchart(self, block: str, version: str, flow: str):
+        task_list = [task for task in self.config_dic['BLOCK'][block][version][flow]]
+        dependency_dic = {task: self.task_window.dependency_priority[block][version][task] for task in self.task_window.dependency_priority[block][version] if task in task_list}
+
+        for task in dependency_dic.keys():
+            dependency_dic[task] = WindowForDependency.clean_dependency(item_list=task_list, item=task, dependency=dependency_dic[task])
+
+        self.flow_chart_window.gen_flow_graph(dependency_dic=dependency_dic, version=version, block=block)
+        self.flow_chart_window.show()
 
     def generate_menu(self, pos):
         select_items = self.main_table.selectedItems()
 
-        if not select_items:
+        if len(select_items) == 0:
+            return
+
+        if not self.main_table.itemAt(pos):
             return
 
         self.current_selected_column = select_items[-1].column()
@@ -1845,8 +2089,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
             row_list.append(item.row())
 
-        menu = QMenu()
-
+        menu = IgnoreRightButtonMenu()
         visible_row = -1
 
         for (row, main_table_info) in enumerate(self.main_table_info_list):
@@ -1865,11 +2108,42 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             skip_action.triggered.connect(lambda: self.set_task_as_skipped(self.current_selected_task_obj, self.current_selected_row, self.current_selected_column))
             menu.addAction(skip_action)
 
+            if self.read_mode:
+                skip_action.setEnabled(False)
+
             ignore_fail_action = QAction('Ignore fail', self)
             ignore_fail_action.setCheckable(True)
             ignore_fail_action.setChecked(self.current_selected_task_obj.ignore_fail)
             ignore_fail_action.triggered.connect(lambda: self.set_task_as_ignore_fail(self.current_selected_task_obj))
             menu.addAction(ignore_fail_action)
+
+            if self.read_mode:
+                ignore_fail_action.setEnabled(False)
+
+            # Run Mode
+            run_mode_list = self.current_selected_task_dic.RunModes
+
+            if len(run_mode_list) > 1:
+                choice_mode_menu = QMenu('Switch run mode (temporary)')
+                action_group = QActionGroup(self)
+                action_group.setExclusive(True)
+
+                for run_mode in run_mode_list:
+                    run_mode_action = QAction(run_mode, self)
+                    run_mode_action.setCheckable(True)
+                    run_mode_action.triggered.connect(functools.partial(self.switch_task_run_mode, ifp_item=self.current_selected_task_dic, run_mode=run_mode))
+
+                    if self.read_mode:
+                        run_mode_action.setEnabled(False)
+
+                    action_group.addAction(run_mode_action)
+                    choice_mode_menu.addAction(run_mode_action)
+                    run_mode_name = 'RUN' if run_mode == 'default' else f'RUN.{run_mode}'
+
+                    if run_mode_name == self.current_selected_task_dic.RunMode:
+                        run_mode_action.setChecked(True)
+
+                menu.addMenu(choice_mode_menu)
 
             action_menu = QMenu('Execute action alone')
             build_action = QAction(common.action.build)
@@ -1902,6 +2176,10 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             release_action.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/release.png'))
             action_menu.addAction(release_action)
 
+            if self.read_mode:
+                for action in action_menu.actions():
+                    action.setEnabled(False)
+
             menu.addMenu(action_menu)
 
             menu.addSeparator()
@@ -1923,7 +2201,24 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         elif len(select_items) > 1 and self.current_selected_column <= 3:
             self.generate_multiple_select_task_menu(self.current_selected_column, row_list, menu)
 
-        menu.exec_(self.main_table.mapToGlobal(pos))
+        menu.exec_(self.main_table.viewport().mapToGlobal(pos))
+
+    def switch_task_run_mode(self, ifp_item: parse_config.IfpItem, run_mode: str):
+        read_only = True if self.disable_gui_flag and ifp_item.Status == common.status.running else False
+
+        if read_only:
+            QMessageBox.warning(self, 'IFP Warning', 'Could not change Run Mode when task(s) is running!')
+            return
+
+        ifp_item.RunMode = run_mode
+        self.update_main_table()
+
+    def open_task_information(self, block: str, version: str, task: str):
+        for flow in self.config_dic['BLOCK'].get(block, {}).get(version, {}):
+            for c_task in self.config_dic['BLOCK'][block][version][flow]:
+                if c_task == task:
+                    self.edit_detailed_config(read_only=self.task_window.disable_gui_flag, block=block, version=version, flow=flow, task=task)
+                    return
 
     def edit_detailed_config(self,
                              read_only=False,
@@ -1935,7 +2230,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         self.task_window.current_selected_flow = flow
         self.task_window.current_selected_block = block
         self.task_window.current_selected_version = version
-        self.child = WindowForGlobalTaskInfo(task_obj=self.job_manager.all_tasks[block][version][flow][task], user_config_obj=self.task_window, read_only=read_only)
+        self.child = WindowForTaskInformation(task_obj=self.job_manager.all_tasks[block][version][flow][task], user_config_obj=self.task_window, read_only=read_only)
         self.child.setWindowModality(Qt.ApplicationModal)
         self.child.detailed_task_window.message.connect(self.task_window.update_detailed_setting)
         self.child.show()
@@ -1948,6 +2243,19 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         unselect_task_action = QAction('Unselect All Task', self)
         unselect_task_action.triggered.connect(lambda: self.trigger_all_selected_task(select_column, row_list, False))
         menu.addAction(unselect_task_action)
+
+        block = self.main_table.item(row_list[0], 0).text()
+        version = self.main_table.item(row_list[0], 1).text()
+        flow = self.main_table.item(row_list[0], 2).text()
+
+        if select_column == 1:
+            show_flow_chart_action = QAction('Show Flow Chart', self)
+            show_flow_chart_action.triggered.connect(functools.partial(self.show_version_flowchart, block, version))
+            menu.addAction(show_flow_chart_action)
+        elif select_column == 2:
+            show_flow_chart_action = QAction('Show Flow Chart', self)
+            show_flow_chart_action.triggered.connect(functools.partial(self.show_flow_flowchart, block, version, flow))
+            menu.addAction(show_flow_chart_action)
 
     def generate_main_tab_api_menu(self, selected_column, task_dic, menu):
         user_api = self.user_api
@@ -1978,7 +2286,8 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
             if self.ignore_fail:
                 self.setting_window.ifp_env_setting['System settings']['Process management']['Ignore fail tasks']['widget'].setChecked(False)
-                self.setting_window.save()
+                self.update_ifp_setting(self.setting_window.ifp_env_setting, need_reload_flag=False, ignore_fail_flag=False)
+                self.update_config_tab_name(False, 'Setting')
         else:
             task_obj.ignore_fail = True
 
@@ -1997,7 +2306,12 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             status = Qt.Unchecked
             # self.update_message_text({'message': 'Row: %d task is unselected.' % (row + 1), 'color': 'black'})
 
-        self.update_main_table_item(self.main_table_info_list[row]['Block'], self.main_table_info_list[row]['Version'], self.main_table_info_list[row]['Flow'], self.main_table_info_list[row]['Task'], 'Task', self.main_table_info_list[row]['Task'], selected=status)
+        block = self.main_table.item(row, self.main_table_title_list.index('Block')).text()
+        version = self.main_table.item(row, self.main_table_title_list.index('Version')).text()
+        flow = self.main_table.item(row, self.main_table_title_list.index('Flow')).text()
+        task = self.main_table.item(row, self.main_table_title_list.index('Task')).text()
+
+        self.update_main_table_item(block, version, flow, task, 'Task', task, selected=status)
 
     def update_main_table(self, mode='create'):
         """
@@ -2012,9 +2326,13 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         # Set row count.
         row_count = 0
 
-        for main_table_info in self.main_table_info_list:
+        for i, main_table_info in enumerate(self.main_table_info_list):
             if main_table_info['Visible'] and self.filt_task_status(main_table_info):
                 row_count += 1
+
+            if not main_table_info['Visible']:
+                self.main_table_info_list[i]['Selected'] = False
+
         self.main_table.setRowCount(row_count)
 
         # Update content.
@@ -2041,8 +2359,8 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             checkstatus = main_table_info['CheckStatus']
             summarizestatus = main_table_info['SummarizeStatus']
             releasestatus = main_table_info['ReleaseStatus']
-            check = main_table_info['Check']
-            summary = main_table_info['Summary']
+            check = True if not main_table_info['Check'] else main_table_info['Check']
+            summary = True if not main_table_info['Summary'] else main_table_info['Check']
             job = main_table_info['Job']
             runtime = main_table_info['Runtime']
             xterm = main_table_info['Xterm']
@@ -2060,16 +2378,25 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             else:
                 self.update_main_table_item(block, version, flow, task, 'Task', task, selected=Qt.Unchecked, mode=mode, row=row, vrow=visible_row)
 
-            self.update_main_table_item(block, version, flow, task, 'Status', status, mode=mode, row=row, vrow=visible_row)
-            self.update_main_table_item(block, version, flow, task, 'BuildStatus', buildstatus, mode=mode, row=row, vrow=visible_row)
-            self.update_main_table_item(block, version, flow, task, 'RunStatus', runstatus, mode=mode, row=row, vrow=visible_row)
-            self.update_main_table_item(block, version, flow, task, 'CheckStatus', checkstatus, mode=mode, row=row, vrow=visible_row)
-            self.update_main_table_item(block, version, flow, task, 'SummarizeStatus', summarizestatus, mode=mode, row=row, vrow=visible_row)
-            self.update_main_table_item(block, version, flow, task, 'ReleaseStatus', releasestatus, mode=mode, row=row, vrow=visible_row)
-            self.update_main_table_item(block, version, flow, task, 'Check', check, mode=mode, row=row, vrow=visible_row)
-            self.update_main_table_item(block, version, flow, task, 'Summary', summary, mode=mode, row=row, vrow=visible_row)
-            self.update_main_table_item(block, version, flow, task, 'Job', job, mode=mode, row=row, vrow=visible_row)
-            self.update_main_table_item(block, version, flow, task, 'Runtime', runtime, mode=mode, row=row, vrow=visible_row)
+            self.update_main_table_item(block, version, flow, task, 'Status', status, flags=Qt.ItemIsSelectable | Qt.ItemIsEnabled, mode=mode, row=row, vrow=visible_row)
+            self.update_main_table_item(block, version, flow, task, 'BuildStatus', buildstatus, flags=Qt.ItemIsSelectable | Qt.ItemIsEnabled, mode=mode, row=row, vrow=visible_row)
+            self.update_main_table_item(block, version, flow, task, 'RunStatus', runstatus, flags=Qt.ItemIsSelectable | Qt.ItemIsEnabled, mode=mode, row=row, vrow=visible_row)
+            self.update_main_table_item(block, version, flow, task, 'CheckStatus', checkstatus, flags=Qt.ItemIsSelectable | Qt.ItemIsEnabled, mode=mode, row=row, vrow=visible_row)
+            self.update_main_table_item(block, version, flow, task, 'SummarizeStatus', summarizestatus, flags=Qt.ItemIsSelectable | Qt.ItemIsEnabled, mode=mode, row=row, vrow=visible_row)
+            self.update_main_table_item(block, version, flow, task, 'ReleaseStatus', releasestatus, flags=Qt.ItemIsSelectable | Qt.ItemIsEnabled, mode=mode, row=row, vrow=visible_row)
+
+            if self.config_dic['BLOCK'][block][version][flow][task]['ACTION'].get(common.action.check.upper(), None) is None:
+                self.update_main_table_item(block, version, flow, task, 'Check', None, mode=mode, row=row, vrow=visible_row)
+            else:
+                self.update_main_table_item(block, version, flow, task, 'Check', check, mode=mode, row=row, vrow=visible_row)
+
+            if self.config_dic['BLOCK'][block][version][flow][task]['ACTION'].get(common.action.summarize.upper(), None) is None:
+                self.update_main_table_item(block, version, flow, task, 'Summary', None, mode=mode, row=row, vrow=visible_row)
+            else:
+                self.update_main_table_item(block, version, flow, task, 'Summary', summary, mode=mode, row=row, vrow=visible_row)
+
+            self.update_main_table_item(block, version, flow, task, 'Job', job, flags=Qt.ItemIsSelectable | Qt.ItemIsEnabled, mode=mode, row=row, vrow=visible_row)
+            self.update_main_table_item(block, version, flow, task, 'Runtime', runtime, flags=Qt.ItemIsSelectable | Qt.ItemIsEnabled, mode=mode, row=row, vrow=visible_row)
             self.update_main_table_item(block, version, flow, task, 'Xterm', xterm, mode=mode, row=row, vrow=visible_row)
 
             # Merge Block/Version/Flow/ items.
@@ -2096,6 +2423,14 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
                 row_dic[key]['last'] = row_dic[key]['current']
 
+            # remark = self.main_table.item(row, 15).text() if self.main_table.item(row, 15) is not None else ''
+            # remark_item = QTableWidgetItem(remark)
+            # remark_item.setFlags(remark_item.flags() | Qt.ItemIsEditable)
+            # self.main_table.setItem(row, 15, remark_item)
+
+        self.resize_table_column()
+        self.filter_row.apply_filter()
+
     def filt_task_status(self, main_table_info):
         status = self.status_filt_flag
         row_status = main_table_info["RunStatus"]
@@ -2105,10 +2440,50 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         if check_status in [common.status.checking, common.status.passed, common.status.failed] and row_status != common.status.running:
             row_status = check_status
 
-        if status == "" or status == "Total" or (status == "Run" and row_status == common.status.running) or (status == "Passed" and row_status == common.status.passed) or (status == "Failed" and row_status == common.status.failed) or (status == "Others" and row_status != common.status.running and row_status != common.status.passed and row_status != common.status.failed):
+        if status == "" or status == "Total" or (status == "Run" and row_status == common.status.running) or (status == "Passed" and row_status == common.status.passed) or (status == "Failed" and row_status == common.status.failed) or (
+                status == "Others" and row_status != common.status.running and row_status != common.status.passed and row_status != common.status.failed):
             return 1
         else:
             return 0
+
+    def resize_table_column(self):
+        self.main_table.resizeColumnsToContents()
+
+        for i in range(self.main_table.columnCount()):
+            self.main_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Interactive)
+
+        self.main_table.setColumnWidth(4, 140)
+        self.main_table.setColumnWidth(5, 50)
+        self.main_table.setColumnWidth(6, 70)
+        self.main_table.setColumnWidth(7, 70)
+        self.main_table.setColumnWidth(8, 70)
+        self.main_table.setColumnWidth(9, 50)
+        self.main_table.resizeColumnToContents(0)
+        self.main_table.resizeColumnToContents(1)
+        self.main_table.resizeColumnToContents(2)
+        self.main_table.resizeColumnToContents(3)
+        # self.main_table.horizontalHeader().setSectionResizeMode(15, QHeaderView.Stretch)
+
+        current_width = self.main_table.columnWidth(3)
+        self.main_table.setColumnWidth(3, current_width + 15)
+
+        total_column_width = sum([self.main_table.columnWidth(i) for i in range(self.main_table.columnCount())])
+        if self.main_table.verticalScrollBar().isVisible():
+            table_width = self.main_table.width() - self.main_table.verticalHeader().width() - self.main_table.verticalScrollBar().width() - 2
+        else:
+            table_width = self.main_table.width() - self.main_table.verticalHeader().width() - 2
+        resize_column = abs(total_column_width - table_width)
+        resize_total_column_width = sum([self.main_table.columnWidth(i) for i in [0, 1, 2, 3]])
+
+        if resize_total_column_width == 0:
+            return
+
+        if total_column_width > table_width:
+            for i in [0, 1, 2, 3]:
+                self.main_table.setColumnWidth(i, self.main_table.columnWidth(i) - int((self.main_table.columnWidth(i) / resize_total_column_width) * resize_column))
+        elif total_column_width < table_width:
+            for i in [0, 1, 2, 3]:
+                self.main_table.setColumnWidth(i, self.main_table.columnWidth(i) + int((self.main_table.columnWidth(i) / resize_total_column_width) * resize_column))
 
     def update_main_table_item(self, block, version, flow, task, key, value, color=None, selected=None, flags=None, mode='update', row=None, vrow=None):
         """
@@ -2160,20 +2535,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             item = QTableWidgetItem(value)
 
             if 'Status' in key and not color:
-                if re.search(r'pass', str(value), flags=re.I):
-                    color = QColor(0, 204, 68)
-                elif re.search(r'fail', str(value), flags=re.I):
-                    color = Qt.red
-                elif re.search(r'undefined', str(value), flags=re.I):
-                    color = QColor(133, 51, 255)
-                elif re.search(r'ing', str(value), flags=re.I):
-                    color = QColor(255, 153, 0)
-                elif re.search(r'queue', str(value), flags=re.I):
-                    color = QColor(51, 153, 255)
-                elif re.search(r'kill', str(value), flags=re.I):
-                    color = Qt.red
-                elif re.search(r'skip', str(value), flags=re.I):
-                    color = QColor(211, 211, 211)
+                color = self.mapping_status_color(str(value))
 
             if color:
                 item.setForeground(QBrush(color))
@@ -2190,13 +2552,27 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             if key == 'Task' and task_obj.skipped:
                 item.setForeground(QBrush(QColor(211, 211, 211)))
 
+            if key == 'Task':
+                task_config_obj = self.config_obj.get_task(task_obj.block, task_obj.version, task_obj.flow, task_obj.task)
+                run_mode_list = task_config_obj.RunInfo.keys()
+
+                if len(run_mode_list) > 1:
+                    item.setToolTip(f'Current Run Mode: {task_config_obj.RunMode}')
+
+                    if task_config_obj.OriRunMode != task_config_obj.RunMode:
+                        item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/changed.png'))
+                    else:
+                        item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/unchanged.png'))
+
             self.main_table.setItem(visible_row, row_info_list.index(key), item)
 
         if (key == 'Check') or (key == 'Summary') or (key == 'Xterm'):
             item = QTableWidgetItem(None)
 
             if key == 'Check':
-                if value == common.status.passed:
+                if value is None:
+                    item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/check_undefined.png'))
+                elif value == common.status.passed:
                     item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/check_pass.png'))
                 elif value == common.status.failed:
                     item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/check_fail.png'))
@@ -2204,7 +2580,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
                     item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/check_init.png'))
 
             if key == 'Summary':
-                if value == common.status.passed:
+                if value is None:
+                    item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary_undefined.png'))
+                elif value == common.status.passed:
                     item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary_pass.png'))
                 elif value == common.status.failed:
                     item.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/office/summary_fail.png'))
@@ -2218,7 +2596,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             item.setTextAlignment(Qt.AlignCenter)
             self.main_table.setItem(visible_row, row_info_list.index(key), item)
 
-        if (key == 'Job') and (value is not None):
+        if (key == 'Job') and value:
+            item = QTableWidgetItem(None)
+
             if value.startswith('b'):
                 item = QTableWidgetItem(value[2:])
 
@@ -2227,12 +2607,34 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
             self.main_table.setItem(visible_row, row_info_list.index(key), item)
 
+    @staticmethod
+    def mapping_status_color(status):
+        color = None
+
+        if re.search(r'pass', str(status), flags=re.I):
+            color = QColor(0, 204, 68)
+        elif re.search(r'fail', str(status), flags=re.I):
+            color = QColor(255, 0, 0)
+        elif re.search(r'undefined', str(status), flags=re.I):
+            color = QColor(133, 51, 255)
+        elif re.search(r'ing', str(status), flags=re.I):
+            color = QColor(255, 153, 0)
+        elif re.search(r'queue', str(status), flags=re.I):
+            color = QColor(51, 153, 255)
+        elif re.search(r'kill', str(status), flags=re.I):
+            color = QColor(255, 0, 0)
+        elif re.search(r'skip', str(status), flags=re.I):
+            color = QColor(211, 211, 211)
+
+        return color
+
     # main_frame (end) #
 
     # message_frame (start) #
     def gen_message_frame(self):
         self.message_text = QTextEdit(self.message_frame)
         self.message_text.setReadOnly(True)
+        self.message_text.setAcceptRichText(True)
 
         # Grid
         message_frame_grid = QGridLayout()
@@ -2257,25 +2659,30 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         common_pyqt5.text_edit_visible_position(self.message_text, 'End')
         message = info_dic['message']
         color = info_dic['color'] if 'color' in info_dic else 'black'
+        html = info_dic['html'] if 'html' in info_dic else False
         current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # default color: black
-        (red, green, blue) = (0, 0, 0)
+        if html:
+            self.message_text.insertHtml('[' + str(current_time) + ']&nbsp;&nbsp;&nbsp;&nbsp;' + str(message) + '<br>')
+        else:
+            # default color: black
+            (red, green, blue) = (0, 0, 0)
 
-        if color:
-            color = color.lower()
+            if color:
+                color = color.lower()
 
-            try:
-                (red, green, blue) = (int(c * 255) for c in colors.to_rgb(color))
-            except ValueError:
-                common.print_warning('*Warning*: ValueError ' + color)
+                try:
+                    (red, green, blue) = (int(c * 255) for c in colors.to_rgb(color))
+                except ValueError:
+                    common.print_warning('*Warning*: ValueError ' + color)
 
-        color = QColor(red, green, blue)
-        color_format = self.message_text.currentCharFormat()
-        color_format.setForeground(color)
-        self.message_text.setCurrentCharFormat(color_format)
+            color = QColor(red, green, blue)
+            color_format = self.message_text.currentCharFormat()
+            color_format.setForeground(color)
+            self.message_text.setCurrentCharFormat(color_format)
 
-        self.message_text.insertPlainText('[' + str(current_time) + ']    ' + str(message) + '\n')
+            self.message_text.insertPlainText('[' + str(current_time) + ']    ' + str(message) + '\n')
+
         common_pyqt5.text_edit_visible_position(self.message_text, 'End')
 
     # message_frame (end) #
@@ -2297,12 +2704,24 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     # execute_action (start)
     def execute_action(self, action_name, task_dic_list=None, run_all_steps=False, select_task=False):
+        if action_name == common.TaskAction().run or run_all_steps:
+            self.makefile_func()
+
         if task_dic_list is None:
             task_dic_list = []
 
         if not task_dic_list:
-            task_dic_list = list(filter(lambda x: x.get('Selected'), self.main_table_info_list))
-            task_dic_list = self.filter_task_before_execute_action(action_name, task_dic_list)
+            table_row = 0
+
+            for row, task_info_dic in enumerate(self.main_table_info_list):
+                if task_info_dic['Visible']:
+                    table_row += 1
+
+                    if not self.main_table.isRowHidden(table_row - 1) and task_info_dic['Selected']:
+                        task_dic_list.append(task_info_dic)
+
+            if not self.auto_execute_action:
+                task_dic_list = self.filter_task_before_execute_action(action_name, task_dic_list)
 
         if not task_dic_list:
             return
@@ -2312,6 +2731,78 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             self.update_main_table_item(self.current_selected_task_dic['Block'], self.current_selected_task_dic['Version'], self.current_selected_task_dic['Flow'], self.current_selected_task_dic['Task'], 'Task', self.current_selected_task_dic['Task'], selected=Qt.Checked)
 
         self.job_manager.receive_action(action_name, task_dic_list, run_all_steps=run_all_steps)
+
+    def makefile_func(self):
+        # Check Makefile Mode
+        if not self.makefile_mode:
+            return
+
+        paths_dic = {}
+        message_dic = {}
+
+        # Discover Paths
+        if self.config_obj.block_dic:
+            # Discover Path
+            for block in self.config_obj.block_dic.values():
+                paths_dic.setdefault(block.NAME, {})
+                message_dic.setdefault(block.NAME, {})
+
+                if block.VERSION:
+                    for version in block.VERSION.values():
+                        paths_dic[block.NAME].setdefault(version.NAME, [])
+                        message_dic[block.NAME].setdefault(version.NAME, [])
+                        task_objs = []
+
+                        # Get Selected Tasks
+                        if version.FLOW:
+                            for flow in version.FLOW.values():
+                                if flow.TASK:
+                                    for task in flow.TASK.values():
+                                        task_objs.append(task)
+
+                        path = WindowForDependency.discover_path(block=block.NAME,
+                                                                 version=version.NAME,
+                                                                 dependency=self.config_obj.real_task_dependency,
+                                                                 task_list=[task.NAME for task in task_objs if task.Selected])
+
+                        for task in task_objs:
+                            if task.NAME in path and not task.Selected:
+                                message_dic[block.NAME][version.NAME].append(task.NAME)
+
+        unselected_tasks = []
+
+        for block_name in message_dic:
+            for version_name in message_dic[block_name]:
+                unselected_tasks.append(message_dic[block_name][version_name])
+
+        if len(unselected_tasks) == 0:
+            return
+
+        # MessageBox
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("Makefile Mode")
+        message_box.setIcon(QMessageBox.Question)
+        message_box.setText("""
+<p>Automatically select following task:</p>
+{}
+""".format(''.join('<p><b>Block</b>: {} <b>Version</b>: {}</p><p><b>Task</b>: {}</p>'.format(block, version, ' '.join(message_dic[block][version])) for block in message_dic for version in message_dic[block] if message_dic[block][version])))
+        message_box.setTextFormat(Qt.RichText)
+        select_button = message_box.addButton('Confirm Selection', QMessageBox.YesRole)
+        message_box.addButton('Skip Selection', QMessageBox.NoRole)
+        message_box.exec_()
+
+        if message_box.clickedButton() == select_button:
+            for i, main_table_info_item in enumerate(self.main_table_info_list):
+                block = main_table_info_item['Block']
+                version = main_table_info_item['Version']
+                task = main_table_info_item['Task']
+
+                if task in message_dic[block][version]:
+                    self.main_table_info_list[i].Selected = True
+
+            self.update_main_table()
+        else:
+            return
 
     def filter_task_before_execute_action(self, action_name, task_dic_list):
         filtered_task_dic_list = []
@@ -2346,9 +2837,11 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
     def execute_action_after_launch_ifp(self):
         if self.auto_execute_action:
-            for row in self.main_table_info_list.keys():
-                self.update_main_table_item(self.main_table_info_list[row]['Block'], self.main_table_info_list[row]['Version'], self.main_table_info_list[row]['Flow'], self.main_table_info_list[row]['Task'], 'Task', self.main_table_info_list[row]['Task'], selected=Qt.Checked)
-            pass
+            for main_table_info in self.main_table_info_list:
+                self.update_main_table_item(main_table_info['Block'], main_table_info['Version'], main_table_info['Flow'], main_table_info['Task'], 'Task', main_table_info['Task'], selected=Qt.Checked)
+
+            if self.auto_execute_action == 'run':
+                self.execute_action(common.action.run)
 
     def check_rerun_item(self, task_dic_list, action_name):
         # Checks whether any tasks has RUN PASS
@@ -2393,6 +2886,9 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         return task_dic_list
 
     def update_task_status(self, task_obj, action, status):
+        if status == common.status.cancelled:
+            action = common.action.run
+
         block, version, flow, task = task_obj.block, task_obj.version, task_obj.flow, task_obj.task
         self.config_dic['BLOCK'][block][version][flow][task].Status = status
         self.update_main_table_item(block, version, flow, task, 'Status', status)
@@ -2417,40 +2913,39 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
 
         self.update_status_table()
 
-    def send_result_to_user(self):
+    def send_result_to_user(self, block, version, flow, task, action):
         if self.send_result and self.send_result_command:
-            result_report = self.gen_result_report()
+            result_report = self.gen_result_report(block=block, version=version, flow=flow, task=task, action=action)
 
             send_result_command = re.sub('USER', USER, self.send_result_command)
             send_result_command = re.sub('RESULT', result_report, send_result_command)
-
-            self.update_message_text({'message': 'Send result.', 'color': 'black'})
+            send_result_command = re.sub('TITLE', '"[FAIL] IC Flow Platform"', send_result_command)
+            send_result_command = re.sub('HEADER_COLOR', 'red', send_result_command)
             os.system(send_result_command)
+            os.system(f'rm {result_report}')
 
-    def gen_result_report(self):
+    @staticmethod
+    def gen_result_report(**kwargs):
         current_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         result_report = str(CWD) + '/.result.' + str(current_time) + '.report'
 
         with open(result_report, 'w') as RR:
-            RR.write('IFP RESULT\n')
-            RR.write('User : ' + str(USER) + '\n')
+            RR.write(f"{kwargs['block']} -> {kwargs['version']} -> {kwargs['flow']} -> {kwargs['task']} {kwargs['action']} failed!\n")
             RR.write('Directory : ' + str(CWD) + '\n')
-            RR.write('Config : ' + str(self.ifp_config_file) + '\n')
 
-            status_dic = self.get_status_dic()
-
-            RR.write('Total ' + str(status_dic['Total']) + ' tasks, ' + str(status_dic['Passed']) + ' pass.\n')
-
-        return (result_report)
+        return result_report
 
     def final_close(self):
         self.close_dialog.close()
+        self.full_flowchart_window.close()
         self.close()
 
     def update_runtime(self):
         """
         Update runtime in main table per second
         """
+        self.timer.stop()
+
         for main_table_info in self.main_table_info_list:
             block = main_table_info['Block']
             version = main_table_info['Version']
@@ -2475,15 +2970,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
             elif status == common.status.killing and runtime == "pending":
                 self.update_main_table_item(block, version, flow, task, 'Runtime', "00:00:00")
 
-    def update_filter_branches_menu(self):
-        for branch in self.branch_row_mapping.keys():
-            self.update_main_view(view_name='branch', item_text=branch, item_select_status=True, mode='no-update')
-            self.task_window.update_config_view(view_name='branch', item_text=branch, item_select_status=True)
-
-    def update_filter_block_menu(self):
-        for branch in self.block_row_mapping.keys():
-            self.update_main_view(view_name='block', item_text=branch, item_select_status=True, mode='no-update')
-            self.task_window.update_config_view(view_name='block', item_text=branch, item_select_status=True)
+        self.timer.start(1000)
 
     def show_or_hide_detail_status(self):
         action = self.sender()
@@ -2543,6 +3030,7 @@ Copyright © 2021 ByteDance. All Rights Reserved worldwide.""")
         QMessageBox.warning(self, 'LSF Monitor Warning', 'LSFMonitor start unsuccessfully.')
         jobid = self.sender().property('jobid')
         self.monitor_list.remove(jobid)
+
     # execute_action (end)
 
     def save_default_yaml(self, default_yaml=''):
@@ -2791,6 +3279,7 @@ class SettingWindow(QMainWindow):
                         widget.setEnabled(False)
 
         self.cancel_button.setEnabled(False)
+        self.reset_button.setEnabled(False)
 
     def enable_gui(self):
         for main_category in self.ifp_env_setting.keys():
@@ -2807,6 +3296,7 @@ class SettingWindow(QMainWindow):
                         widget.setEnabled(True)
 
         self.cancel_button.setEnabled(True)
+        self.reset_button.setEnabled(True)
 
     def gen_main_tab(self):
         for main_category in self.ifp_env_setting.keys():
@@ -2832,13 +3322,16 @@ class SettingWindow(QMainWindow):
 
                     if self.ifp_env_setting[main_category][child_category][item]['widget_type'] == 'edit':
                         item_label = QLabel(item)
-                        item_label.setFixedWidth(100)
+                        if item == '$MAX_RUNNING_JOBS':
+                            item_label.setFixedWidth(150)
+                        else:
+                            item_label.setFixedWidth(100)
                         item_widget = QLineEdit()
                         item_label.setFont(QFont('Calibri', 10))
                         line_layout.addWidget(item_label)
                         line_layout.addWidget(item_widget)
 
-                        if self.ifp_env_setting[main_category][child_category][item]['value']:
+                        if self.ifp_env_setting[main_category][child_category][item]['value'] is not None:
                             item_widget.setText(str(self.ifp_env_setting[main_category][child_category][item]['value']))
 
                         if self.mode == 'widget':
@@ -2980,10 +3473,10 @@ class SettingWindow(QMainWindow):
                                 elif reply == QMessageBox.No:
                                     pass
 
-                        if not raw_setting == new_setting:
+                        if not str(raw_setting) == str(new_setting):
                             self.ifp_env_setting[main_category][child_category][item]['value'] = new_setting
 
-                            if not child_category == 'Process management':
+                            if child_category not in ['Process management']:
                                 self.need_reload_flag = True
 
                     elif self.ifp_env_setting[main_category][child_category][item]['widget_type'] == 'select':
@@ -3076,7 +3569,7 @@ class SystemSetting:
 
 
 class ViewWindow(QMainWindow):
-    item_select_status_signal = pyqtSignal(str, str, bool)
+    status = pyqtSignal(dict)
     save_cache = pyqtSignal(bool)
 
     def __init__(self, status_dic=None, disable_list=None, title='Main View'):
@@ -3096,6 +3589,13 @@ class ViewWindow(QMainWindow):
         self.top_layout = QVBoxLayout()
         self.main_widget = QWidget()
         self.main_layout = QHBoxLayout()
+        self.button_widget = QWidget()
+        self.button_layout = QHBoxLayout()
+
+        self.apply_button = QPushButton('Apply')
+        self.cancel_button = QPushButton('Cancel')
+        self.apply_button.clicked.connect(self.apply)
+        self.cancel_button.clicked.connect(self.cancel)
 
         self.tables = {}
         self.tree = QTreeWidget()
@@ -3109,6 +3609,7 @@ class ViewWindow(QMainWindow):
         self.top_widget.setLayout(self.top_layout)
         self.setCentralWidget(self.top_widget)
         self.top_layout.addWidget(self.main_widget)
+        self.top_layout.addWidget(self.button_widget)
         self.top_layout.setStretch(0, 10)
         self.top_layout.setStretch(1, 1)
 
@@ -3118,6 +3619,11 @@ class ViewWindow(QMainWindow):
 
         self.gen_tree()
         self.main_layout.addWidget(self.frame0)
+
+        self.button_widget.setLayout(self.button_layout)
+        self.button_layout.addStretch(1)
+        self.button_layout.addWidget(self.apply_button)
+        self.button_layout.addWidget(self.cancel_button)
 
         self.gen_table()
         self.current_frame = self.tables['column']
@@ -3161,7 +3667,7 @@ class ViewWindow(QMainWindow):
 
                 row += 1
 
-            model.itemChanged.connect(functools.partial(self.update_view, view_name))
+            # model.itemChanged.connect(functools.partial(self.update_view, view_name))
             self.tables[view_name] = table
             self.main_layout.addWidget(table)
             table.hide()
@@ -3214,7 +3720,21 @@ class ViewWindow(QMainWindow):
 
         return self.frame0
 
-    def update_view(self, view_name, item=None):
+    def read_status(self) -> Dict[str, Dict[str, bool]]:
+        status = {}
+
+        for view_name, table in self.tables.items():
+            status.setdefault(view_name, {})
+
+            for row in range(table.model().rowCount()):
+                item = table.model().item(row, 0)
+                item_name = item.text()
+                item_status = True if item.checkState() else False
+                status[view_name].update({item_name: item_status})
+
+        return status
+
+    def apply(self):
         progress_dialog = QProgressDialog("Updating Window ...", "Cancel", 0, 0, self)
         progress_dialog.setWindowTitle('Please Wait')
         progress_dialog.setCancelButton(None)
@@ -3227,11 +3747,13 @@ class ViewWindow(QMainWindow):
         progress_dialog.activateWindow()
         QApplication.processEvents()
 
-        if view_name and item:
-            item_status = True if item.checkState() else False
-            self.item_select_status_signal.emit(view_name, item.text(), item_status)
+        status_dic = self.read_status()
+        self.status.emit(status_dic)
 
         progress_dialog.close()
+
+    def cancel(self):
+        self.close()
 
     def closeEvent(self, a0):
         self.save_cache.emit(True)
@@ -3278,6 +3800,442 @@ class TabWidget(QTabWidget):
         self.previousTabIndex = currentIndex
 
 
+class SidebarTree(QMainWindow):
+    go_to_msg = pyqtSignal(int, int)
+    show_hide_item = pyqtSignal(int, int, bool)
+
+    def __init__(self):
+        super().__init__()
+
+        self.tree = QTreeWidget()
+        self.setCentralWidget(self.tree)
+        self.config = parse_config.Config(None)
+        self._init_ui()
+
+    def _init_ui(self):
+        self.tree.setColumnCount(1)
+        self.tree.header().setSectionResizeMode(QHeaderView.Stretch)
+        self.tree.header().setStretchLastSection(False)
+
+        self._update_tree()
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._gen_tree_menu)
+
+    def _gen_tree_menu(self, pos):
+        item = self.tree.itemAt(pos)
+        selected_item = self.tree.currentItem()
+
+        if selected_item and selected_item == item:
+            menu = QMenu()
+
+            if selected_item.childCount():
+                fold_menu = menu.addMenu('Folding')
+                expand_all_action = fold_menu.addAction('Expand All')
+                expand_siblings_action = fold_menu.addAction('Expand Siblings')
+                expand_self_action = fold_menu.addAction('Expand')
+                fold_menu.addSeparator()
+                collapse_all_action = fold_menu.addAction('Collapse All')
+                collapse_siblings_action = fold_menu.addAction('Collapse Siblings')
+                collapse_self_action = fold_menu.addAction('Collapse')
+                menu.addSeparator()
+
+                expand_all_action.triggered.connect(functools.partial(self._fold_tree, expand=True, level='ALL'))
+                expand_siblings_action.triggered.connect(functools.partial(self._fold_tree, expand=True, level='SIBLINGS'))
+                expand_self_action.triggered.connect(functools.partial(self._fold_tree, expand=True, level='SELF'))
+                collapse_all_action.triggered.connect(functools.partial(self._fold_tree, expand=False, level='ALL'))
+                collapse_siblings_action.triggered.connect(functools.partial(self._fold_tree, expand=False, level='SIBLINGS'))
+                collapse_self_action.triggered.connect(functools.partial(self._fold_tree, expand=False, level='SELF'))
+
+            go_to_action = menu.addAction('Go To')
+            go_to_action.triggered.connect(self._go_to_task)
+
+            _, row, column = self.parse_tree_node(self.tree.currentItem().whatsThis(0))
+            enable = self.config.table_visible_status[(row, column)]
+            go_to_action.setEnabled(enable)
+
+            if column in [0, 3]:
+                show_hide_action = menu.addAction('Hide')
+
+                if not enable:
+                    show_hide_action.setText('Show')
+
+                show_hide_action.triggered.connect(self._show_hide_item)
+
+            menu.exec_(self.tree.viewport().mapToGlobal(pos))
+
+    def _go_to_task(self):
+        if not self.tree.currentItem():
+            return
+
+        check, row, column = self.parse_tree_node(self.tree.currentItem().whatsThis(0))
+
+        if check:
+            self.go_to_msg.emit(row, column)
+
+    def _show_hide_item(self):
+        if not self.tree.currentItem():
+            return
+
+        _, row, column = self.parse_tree_node(self.tree.currentItem().whatsThis(0))
+        enable = not self.config.table_visible_status[(row, column)]
+
+        self.show_hide_item.emit(row, column, enable)
+
+    @staticmethod
+    def parse_tree_node(what_is_this: str) -> Tuple[bool, int, int]:
+        if my_match := re.match(r'(\d+):(\d+)', what_is_this):
+            row = int(my_match.group(1))
+            column = int(my_match.group(2))
+
+            return True, row, column
+        return False, 0, 0
+
+    def _fold_tree(self, expand: bool, level: str = 'ALL'):
+        if not self.tree.currentItem():
+            return
+
+        level = level.upper()
+
+        if level == 'SELF':
+            self.tree.currentItem().setExpanded(expand)
+        elif level == 'SIBLINGS':
+            parent = self.tree.currentItem().parent()
+
+            if parent:
+                for index in range(parent.childCount()):
+                    parent.child(index).setExpanded(expand)
+            else:
+                for i in range(self.tree.topLevelItemCount()):
+                    self.tree.topLevelItem(i).setExpanded(expand)
+        elif level == 'ALL':
+            if expand:
+                self.tree.expandAll()
+            else:
+                self.tree.collapseAll()
+        else:
+            return
+
+    def update(self):
+        self._update_tree()
+
+    def _update_tree(self):
+        # Clear
+        self.tree.clear()
+        self.tree.setHeaderLabels(['     %s' % self.config.PROJECT, ])
+        row = 0
+
+        for block_obj in self.config.block_dic.values():
+            block_item = self._generate_tree_item(block_obj.NAME, visible=block_obj.Visible)
+            self.tree.addTopLevelItem(block_item)
+            block_item.setWhatsThis(0, f'{str(row)}:{str(0)}')
+
+            for version_obj in block_obj.VERSION.values():
+                version_item = self._generate_tree_item(version_obj.NAME, visible=block_obj.Visible)
+                block_item.addChild(version_item)
+                version_item.setWhatsThis(0, f'{str(row)}:{str(1)}')
+
+                for flow_obj in version_obj.FLOW.values():
+                    flow_item = self._generate_tree_item(flow_obj.NAME, visible=block_obj.Visible)
+                    version_item.addChild(flow_item)
+                    flow_item.setWhatsThis(0, f'{str(row)}:{str(2)}')
+
+                    for task_obj in flow_obj.TASK.values():
+                        task_item = self._generate_tree_item(task_obj.NAME, visible=task_obj.Visible)
+                        flow_item.addChild(task_item)
+                        task_item.setWhatsThis(0, f'{str(row)}:{str(3)}')
+                        row += 1
+
+        self.tree.expandAll()
+
+    @staticmethod
+    def _generate_tree_item(text: str, visible: bool = True) -> QTreeWidgetItem:
+        item = QTreeWidgetItem()
+        item.setText(0, text)
+
+        if visible:
+            item.setForeground(0, QBrush(QColor('black')))
+            item.setIcon(0, QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/blue/block.png'))
+        else:
+            item.setForeground(0, QBrush(QColor('gray')))
+            item.setIcon(0, QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/gray/block.png'))
+
+        return item
+
+
+class FlowChartBackend(QObject):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+
+    @pyqtSlot(str)
+    def open_node_window(self, node_id):
+        self.main_window.open_task_information_window(node_id)
+
+
+class FlowChartWindow(QMainWindow):
+    block_version_task = pyqtSignal(str, str, str)
+
+    def __init__(self, config_obj: parse_config.Config, width: int, height: int):
+        super().__init__()
+
+        self.width = width
+        self.height = height
+
+        # Render
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader(os.path.join(str(os.environ['IFP_INSTALL_PATH']), 'data/js/templates')))
+        template = env.get_template('flowchart.html')
+        self.template_html = template.render(width=width - 40, height=height - 100, js=os.path.join(str(os.environ['IFP_INSTALL_PATH']), 'data/js'))
+        self.html_file = os.path.join(os.getcwd(), f'.ifp/html/{datetime.datetime.now().timestamp()}flowchart.html')
+        os.makedirs(os.path.dirname(self.html_file), exist_ok=True)
+
+        with open(self.html_file, 'w') as ft:
+            ft.write(self.template_html)
+
+        self.config_obj = config_obj
+        self.block = None
+        self.version = None
+        self.node_list = []
+        self.edge_list = []
+
+        # UI
+        self.top_widget = QWidget()
+        self.top_layout = QVBoxLayout()
+        self.webview = QWebEngineView()
+        self.button_widget = QWidget()
+        self.button_layout = QHBoxLayout()
+        self.refresh_button_group = QButtonGroup()
+        self.refresh_list = [10, 20, 30, 60]
+        self.refresh_interval = self.refresh_list[0]
+        self.refresh_button_list = []
+        self.job_refresh_button = QPushButton('Refresh')
+        self.job_refresh_button.clicked.connect(self.refresh)
+        self.job_refresh_button.setEnabled(False)
+
+        # Refresh
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start(self.refresh_interval * 1000)
+        self.refresh_thread = FlowChartWorker(config_obj)
+        self.refresh_thread.node_list.connect(self.update_task_status)
+
+        # Web
+        self.channel = QWebChannel()
+        self.backend = FlowChartBackend(self)
+        self.channel.registerObject("backend", self.backend)
+        self.webview.page().setWebChannel(self.channel)
+
+        self.graph_update_thread = None
+        self.setMaximumSize(width, height)
+
+        self._init_ui()
+
+    def _init_ui(self):
+        self.setCentralWidget(self.top_widget)
+
+        self.webview.load(QUrl.fromLocalFile(self.html_file))
+        self.top_layout.addWidget(self.webview, 20)
+        self.top_layout.addWidget(self.button_widget, 1)
+        self.top_widget.setLayout(self.top_layout)
+
+        # Button
+        flash_label = QLabel('Refresh(s)')
+        flash_label.setStyleSheet("font-weight: bold;")
+        flash_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        self.button_widget.setLayout(self.button_layout)
+        self.button_layout.addStretch(2)
+        self.button_layout.addWidget(flash_label, 2, Qt.AlignRight)
+
+        for index, flash in enumerate(self.refresh_list):
+            flash_button = QRadioButton(str(flash))
+            flash_button.clicked.connect(self.restart_timer)
+            self.refresh_button_list.append(flash_button)
+            self.refresh_button_group.addButton(flash_button, index)
+
+        flash_button = QRadioButton('Manual')
+        flash_button.clicked.connect(self.restart_timer)
+        self.refresh_button_list.append(flash_button)
+        self.refresh_button_group.addButton(flash_button, len(self.refresh_button_list) + 1)
+
+        self.refresh_button_group.button(0).setChecked(True)
+
+        for i in range(len(self.refresh_button_list)):
+            self.button_layout.addWidget(self.refresh_button_list[i], 1)
+
+        self.button_layout.addStretch(20)
+        self.button_layout.addWidget(self.job_refresh_button)
+
+        common_pyqt5.center_window(self)
+
+    def refresh(self):
+        """
+        Refresh node status.
+        """
+        # Stop Timer
+        self.timer.stop()
+
+        if not self.refresh_thread.isRunning():
+            self.refresh_thread.start()
+
+    def update_task_status(self, node_list):
+        self.node_list = node_list
+        self.update_graph()
+
+        # Restart Timer
+        self.restart_timer()
+
+    def restart_timer(self):
+        if my_match := re.match(r'^(\d+)$', self.new_refresh_interval):
+            self.job_refresh_button.setEnabled(False)
+            new_interval = int(my_match.group(1))
+            self.timer.stop()
+
+            if not self.timer.isActive():
+                self.timer.start(new_interval * 1000)
+        else:
+            self.job_refresh_button.setEnabled(True)
+            self.timer.stop()
+
+            if self.timer.isActive():
+                self.timer.stop()
+
+    def gen_flow_graph(self, dependency_dic: Dict[str, str], block: str, version: str):
+        _, self.node_list, self.edge_list = WindowForDependency.gen_dependency_chart_info(block=block, version=version, dependency_dic=dependency_dic)
+        self.block = block
+        self.version = version
+        self.setFixedSize(self.width, self.height)
+        self.refresh_thread.load_block_version(block=block, version=version, node_list=self.node_list)
+        self.setWindowTitle(f'Flow Chart for {block}/{version}')
+        self.reset_graph()
+        self.refresh()
+
+    def gen_full_flow_graph(self, dependency_dic: Dict[str, Dict[str, Dict[str, str]]], update: bool = False):
+        _, self.node_list, self.edge_list = WindowForDependency.gen_full_dependency_chart_info(dependency_dic=dependency_dic)
+        self.refresh_thread.load_block_version(node_list=self.node_list)
+        self.setWindowTitle('Flow Chart')
+
+        if update:
+            self.reset_graph()
+            self.refresh()
+
+    def reset_graph(self):
+        js_command = "clearGraph();"
+        self.webview.page().runJavaScript(js_command)
+
+    def update_graph(self):
+        """
+        Update Flow Chart.
+        """
+        js_command = f"updateGraph({json.dumps(self.node_list)}, {json.dumps(self.edge_list)});"
+        self.webview.page().runJavaScript(js_command)
+
+    def resize_graph(self, width: int, height: int):
+        """
+        Update Flow Chart.
+        """
+        self.setMaximumSize(width, height)
+        js_command = f"resizeGraph({str(width - 40)}, {str(height - 100)});"
+        self.webview.page().runJavaScript(js_command)
+
+    @property
+    def new_refresh_interval(self) -> str:
+        for button in self.refresh_button_list:
+            if not button.isChecked():
+                continue
+
+            return button.text()
+
+    def closeEvent(self, a0):
+        if isinstance(self.refresh_thread, FlowChartWorker) and self.refresh_thread.isRunning():
+            self.refresh_thread.terminate()
+
+        super().closeEvent(a0)
+
+    def open_task_information_window(self, node_id: str):
+        node_info = node_id.split('-')
+
+        if len(node_info) < 3:
+            return
+
+        block, version, task = node_info[0], node_info[1], node_info[2]
+        self.block_version_task.emit(block, version, task)
+
+
+class FlowChartWorker(QThread):
+    node_list = pyqtSignal(list)
+
+    def __init__(self, config_obj: parse_config.Config):
+        super().__init__()
+
+        self.block = None
+        self.version = None
+        self.node_dic = {}
+        self.config_obj = config_obj
+
+    def load_block_version(self, node_list: List[Dict[str, str]], block: str = None, version: str = None):
+        self.block = block
+        self.version = version
+        self.node_dic = {node_dic['id']: node_dic for node_dic in node_list}
+
+    def run(self):
+        if not self.node_dic:
+            return
+
+        for block in self.config_obj.block_dic.values():
+            if self.block and block.NAME != self.block:
+                continue
+
+            for version in block.VERSION.values():
+                if self.version and version.NAME != self.version:
+                    continue
+
+                for flow in version.FLOW.values():
+                    if not flow.TASK:
+                        continue
+
+                    for task in flow.TASK.values():
+                        node_id = f'{block.NAME}-{version.NAME}-{task.NAME}'
+
+                        if node_id in self.node_dic:
+                            color = MainWindow.mapping_status_color(status=task.RunStatus)
+
+                            if color is None:
+                                if 'color' in self.node_dic[node_id]:
+                                    del self.node_dic[node_id]['color']
+
+                                continue
+
+                            if task.Status == 'Cancelled':
+                                color = QColor(211, 211, 211)
+
+                            self.node_dic[node_id]['color'] = {'background': color.name(),
+                                                               'border': color.name(),
+                                                               'highlight': color.name(),
+                                                               'hover': color.name()}
+
+        self.node_list.emit([node for node in self.node_dic.values()])
+
+
+class IgnoreRightButtonMenu(QMenu):
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            event.ignore()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.RightButton:
+            event.ignore()
+        else:
+            super().mouseDoubleClickEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.RightButton:
+            event.ignore()
+        else:
+            super().mouseReleaseEvent(event)
+
+
 def execute_action_for_pre_cfg():
     api_yaml = common.get_default_yaml_path(key_word='api')
     user_api = common.parse_user_api(api_yaml)
@@ -3299,7 +4257,7 @@ def execute_action_for_pre_cfg():
             if not item['ENABLE']:
                 continue
 
-            common.run_command_for_api(common.expand_var(item['COMMAND'], ifp_var_dic=var_dic), '', common.expand_var(item['PATH'], ifp_var_dic=var_dic), gating_flag=True)
+            common.run_command_for_api(common.expand_var(item['COMMAND'], ifp_var_dic=var_dic), '', common.expand_var(item['PATH'], ifp_var_dic=var_dic))
 
 
 def execute_action_for_pre_ifp(ifp_obj):
@@ -3410,14 +4368,53 @@ class GuideWindow(QMainWindow):
             self.button2.setText('Next')
 
 
+class ResizeEventFilter(QObject):
+    def __init__(self, window):
+        super().__init__()
+        self.window = window
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.window.resize_table_column)
+
+    def eventFilter(self, obj, event):
+        try:
+            current_index = self.window.top_tab.currentIndex()
+
+            if event.type() == QEvent.Resize:
+                self.window.top_tab.setCurrentIndex(1)
+                self.timer.start(200)
+                self.window.top_tab.setCurrentIndex(current_index)
+        except RuntimeError:
+            pass
+
+        return super().eventFilter(obj, event)
+
+
+class GlobalEventFilter(QObject):
+    def __init__(self, table):
+        super().__init__()
+        self.table = table
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress:
+            if not self.table.underMouse():
+                self.table.clearSelection()
+
+        return super().eventFilter(obj, event)
+
+
 # Main Process #
 def main():
-    (config_file, debug, auto_execute_action) = readArgs()
-    QApplication.setFont(QFont("Calibri", 10))
-    app = QApplication(sys.argv)
-    execute_action_for_pre_cfg()
-    MainWindow(config_file, debug, auto_execute_action)
-    sys.exit(app.exec_())
+    try:
+        (config_file, read, debug, auto_execute_action, title) = readArgs()
+        QApplication.setFont(QFont("Calibri", 10))
+        app = QApplication(sys.argv)
+        execute_action_for_pre_cfg()
+        MainWindow(config_file, read, debug, auto_execute_action, title)
+        sys.exit(app.exec_())
+    except Exception as error:
+        print(traceback.format_exc())
+        print(f'*Error*: {str(error)}.')
 
 
 if __name__ == '__main__':

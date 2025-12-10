@@ -5,6 +5,7 @@
 # Created On  : 2022-05-27 13:48:57
 # Description :
 ################################
+import datetime
 import getpass
 import keyword
 import os
@@ -28,9 +29,28 @@ class IfpItem:
         self.Version = version
         self.Flow = flow
         self.Task = task.NAME
+        self.uuid = common.generate_uuid_from_components(item_list=[self.Block, self.Version, self.Flow, self.Task])
+        self.__visible_index = None
+        self.__index = None
         self.__task = task
         self.item_list = ['Block', 'Version', 'Flow', 'Task']
-        self.property_list = ['Visible', 'Selected', 'PATH', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm', 'BuildStatus', 'RunStatus', 'CheckStatus', 'SummarizeStatus', 'ReleaseStatus', 'Task_obj']
+        self.property_list = ['Visible', 'Selected', 'PATH', 'Status', 'Check', 'Summary', 'Job', 'Runtime', 'Xterm', 'BuildStatus', 'RunStatus', 'CheckStatus', 'SummarizeStatus', 'ReleaseStatus', 'Task_obj', 'uuid', 'visible_index', 'index']
+
+    @property
+    def visible_index(self):
+        return self.__visible_index
+
+    @visible_index.setter
+    def visible_index(self, index: int):
+        self.__visible_index = index
+
+    @property
+    def index(self):
+        return self.__index
+
+    @index.setter
+    def index(self, index: int):
+        self.__index = index
 
     @property
     def OriRunMode(self):
@@ -51,9 +71,13 @@ class IfpItem:
         run_action = self.__task.RunInfo[run_mode]
 
         for action_attr in ['XTERM_COMMAND', 'PATH', 'COMMAND', 'RUN_METHOD', 'VIEWER', 'REPORT_FILE', 'REQUIRED_LICENSE']:
-            if (action_attr in run_action) and run_action[action_attr]:
+            if action_attr in run_action:
                 self.__task.ACTION.setdefault('RUN', {})
-                self.__task.ACTION['RUN'][action_attr] = run_action[action_attr]
+
+                if run_action[action_attr]:
+                    self.__task.ACTION['RUN'][action_attr] = run_action[action_attr]
+                else:
+                    self.__task.ACTION['RUN'][action_attr] = self.__task.DefaultSetting.get('RUN', {}).get(action_attr, '')
 
     @property
     def RunModes(self) -> List[str]:
@@ -478,6 +502,8 @@ class Config:
         self.GROUP = ''
         self.default_config_file = ''
         self.api_yaml = ''
+        self.default_config_file_mtime = datetime.datetime.strptime('2100-01-01', '%Y-%m-%d')
+        self.api_file_mtime = datetime.datetime.strptime('2100-01-01', '%Y-%m-%d')
         # self.var_dic saves all VAR settings from user config file.
         cache_file_path = os.path.join(os.getcwd(), common.gen_cache_file_name(os.path.basename(config_file))[0])
         self.var_dic = {'IFP_INSTALL_PATH': os.environ['IFP_INSTALL_PATH'],
@@ -506,6 +532,15 @@ class Config:
 
             if 'API_YAML' in self.user_config_dic:
                 self.api_yaml = self.find_available_api_yaml(config_file)
+
+            try:
+                if os.path.exists(self.default_config_file):
+                    self.default_config_file_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(self.default_config_file))
+
+                if os.path.exists(self.api_yaml):
+                    self.api_file_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(self.api_yaml))
+            except Exception:
+                pass
 
         # Parse default config file.
         if self.default_config_file:
@@ -672,6 +707,23 @@ class Config:
                 task.ACTION.setdefault('RUN', {})
                 task.ACTION['RUN'][action_attr] = run_action[action_attr]
 
+        for item in template_config.keys():
+            if re.match(r'^RUN(?:\.(\w+))?$', item) and item != 'RUN':
+                for action_attr in ['XTERM_COMMAND', 'PATH', 'COMMAND', 'LOG', 'RUN_METHOD', 'VIEWER', 'REPORT_FILE', 'REQUIRED_LICENSE']:
+                    if action_attr not in template_config[item]:
+                        if mode == 'default':
+                            value = task_config.get('RUN', {}).get(action_attr, '')
+                            template_config[item][action_attr] = value
+                            task.RunInfo[item][action_attr] = value
+                        elif mode == 'user':
+                            value = task_config.get('RUN', {}).get(action_attr, '')
+
+                            if not value:
+                                value = task.DefaultSetting.get('RUN', {}).get(action_attr, '')
+
+                            template_config[item][action_attr] = value
+                            task.RunInfo[item][action_attr] = value
+
         task_config_obj = TaskConfig(template_config)
 
         if mode == 'default':
@@ -686,6 +738,9 @@ class Config:
         # self.__item_list is a list, save some class 'IfpItem'.
         # One IfpItem means one line on IFP GUI.
         self.__item_list = []
+        self.main_table_item_dic = {}
+        visible_index = -1
+        index = -1
 
         if self.block_dic:
             for block in self.block_dic.values():
@@ -696,7 +751,16 @@ class Config:
                                 if flow.TASK:
                                     for task in flow.TASK.values():
                                         item = IfpItem(block.NAME, version.NAME, flow.NAME, task)
+
+                                        if item.Visible:
+                                            visible_index += 1
+
+                                        index += 1
+
+                                        item.visible_index = visible_index
+                                        item.index = index
                                         self.__item_list.append(item)
+                                        self.main_table_item_dic[item.uuid] = item
 
         return self.__item_list
 
@@ -900,13 +964,12 @@ class Config:
                         break
 
     def save_ifp_records(self):
-        if not self.PROJECT:
-            return
+        project = 'UNKNOWN' if not self.PROJECT else self.PROJECT
 
         data_dic = {'user': getpass.getuser(),
                     'file_path': self.current_config_file,
                     'group': self.GROUP,
-                    'project': self.PROJECT,
+                    'project': project,
                     'blocks': []
                     }
 

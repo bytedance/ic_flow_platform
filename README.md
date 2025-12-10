@@ -1,44 +1,22 @@
-# IC Flow Platform V1.4.2 (2024.05.25)
+# IC Flow Platform V1.4 (2024.11.30)
 
-> <font color=red size=5>V1.4+ is not compatible with previous version due to removed vendor/branch and new format default.yaml</font>
+> <font color=red size=5>V1.4 is not compatible with previous version due to removed vendor/branch and new format default.yaml</font>
 
 ## Update history
 ***
-| Version | Date         | Update content                                                                                                                                                                |
-|:--------|:-------------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| V1.4.2  | (2025.05.25) | Add IN_PROCESS_CHECK to execute check when task running<br/> Add filter function <br/> Support set $MAX_RUNNING_JOBS <br/> Support export IFP data for secondary development  |
-| V1.4.1  | (2025.02.28) | Add RUN_MODE to switch command for specific task<br/> Support Menubar and Toolbar API<br/> Add launch parameter -t for title and -r for read_only mode                        |
-| V1.4    | (2024.11.30) | Remove vendor and branch columns<br/>More detailed task information interface</br>More clearly method to define task attributes/run order/dependency in default.yaml          |
-| V1.3.1  | (2024.09.04) | Support edit and export default.yaml / api.yaml from GUI<br/> Add syn demo case in user guidance                                                                              |
-| V1.3    | (2024.07.15) | Brand new user configuration interface and API function to support customized daily work scenarios                                                                            |
-| V1.2    | (2023.12.31) | Support more complex logic control and centrally manage user settings                                                                                                         |
-| V1.1.1  | (2023.08.31) | Optimize menu bar functions and interface operations                                                                                                                          |
-| V1.1    | (2023.07.14) | Fix some operation bugs and optimize CONFIG TAB operation mode                                                                                                                |
-| V1.0    | (2023.02.02) | Open source and the first official version is released                                                                                                                        |
+| Version | Date         | Update content                                                                                                                                                                                                                                                                                                                                                     |
+|:--------|:-------------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| V1.4.3  | (2025.11)    | Optimize task management mechanism with separated GUI and execution logic.<br/>Improve configuration loading speed and page rendering performance<br/>Add user operation logging and task submission records,  Add configuration update notifications and Support multiple Log configurations for Task<br/>Fix several bugs and optimize memory/process management |
+| V1.4.2  | (2025.05.25) | Add IN_PROCESS_CHECK to execute check when task running<br/> Add filter function <br/> Support set $MAX_RUNNING_JOBS <br/> Support export IFP data for secondary development                                                                                                                                                                                       |
+| V1.4.1  | (2025.02.28) | Add RUN_MODE to switch command for specific task<br/> Support Menubar and Toolbar API<br/> Add launch parameter -t for title and -r for read_only mode                                                                                                                                                                                                             |
+| V1.4    | (2024.11.30) | Remove vendor and branch columns<br/>More detailed task information interface</br>More clearly method to define task attributes/run order/dependency in default.yaml                                                                                                                                                                                               |
+| V1.3.1  | (2024.09.04) | Support edit and export default.yaml / api.yaml from GUI<br/> Add syn demo case in user guidance                                                                                                                                                                                                                                                                   |
+| V1.3    | (2024.07.15) | Brand new user configuration interface and API function to support customized daily work scenarios                                                                                                                                                                                                                                                                 |
+| V1.2    | (2023.12.31) | Support more complex logic control and centrally manage user settings                                                                                                                                                                                                                                                                                              |
+| V1.1.1  | (2023.08.31) | Optimize menu bar functions and interface operations                                                                                                                                                                                                                                                                                                               |
+| V1.1    | (2023.07.14) | Fix some operation bugs and optimize CONFIG TAB operation mode                                                                                                                                                                                                                                                                                                     |
+| V1.0    | (2023.02.02) | Open source and the first official version is released                                                                                                                                                                                                                                                                                                             |
 
-## Recommendations for Administrator
-***
-* <font size="3" color="blue">Prepare default.yaml and api.yaml for each project and group<br/></font>
-* <font size="3" color="blue">Develop wrapper script to generate ifp.cfg.yaml (launch file for each user's IFP) and define variables/blocks/yaml path so that user can run tasks by IFP without any operations, for example:</font>
-
-```
-# A ifp.cfg.yaml example, user launch IFP under the same directory of ifp.cfg.yaml
-
-VAR:    
-    BSUB_QUEUE: training
-    MAX_RUNNING_JOBS: 10
-TASK:
-    blockA:
-        version01:
-            flowA:
-                taskA: {}
-                taskB: {}
-                taskC: {}
-PROJECT: demo
-GROUP: dft
-DEFAULT_YAML: ${IFP_INSTALL_PATH}/config/default.dft.yaml
-API_YAML: ${IFP_INSTALL_PATH}/config/api.dft.yaml
-```
 
 ## Introduction
 ***

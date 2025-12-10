@@ -8,20 +8,24 @@
 ################################
 import datetime
 import getpass
+import json
 import os
+import random
 import re
 import sys
 import threading
 import time
-import random
-from typing import Dict
+import traceback
+import pandas as pd
+from typing import Dict, Tuple
 
 import requests
-from PyQt5.QtCore import pyqtSignal, QThread, Qt, QTimer, QObject
+from PyQt5.QtCore import pyqtSignal, QThread, Qt, QTimer, QObject, QEventLoop
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QColor, QBrush
 from PyQt5.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QTableView, QHeaderView
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
 
-import common_lsf
 import common_pyqt5
 
 os.environ['PYTHONUNBUFFERED'] = '1'
@@ -33,6 +37,8 @@ import common_prediction
 
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + '/config')
 import config as install_config
+
+sem = threading.BoundedSemaphore(50)
 
 
 class AutoVivification(dict):
@@ -217,11 +223,26 @@ class JobManager(QThread):
         self.send_result_flag = False
         self.close_flag = False
         self.current_running_jobs = 0
+        self.job_buffer = JobBuffer(job_store=os.path.join(self.ifp_obj.ifp_cache_dir, common_db.JobStoreTable))
+        self.job_store_path = f'sqlite:///{self.job_buffer.job_store}'
+        self.dispatched_dic = {}
+        self.dispatched_uuid_list = []
+        self.undispatched_uuid_list = []
+        self.log_dir = os.path.join(self.ifp_obj.ifp_cache_dir, 'job_logs')
 
-        # Define QTimer
-        timer = QTimer(self)
-        timer.start(1000)
-        timer.timeout.connect(self.launch_task)
+        engine = create_engine(self.job_store_path, connect_args={'timeout': 30, 'check_same_thread': False})
+        Session = sessionmaker(bind=engine)
+        self.session = Session()
+
+        # Launch Task QTimer
+        self.launch_timer = QTimer(self)
+        self.launch_timer.start(1000)
+        self.launch_timer.timeout.connect(self.launch_task)
+
+        # Launch Flush QTimer
+        self.flush_timer = QTimer(self)
+        self.flush_timer.start(1000)
+        self.flush_timer.timeout.connect(self.flush_task)
 
         self.debug = debug
         self.debug_window = DebugWindow(self.debug)
@@ -229,7 +250,10 @@ class JobManager(QThread):
         if self.debug:
             self.debug_window.show()
 
-    def record_formula(self, task_obj=None, task_formula=None, formula=None, run_time=None):
+        self.job_store_dic = {}
+
+    @staticmethod
+    def record_formula(task_obj=None, task_formula=None, formula=None, run_time=None):
         task_obj.formula_list.setdefault(run_time, {})
         task_obj.formula_list[run_time]['task_formula'] = task_formula
         task_obj.formula_list[run_time]['formula'] = formula
@@ -313,7 +337,7 @@ class JobManager(QThread):
                             task_obj.send_result_signal.connect(self.ifp_obj.send_result_to_user)
                             task_obj.set_one_jobid_signal.connect(self.ifp_obj.update_main_table_item)
                             task_obj.set_run_time_signal.connect(self.ifp_obj.update_main_table_item)
-                            task_obj.update_debug_info_signal.connect(self.debug_window.update_info)
+                            # task_obj.update_debug_info_signal.connect(self.debug_window.update_info)
                             self.all_tasks[block][version][flow][task] = task_obj
                             self.debug_window.row_mapping[task_obj] = row
                         else:
@@ -548,15 +572,30 @@ class JobManager(QThread):
                         # Launch when status is not killing or killed for KILL action
                         if task_obj.action == common.action.kill:
                             if task_obj.status not in [common.status.killing, common.status.killed]:
+                                check = self.thread_check(block, version, flow, task)
+
+                                if not check:
+                                    continue
+
                                 task_obj.launch()
 
                         # Launch when status is not running for RUN action
                         elif task_obj.action == common.action.run:
                             # If user define run_all_steps, flow will execute build before run
                             if task_obj.status not in [common.status.building, common.status.running]:
+                                check = self.thread_check(block, version, flow, task)
+
+                                if not check:
+                                    continue
+
                                 task_obj.launch()
                         # Launch when status is not ING
                         elif task_obj.status not in common.status_ing.values():
+                            check = self.thread_check(block, version, flow, task)
+
+                            if not check:
+                                continue
+
                             task_obj.launch()
 
         if all_finished_flag:
@@ -568,6 +607,242 @@ class JobManager(QThread):
 
             if self.close_flag:
                 self.close_signal.emit()
+
+    def thread_check(self, block, version, flow, task):
+        self.ifp_obj.pnum += 2
+        is_safe, current, max_allowed = self.all_tasks[block][version][flow][task].process_monitor.is_process_count_safe(current=self.ifp_obj.pnum)
+
+        if not is_safe:
+            self.all_tasks[block][version][flow][task].print_task_progress(
+                self.all_tasks[block][version][flow][task].task,
+                f"Wait! Your user is reaching the system thread/process limit (ulimit -u). "
+                f"Current usage: {current}/{max_allowed}. Please wait for existing jobs to finish."
+            )
+
+        return is_safe
+
+    def load_job_store(self, retries: int = 3, delay: int = 1):
+        attempt = 0
+
+        while attempt < retries:
+            try:
+                jobs = self.session.query(common_db.JobStore).all()
+                job_dict = {}
+                for job in jobs:
+                    job_dict[job.uuid] = {
+                        'job_type': job.job_type,
+                        'job_id': job.job_id,
+                        'block': job.block,
+                        'version': job.version,
+                        'flow': job.flow,
+                        'task': job.task,
+                        'command_file': job.command_file,
+                        'action': job.action,
+                        'status': job.status,
+                    }
+                return job_dict
+
+            except Exception:
+                attempt += 1
+                time.sleep(delay)
+
+        return {}
+
+    def flush_task(self):
+        if self.ifp_obj.read_mode:
+            return
+
+        self.flush_timer.stop()
+        self.job_store_dic = self.load_job_store()
+        self.dispatched_dic = {}
+        self.dispatched_uuid_list = []
+        self.undispatched_uuid_list = []
+        self.delete_uuid_list = []
+        self.task_job_history_data = []
+
+        for block in self.all_tasks.keys():
+            for version in self.all_tasks[block].keys():
+                for flow in self.all_tasks[block][version].keys():
+                    for task in self.all_tasks[block][version][flow].keys():
+                        task_obj = self.all_tasks[block][version][flow][task]
+                        job_store = self.job_store_dic.get(task_obj.uuid, {})
+                        job_store_status = job_store.get('status', {})
+
+                        if not job_store:
+                            continue
+
+                        try:
+                            if job_store_status in [common_db.JobStatus.dispatched]:
+                                self.flush_task_job_id(block=block, version=version, flow=flow, task=task, task_obj=task_obj)
+                            else:
+                                self.flush_task_status(block=block, version=version, flow=flow, task=task, job_store=job_store)
+                            # elif job_store_action != task_obj.action and task_obj.status in [common.status.passed, common.status.failed]:
+                            #     self.flush_task_status(block=block, version=version, flow=flow, task=task, job_store=self.job_store_dic[task_obj.uuid])
+                            # elif task_obj.status in [common.status.building, common.status.killed, common.status.killing, common.status.running, common.status.checking, common.status.summarizing, common.status.releasing, common_db.JobStatus.submit_fail]:
+                            #     self.flush_task_status(block=block, version=version, flow=flow, task=task, job_store=self.job_store_dic[task_obj.uuid])
+                        except Exception as error:
+                            print("error:", error)
+                            print("traceback:", traceback.format_exc())
+
+        self.flush_task_store()
+        self.send_post_execute_signal()
+        self.save_all_task_job_history_to_csv()
+        self.dispatched_dic = {}
+        self.dispatched_uuid_list = []
+        self.undispatched_uuid_list = []
+        self.delete_uuid_list = []
+        self.task_job_history_data = []
+        self.job_store_dic = {}
+        self.flush_timer.start(1000)
+
+    def send_post_execute_signal(self):
+        for block in self.dispatched_dic:
+            for version in self.dispatched_dic[block]:
+                for flow in self.dispatched_dic[block][version]:
+                    for task in self.dispatched_dic[block][version][flow]:
+                        task_obj = self.all_tasks[block][version][flow][task]
+                        job_data = self.job_store_dic[task_obj.uuid]
+                        job_id = job_data.get('job_id')
+                        job_type = job_data.get('job_type')
+                        job_action = job_data.get('action')
+                        self.all_tasks[block][version][flow][task].post_execute_action(job_type, job_action, job_id)
+                        self.all_tasks[block][version][flow][task].post_execute_signal.emit()
+
+    def flush_task_store(self, retry: int = 5, base_delay: float = 0.2):
+        for i in range(retry):
+            try:
+                self.session.execute(text("BEGIN IMMEDIATE"))
+
+                if self.dispatched_uuid_list:
+                    self.session.query(common_db.JobStore) \
+                        .filter(common_db.JobStore.uuid.in_(self.dispatched_uuid_list)) \
+                        .update({common_db.JobStore.status: common_db.JobStatus.queued},
+                                synchronize_session=False)
+
+                if self.undispatched_uuid_list:
+                    self.session.query(common_db.JobStore) \
+                        .filter(common_db.JobStore.uuid.in_(self.undispatched_uuid_list)) \
+                        .update({common_db.JobStore.status: common_db.JobStatus.submit_fail},
+                                synchronize_session=False)
+
+                if self.delete_uuid_list:
+                    self.session.query(common_db.JobStore) \
+                        .filter(common_db.JobStore.uuid.in_(self.delete_uuid_list)) \
+                        .delete(synchronize_session=False)
+
+                self.session.commit()
+                return
+            except Exception as e:
+                msg = str(e).lower()
+
+                if "database is locked" in msg or "busy" in msg:
+                    try:
+                        self.session.rollback()
+                    except Exception:
+                        pass
+                    time.sleep(base_delay * (2 ** i))
+                    continue
+
+                try:
+                    self.session.rollback()
+                except Exception:
+                    pass
+
+    def flush_task_job_id(self, block: str, version: str, flow: str, task: str, task_obj: 'TaskObject'):
+        job_data = self.job_store_dic[task_obj.uuid]
+        job_id = job_data.get('job_id')
+        job_type = job_data.get('job_type')
+        job_action = job_data.get('action')
+
+        if (job_id and job_type and job_action) or (not job_id):
+            self.dispatched_dic.setdefault(block, {})
+            self.dispatched_dic[block].setdefault(version, {})
+            self.dispatched_dic[block][version].setdefault(flow, [])
+            self.dispatched_dic[block][version][flow].append(task)
+
+            if job_id:
+                self.dispatched_uuid_list.append(task_obj.uuid)
+            else:
+                self.undispatched_uuid_list.append(task_obj.uuid)
+
+    def save_task_job_history(self, job_store: dict):
+        try:
+            action = job_store['action'].value
+            job_id = job_store['job_id']
+            job_type = job_store['job_type'].value
+
+            if action != common.action.run or not job_id or job_type != common_db.JobType.lsf.value:
+                return
+
+            self.task_job_history_data.append({
+                'block': job_store['block'],
+                'version': job_store['version'],
+                'flow': job_store['flow'],
+                'task': job_store['task'],
+                'job_id': job_store['job_id'],
+                'timestamp': int(datetime.datetime.now().timestamp())
+            })
+        except Exception:
+            pass
+
+    def save_all_task_job_history_to_csv(self):
+        try:
+            if not self.task_job_history_data:
+                return
+
+            history_df = pd.DataFrame(self.task_job_history_data)
+            history_path = self.ifp_obj.task_window.history_cache_path
+
+            if not os.path.exists(history_path):
+                os.makedirs(os.path.dirname(history_path), exist_ok=True)
+                history_df.to_csv(history_path, index=False)
+            else:
+                history_df.to_csv(history_path, index=False, header=False, mode='a+')
+        except Exception:
+            pass
+
+    def flush_task_status(self, block: str, version: str, flow: str, task: str, job_store: dict):
+        task_obj = self.all_tasks[block][version][flow][task]
+        action = job_store['action'].value
+        job_status = job_store['status'].value
+        # job_type = job_store['job_type'].value
+        # print("flush, ", task, job_status)
+
+        if task_obj.status == common.status.killed:
+            self.delete_uuid_list.append(task_obj.uuid)
+        else:
+            if job_status == common.status.passed:
+                self.all_tasks[block][version][flow][task].status = '{} {}'.format(action, common.status.passed)
+                self.all_tasks[block][version][flow][task].msg_signal.emit({'message': '[%s/%s/%s/%s] %s done' % (block, version, flow, task, action), 'color': 'green'})
+                self.delete_uuid_list.append(task_obj.uuid)
+                self.save_task_job_history(job_store=job_store)
+            elif job_status == common.status.failed or job_status == common_db.JobStatus.submit_fail.value:
+                if not job_store['job_id']:
+                    self.all_tasks[block][version][flow][task].job_id = 'submit fail'
+                    self.all_tasks[block][version][flow][task].msg_signal.emit({'message': '[%s/%s/%s/%s] submit fail : %s ' % (block, version, flow, task, action), 'color': 'red'})
+
+                self.all_tasks[block][version][flow][task].status = '{} {}'.format(action, common.status.failed)
+                self.all_tasks[block][version][flow][task].msg_signal.emit({'message': '[%s/%s/%s/%s] failed: "%s"' % (block, version, flow, task, action), 'color': 'red'})
+
+                if action == common.action.run or action == common.action.check:
+                    self.all_tasks[block][version][flow][task].send_result_signal.emit(block, version, flow, task, action)
+                self.delete_uuid_list.append(task_obj.uuid)
+                self.save_task_job_history(job_store=job_store)
+            else:
+                return
+
+            # if job_type == common_db.JobType.local.value and job_status in [common.status.passed, common.status.failed]:
+            if job_status in [common.status.passed, common.status.failed, common_db.JobStatus.submit_fail.value]:
+                self.all_tasks[block][version][flow][task].print_task_progress(task, '[RUN_STDOUT] : <a href="file:///%s">Click to View Logs(output)</a>' % os.path.join(self.log_dir, f'{block}_{version}_{task}_{action}.stdout.log'))
+                self.all_tasks[block][version][flow][task].print_task_progress(task, '[RUN_STDERR] : <a href="file:///%s">Click to View Logs(error)</a>' % os.path.join(self.log_dir, f'{block}_{version}_{task}_{action}.stderr.log'))
+
+            if action in [common.action.check, common.action.check_view]:
+                self.all_tasks[block][version][flow][task].check_status = job_status
+            elif action in [common.action.summarize, common.action.summarize_view]:
+                self.all_tasks[block][version][flow][task].summarize_status = job_status
+
+        self.all_tasks[block][version][flow][task].update_status_signal.emit(self.all_tasks[block][version][flow][task], action, self.all_tasks[block][version][flow][task].status)
+        self.all_tasks[block][version][flow][task].wait_signal.emit()
 
     def kill_all_jobs_before_close_window(self):
         # Send kill action to all tasks
@@ -602,6 +877,9 @@ class TaskObject(QObject):
     set_one_jobid_signal = pyqtSignal(str, str, str, str, str, str)
     set_run_time_signal = pyqtSignal(str, str, str, str, str, str)
     update_debug_info_signal = pyqtSignal(object)
+    wait_signal = pyqtSignal()
+    wait_all_signal = pyqtSignal()
+    post_execute_signal = pyqtSignal()
 
     def __init__(self, config_dic, block, version, flow, task, ifp_obj, debug_window, job_manager):
         super().__init__()
@@ -626,6 +904,8 @@ class TaskObject(QObject):
         self.kill_status = None
         self.ifp_obj = ifp_obj
         self.ifp_cache_dir = self.ifp_obj.ifp_cache_dir
+        self.task_run_shell = None
+        self.working_path = None
         self.job_id = None
         self.debug_window = debug_window
         self.total_run_times = 0
@@ -636,8 +916,11 @@ class TaskObject(QObject):
         self.skipped = False
         self.ignore_fail = False
         self.dependency_traceback_stage = 0
+        self.managed = False
         self.predict = True if hasattr(install_config, 'mem_prediction') and install_config.mem_prediction else False
+        self.process_monitor = common.ProcessUsageMonitor(threshold_ratio=0.95)
         self.predict_model = common_prediction.PredictionModel() if self.predict else None
+        self.uuid = common_db.generate_uuid_from_components(item_list=[self.block, self.version, self.flow, self.task])
 
         self.task_obj = self.ifp_obj.config_obj.get_task(self.block,
                                                          self.version,
@@ -645,11 +928,13 @@ class TaskObject(QObject):
                                                          self.task)
 
         self.in_process_check = True if isinstance(self.task_obj.InProcessCheck, dict) and self.task_obj.InProcessCheck.get('ENABLE') is True else False
+        self.stop_event = threading.Event()
         self.in_process_check_server = install_config.in_process_check_server if hasattr(install_config, 'in_process_check_server') and install_config.in_process_check_server else '10.232.134.66'
 
         self.action_progress = {common.action.build: ActionProgressObject(common.action.build),
                                 common.action.run: ActionProgressObject(common.action.run),
                                 common.action.check: ActionProgressObject(common.action.check),
+                                common.action.release: ActionProgressObject(common.action.release),
                                 common.action.summarize: ActionProgressObject(common.action.summarize)}
 
     def __eq__(self, other):
@@ -777,7 +1062,7 @@ class TaskObject(QObject):
             self.status = common.status.queued
             self.update_debug_info_signal.emit(self)
             self.update_status_signal.emit(self, self.action, common.status.queued)
-            self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', '')
+            # self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', '')
             self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "pending")
 
         elif self.action == common.action.kill and self.status == common.status.queued:
@@ -789,7 +1074,8 @@ class TaskObject(QObject):
         self.update_debug_info_signal.emit(self)
 
     def launch(self):
-        self.action_progress[self.action].progress_message = []
+        # self.action_progress[self.action].progress_message = []
+        is_safe, current, max_allowed = self.process_monitor.is_process_count_safe(current=self.ifp_obj.pnum)
 
         if self.action == common.action.kill:
             pass
@@ -799,11 +1085,17 @@ class TaskObject(QObject):
         elif self.config_dic.get('VAR', {}).get('MAX_RUNNING_JOBS') and self.job_manager.current_running_jobs >= int(self.config_dic['VAR']['MAX_RUNNING_JOBS']) > 0:
             self.print_task_progress(self.task, 'Wait! Max running jobs[%s] reached!' % self.config_dic['VAR']['MAX_RUNNING_JOBS'])
             return
+        elif not is_safe:
+            self.print_task_progress(
+                self.task,
+                f"Wait! Your user is reaching the system thread/process limit (ulimit -u). "
+                f"Current usage: {current}/{max_allowed}. Please wait for existing jobs to finish."
+            )
+            return
 
         if self.is_checking_license:
             return
 
-        self.action_progress[self.action].progress_message = []
         if self.action == common.action.run:
             if self.formula_list:
                 # weak
@@ -885,15 +1177,21 @@ class TaskObject(QObject):
             result = True
 
         if self.action and result:
-            self.print_task_progress(self.task, '[RUN_ORDER] : Pre-tasks are all finished!')
-            self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', None)
+            # self.print_task_progress(self.task, '[RUN_ORDER] : Pre-tasks are all finished!')
+            # self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', None)
 
-            if self.action == common.action.run:
-                self.job_manager.current_running_jobs += 1
+            # if self.action == common.action.run:
+            #     self.job_manager.current_running_jobs += 1
 
             if self.action == common.action.kill:
                 thread = threading.Thread(target=self.kill_action)
             else:
+                if self.managed:
+                    return
+
+                self.action_progress[self.action].progress_message = []
+                self.print_task_progress(self.task, '[RUN_ORDER] : Pre-tasks are all finished!')
+                self.stop_event = threading.Event()
                 thread = threading.Thread(target=self.manage_action)
 
             thread.start()
@@ -901,16 +1199,6 @@ class TaskObject(QObject):
     def get_run_method(self, run_action):
         run_method = run_action.get('RUN_METHOD', '')
         command = run_action.get('COMMAND')
-
-        if re.search('bsub', run_method):
-
-            # if run_method with -K option
-            if re.search('-K', run_method):
-                run_method = run_method.replace('-K', '-I')
-
-            # if run_method without -I option
-            if not re.search('-I', run_method):
-                run_method = run_method + ' -I'
 
         if re.search('xterm', run_method) and (not re.search('-T', run_method)):
             run_method = re.sub(r'xterm', f'xterm -T "{self.block}/{self.version}/{self.flow}/{self.task}: {command}"', run_method)
@@ -962,11 +1250,25 @@ class TaskObject(QObject):
                     if len(i.split(':')) == 2:
                         feature = i.split(':')[0].strip()
                         quantity = i.split(':')[1].strip()
+
+                        if int(quantity) == 0:
+                            continue
+
                         required_feature[feature] = quantity
 
                 if len(list(required_feature.keys())) > 0:
 
                     run_method = self.get_run_method(run_action)
+
+                    if re.search('bsub', run_method):
+
+                        # if run_method with -K option
+                        if re.search('-K', run_method):
+                            run_method = run_method.replace('-K', '-I')
+
+                        # if run_method without -I option
+                        if not re.search('-I', run_method):
+                            run_method = run_method + ' -I'
 
                     if re.search(r'^\s*bsub', run_method):
                         license_dic = common_license.GetLicenseInfo(lmstat_path=install_config.lmstat_path, bsub_command=run_method).get_license_info()
@@ -1020,13 +1322,72 @@ class TaskObject(QObject):
 
         return new_action
 
-    def execute_action(self, action):
+    def generate_command(self, run_action, run_method, action) -> Tuple[str, str, str]:
+        command = run_action['COMMAND']
+
+        if (not re.search(r'^\s*$', run_method)) and (not re.search(r'^\s*local\s*$', run_method, re.I)):
+            command = str(run_method) + ' "' + str(command) + '"'
+
+        if re.search(r'gnome-terminal', run_method):
+            command = str(command) + "; exit'"
+            # command = str(command) + f"; exec {str(os.environ['SHELL'])}" + "'"
+        elif re.search(r'terminator', run_method) and re.search(r'bsub', run_method):
+            command = str(command) + r"'"
+
+        if ('PATH' in run_action) and run_action['PATH']:
+            if os.path.exists(run_action['PATH']):
+                command = 'cd ' + str(run_action['PATH']) + '; ' + str(command)
+                cwd = run_action['PATH']
+                command_dir = '%s/%s/' % (str(run_action['PATH']), os.path.basename(self.ifp_cache_dir))
+                self.working_path = run_action['PATH']
+
+            else:
+                cwd = os.getcwd()
+                # self.msg_signal.emit({'message': '*Warning*: {} PATH is not defined for task "'.format(action) + str(self.task) + '".', 'color': 'orange'})
+                command_dir = '%s/%s/' % (os.getcwd(), os.path.basename(self.ifp_cache_dir))
+                self.working_path = cwd
+        else:
+            cwd = os.getcwd()
+            self.msg_signal.emit({'message': '*Warning*: {} PATH is not defined for task "'.format(action) + str(self.task) + '".', 'color': 'orange'})
+            command_dir = '%s/%s/' % (os.getcwd(), os.path.basename(self.ifp_cache_dir))
+            self.working_path = cwd
+
+        # Record command
+        if not os.path.exists(command_dir):
+            os.system('mkdir -p %s' % command_dir)
+
+        self.action_progress[action].current_path = command_dir
+        command_file = '%s/%s_%s_%s_%s.sh' % (command_dir, action, self.block, self.version, self.task)
+        self.task_run_shell = command_file
+        command_f = open(command_file, 'w')
+        command_f.write('#!/bin/bash\n')
+
+        for (key, value) in self.ifp_obj.config_obj.var_dic.items():
+            if value.find('"') != -1:
+                value = value.replace('"', '\\"')
+            command_f.write('export %s="%s"\n' % (key, value))
+
+        command_f.write(command)
+        command_f.close()
+        os.chmod(command_file, 0o755)
+        self.action_progress[action].current_command = command
+
+        return cwd, command, command_file
+
+    def execute_action(self, action) -> bool:
+        """
+        return waive wait signal
+        """
         """
         Execute action for BUILD/RUN/CHECK/SUMMARIZE/RELEASE
         """
+        # print(datetime.datetime.now().strftime('%Y/%m/%d %H/%M/%S'), self.block, self.version, self.flow, self.task, action, test_num)
         # Avoid kill action when task is building for Run all steps
+
+        # while not self.stop_event.is_set():
         if action == common.action.kill:
-            return
+            # print(1)
+            return True
 
         run_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(action.upper(), None),
                                      {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
@@ -1043,7 +1404,8 @@ class TaskObject(QObject):
             self.status = '{} {}'.format(action, common.status.skipped)
             self.update_status_signal.emit(self, action, self.status)
             self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', '')
-            return
+            # print(2)
+            return True
 
         if (not run_action) or (not run_action.get('COMMAND')):
             self.status = '{} {}'.format(action, common.status.undefined)
@@ -1055,6 +1417,8 @@ class TaskObject(QObject):
                 self.summarize_status = self.status
 
             self.update_status_signal.emit(self, action, self.status)
+            # print(3)
+            return True
         else:
             run_method = self.get_run_method(run_action)
             self.status = common.status_ing[action]
@@ -1063,188 +1427,289 @@ class TaskObject(QObject):
             self.update_debug_info_signal.emit(self)
             self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s : %s "%s"' % (self.block, self.version, self.flow, self.task, self.status, run_method, run_action['COMMAND']), 'color': 'black'})
 
-            if self.predict and re.search(r'^\s*bsub', run_method):
-                predict_job_info = self.update_predict_info(run_method=run_method, cwd=run_action.get('PATH', os.getcwd()), command=run_action['COMMAND'])
-                run_method = self.predict_model.predict_job(job_info=predict_job_info, run_method=run_method)
+            try:
+                job_type = common_db.JobType.lsf if re.search(r'^\s*bsub', run_method) else common_db.JobType.local
+                cwd, command, command_file = self.generate_command(run_method=run_method, run_action=run_action, action=action)
 
-            # Get command
-            command = run_action['COMMAND']
+                if not action:
+                    # print(4)
+                    return True
 
-            if (not re.search(r'^\s*$', run_method)) and (not re.search(r'^\s*local\s*$', run_method, re.I)):
-                command = str(run_method) + ' "' + str(command) + '"'
+                job_store = {
+                    'job_type': job_type,
+                    'job_id': '',
+                    'block': self.block,
+                    'version': self.version,
+                    'flow': self.flow,
+                    'task': self.task,
+                    'command_file': command_file,
+                    'action': action,
+                    'status': common_db.JobStatus.awaiting_dispatch
+                }
+                # print("in", self.task, action)
+                submitted_time = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+                self.job_manager.job_buffer.add_job(job_store)
+                self.uuid = common_db.generate_uuid_from_components(item_list=[self.block, self.version, self.flow, self.task])
+                # print("exec in")
+                self.wait_execute_signal()
+                # print("exec out")
 
-            if re.search(r'gnome-terminal', run_method):
-                command = str(command) + "; exit'"
-                # command = str(command) + f"; exec {str(os.environ['SHELL'])}" + "'"
-            elif re.search(r'terminator', run_method) and re.search(r'bsub', run_method):
-                command = str(command) + r"'"
+                while self.status == common.status.killing:
+                    time.sleep(3)
 
-            if ('PATH' in run_action) and run_action['PATH']:
-                if os.path.exists(run_action['PATH']):
-                    command = 'cd ' + str(run_action['PATH']) + '; ' + str(command)
-                    cwd = run_action['PATH']
-                    command_dir = '%s/%s/' % (str(run_action['PATH']), os.path.basename(self.ifp_cache_dir))
+                if self.status != common.status.killed:
+                    if self.action == common.action.run:
+                        try:
+                            if job_type == common_db.JobType.lsf:
+                                save_db_thread = threading.Thread(target=common_db.analysis_and_save_job, args=(self.job_id, self.block, self.version, self.flow, self.task))
+                                save_db_thread.daemon = True
+                                save_db_thread.start()
+                            else:
+                                file_path = os.path.join(self.ifp_obj.ifp_cache_dir, f'job_logs/{self.block}_{self.version}_{self.task}_{self.action}.job.json')
+
+                                if os.path.exists(file_path):
+                                    with open(file_path) as f:
+                                        result = json.load(f)
+
+                                    exit_code = result.get('exit_code', 0)
+                                    status = 'DONE' if exit_code != 0 else 'EXIT'
+
+                                    task_job = {
+                                        'job_id': self.job_id,
+                                        'block': self.block,
+                                        'version': self.version,
+                                        'flow': self.flow,
+                                        'task': self.task,
+                                        'submitted_time': submitted_time,
+                                        'cwd': cwd if cwd is not None else os.getcwd(),
+                                        'command': command,
+                                        'command_file': command_file,
+                                        'finished_time': datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
+                                        'status': status,
+                                        'exit_code': exit_code
+                                    }
+                                    save_db_thread = threading.Thread(target=common_db.save_task_job, args=(task_job,))
+                                    save_db_thread.daemon = True
+                                    save_db_thread.start()
+                        except Exception:
+                            pass
+
+                # print("out", self.task, self.action)
+                self.update_status_signal.emit(self, action, self.status)
+            except Exception as error:
+                print(error)
+                print(traceback.format_exc())
+                self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s : %s "%s" Failed' % (self.block, self.version, self.flow, self.task, self.status, run_method, run_action['COMMAND']), 'color': 'red'})
+                # print(5)
+                return True
+
+            return False
+
+            """
+            # TODO: Memory Prediction
+
+                # Run command
+                if job_type == common_db.JobType.lsf:
+                    process = common.spawn_process(command)
+                    stdout = process.stdout.readline().decode('utf-8')
+
+                    if common.get_jobid(stdout):
+                        self.job_id = 'b:{}'.format(common.get_jobid(stdout))
+
+                        if action in [common.action.run]:
+                            self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', str(self.job_id))
+                            self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "pending")
+
+                        self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
+
+                        while True:
+                            current_job = self.job_id[2:]
+                            current_job_dic = common_lsf.get_bjobs_uf_info(command='bjobs -UF ' + str(current_job))
+
+                            self.action_progress[action].current_job_dict = current_job_dic
+
+                            if current_job_dic:
+                                job_status = current_job_dic[current_job]['status']
+
+                                if job_status in ['RUN', 'EXIT', 'DONE']:
+                                    if action in [common.action.run]:
+                                        self.start_in_process_check(job_id=current_job)
+                                        self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
+
+                                    break
+
+                            time.sleep(10)
+                    else:
+                        self.job_id = 'submit fail'
+                        self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s submit fail : %s "%s"' % (self.block, self.version, self.flow, self.task, action, run_method, run_action['COMMAND']),
+                                              'color': 'red'})
+
                 else:
-                    cwd = os.getcwd()
-                    # self.msg_signal.emit({'message': '*Warning*: {} PATH "'.format(action) + str(run_action['PATH']) + '" not exists.', 'color': 'orange'})
-                    command_dir = '%s/%s/' % (os.getcwd(), os.path.basename(self.ifp_cache_dir))
-            else:
-                cwd = os.getcwd()
-                self.msg_signal.emit({'message': '*Warning*: {} PATH is not defined for task "'.format(action) + str(self.task) + '".', 'color': 'orange'})
-                command_dir = '%s/%s/' % (os.getcwd(), os.path.basename(self.ifp_cache_dir))
-
-            # Record command
-            if not os.path.exists(command_dir):
-                os.system('mkdir -p %s' % command_dir)
-
-            self.action_progress[action].current_path = command_dir
-            command_file = '%s/%s_%s.sh' % (command_dir, action, self.task)
-            command_f = open(command_file, 'w')
-            command_f.write('#!/bin/bash\n')
-
-            for (key, value) in self.ifp_obj.config_obj.var_dic.items():
-                command_f.write('export %s=%s\n' % (key, value))
-
-            command_f.write(command)
-            command_f.close()
-            self.action_progress[action].current_command = command
-
-            # Run command
-            if re.search(r'^\s*bsub', run_method):
-                process = common.spawn_process(command)
-                stdout = process.stdout.readline().decode('utf-8')
-
-                if common.get_jobid(stdout):
-                    self.job_id = 'b:{}'.format(common.get_jobid(stdout))
+                    process = common.spawn_process(command)
+                    self.job_id = 'l:{}'.format(process.pid)
 
                     if action in [common.action.run]:
                         self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', str(self.job_id))
-                        self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "pending")
+                        self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:00")
 
-                    while True:
-                        current_job = self.job_id[2:]
-                        current_job_dic = common_lsf.get_bjobs_uf_info(command='bjobs -UF ' + str(current_job))
+                self.action_progress[action].job_id = self.job_id
+                task_job = {
+                    'job_id': self.job_id,
+                    'block': self.block,
+                    'version': self.version,
+                    'flow': self.flow,
+                    'task': self.task,
+                    'submitted_time': datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
+                    'cwd': cwd if cwd is not None else os.getcwd(),
+                    'command': command,
+                    'command_file': command_file
+                }
+                stdout, stderr = process.communicate()
+                return_code = process.returncode
 
-                        self.action_progress[action].current_job_dict = current_job_dic
+                task_job.update({
+                    'finished_time': datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
+                    'status': 'DONE' if not process.returncode else 'EXIT',
+                    'exit_code': process.returncode
+                })
 
-                        if current_job_dic:
-                            job_status = current_job_dic[current_job]['status']
+                # Save job data to database
+                save_db_thread = threading.Thread(target=common_db.save_task_job, args=(task_job, ))
+                save_db_thread.daemon = True
+                save_db_thread.start()
 
-                            if job_status in ['RUN', 'EXIT', 'DONE']:
-                                if action in [common.action.run]:
-                                    self.start_in_process_check(job_id=current_job)
-                                    self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
+                stdout = str(stdout, 'utf-8').strip()
+                stderr = str(stderr, 'utf-8').strip()
 
-                                break
+                while self.status == common.status.killing:
+                    time.sleep(3)
 
-                        time.sleep(10)
+                if self.status == common.status.killed:
+                    pass
                 else:
-                    self.job_id = 'submit fail'
-                    self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s submit fail : %s "%s"' % (self.block, self.version, self.flow, self.task, action, run_method, run_action['COMMAND']),
-                                          'color': 'red'})
 
-            else:
-                process = common.spawn_process(command)
-                self.job_id = 'l:{}'.format(process.pid)
+                    if return_code == 0:
+                        self.status = '{} {}'.format(action, common.status.passed)
+                        self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s done' % (self.block, self.version, self.flow, self.task, action), 'color': 'green'})
 
-                if action in [common.action.run]:
-                    self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', str(self.job_id))
-                    self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:00")
+                        # Save job data to database
+                        save_db_thread = threading.Thread(target=common_db.analysis_and_save_job, args=(self.job_id, self.block, self.version, self.flow, self.task))
+                        save_db_thread.daemon = True
+                        save_db_thread.start()
+                    else:
+                        self.status = '{} {}'.format(action, common.status.failed)
+                        self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s failed: %s "%s"' % (self.block, self.version, self.flow, self.task, action, run_method, run_action['COMMAND']), 'color': 'red'})
+                        if action == common.action.run or action == common.action.check:
+                            self.send_result_signal.emit(self.block, self.version, self.flow, self.task, action)
+                        self.print_task_progress(self.task, '[RUN_RESULT] : %s' % stderr)
+                        self.print_task_progress(self.task, '[RUN_RESULT] : %s' % stdout)
 
-            self.action_progress[action].job_id = self.job_id
-            task_job = {
-                'job_id': self.job_id,
-                'block': self.block,
-                'version': self.version,
-                'flow': self.flow,
-                'task': self.task,
-                'submitted_time': datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
-                'cwd': cwd if cwd is not None else os.getcwd(),
-                'command': command,
-                'command_file': command_file
-            }
-            stdout, stderr = process.communicate()
-            return_code = process.returncode
+                if action in [common.action.check, common.action.check_view]:
+                    self.check_status = self.status
+                elif action in [common.action.summarize, common.action.summarize_view]:
+                    self.summarize_status = self.status
 
-            task_job.update({
-                'finished_time': datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S'),
-                'status': 'DONE' if not process.returncode else 'EXIT',
-                'exit_code': process.returncode
-            })
+                self.update_status_signal.emit(self, action, self.status)
+            except Exception:
+                exception = traceback.format_exc()
+                self.status = '{} {}'.format(action, common.status.failed)
+                self.update_status_signal.emit(self, action, self.status)
+                self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s failed: %s "%s"' % (self.block, self.version, self.flow, self.task, action, run_method, run_action['COMMAND']), 'color': 'red'})
+                self.print_task_progress(self.task, '[RUN_RESULT] : %s' % exception)
+            """
 
-            # Save job data to database
-            save_db_thread = threading.Thread(target=common_db.save_task_job, args=(task_job, ))
-            save_db_thread.daemon = True
-            save_db_thread.start()
+    def post_execute_action(self, job_type: common_db.JobType, job_action: common_db.JobAction, job_id: int):
+        if not job_id:
+            self.job_id = 'submit fail'
+            self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s submit fail' % (self.block, self.version, self.flow, self.task, job_action),
+                                  'color': 'red'})
+        else:
+            job_flag = 'b' if job_type == common_db.JobType.lsf else 'l'
+            job_action = job_action.value
+            self.job_id = f'{job_flag}:{str(job_id)}'
 
-            stdout = str(stdout, 'utf-8').strip()
-            stderr = str(stderr, 'utf-8').strip()
+            if job_action in [common.action.run]:
+                self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', str(self.job_id))
+                self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "pending")
+                # current_job_dic = common_lsf.get_bjobs_uf_info(command='bjobs -UF ' + str(job_id))
+                # self.action_progress[job_action].current_job_dict = current_job_dic
+                self.start_in_process_check(job_id=str(job_id))
+                self.action_progress[job_action].job_id = self.job_id
+                self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
 
-            while self.status == common.status.killing:
-                time.sleep(3)
+            # if job_flag == 'b':
+            #     self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
 
-            if self.status == common.status.killed:
-                pass
-            else:
+        """
+                # TODO: fix database bug
+        job_id = None
+        job_data = None
+        job_flag = 'b' if job_type == common_db.JobType.lsf else 'l'
 
-                if return_code == 0:
-                    self.status = '{} {}'.format(action, common.status.passed)
-                    self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s done' % (self.block, self.version, self.flow, self.task, action), 'color': 'green'})
+        while job_data is None or not job_id:
+            job_data = self.get_action_info()
 
-                    # Save job data to database
-                    save_db_thread = threading.Thread(target=common_db.analysis_and_save_job, args=(self.job_id, self.block, self.version, self.flow, self.task))
-                    save_db_thread.daemon = True
-                    save_db_thread.start()
-                else:
-                    self.status = '{} {}'.format(action, common.status.failed)
-                    self.msg_signal.emit({'message': '[%s/%s/%s/%s] %s failed: %s "%s"' % (self.block, self.version, self.flow, self.task, action, run_method, run_action['COMMAND']), 'color': 'red'})
-                    if action == common.action.run or action == common.action.check:
-                        self.send_result_signal.emit(self.block, self.version, self.flow, self.task, action)
-                    self.print_task_progress(self.task, '[RUN_RESULT] : %s' % stderr)
-                    self.print_task_progress(self.task, '[RUN_RESULT] : %s' % stdout)
+            if job_data is None:
+                continue
 
-            if action in [common.action.check, common.action.check_view]:
-                self.check_status = self.status
-            elif action in [common.action.summarize, common.action.summarize_view]:
-                self.summarize_status = self.status
+            job_id = job_data.job_id
 
-            self.update_status_signal.emit(self, action, self.status)
+            if not job_id:
+                continue
+
+            job_action = job_data.action.value
+            self.job_id = f'{job_flag}:{str(job_id)}'
+
+            if job_action in [common.action.run]:
+                self.set_one_jobid_signal.emit(self.block, self.version, self.flow, self.task, 'Job', str(self.job_id))
+                self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "pending")
+                current_job_dic = common_lsf.get_bjobs_uf_info(command='bjobs -UF ' + str(job_id))
+                self.action_progress[job_action].current_job_dict = current_job_dic
+
+                self.start_in_process_check(job_id=job_id)
+
+            self.set_run_time_signal.emit(self.block, self.version, self.flow, self.task, 'Runtime', "00:00:0%s" % str(random.randint(3, 5)))
+            time.sleep(1)
+        """
 
     def start_in_process_check(self, job_id: str):
         if not self.in_process_check:
             return
 
         if not self.in_process_check_server:
-            self.ifp_obj.update_message_text({
+            self.msg_signal.emit({
                 'message': 'In Process Check Server not found.',
                 'color': 'red'})
 
         task_var_dic = {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task}
         path = common.expand_var(self.task_obj.InProcessCheck.get('PATH', os.getcwd()), ifp_var_dic=self.ifp_obj.config_obj.var_dic, **task_var_dic)
         command = common.expand_var(self.task_obj.InProcessCheck.get('COMMAND'), ifp_var_dic=self.ifp_obj.config_obj.var_dic, **task_var_dic)
-        interval = self.task_obj.InProcessCheck.get('INTERVAL')
+        interval = self.task_obj.InProcessCheck.get('INTERVAL', 0)
         notification = common.expand_var(self.task_obj.InProcessCheck.get('NOTIFICATION'), ifp_var_dic=self.ifp_obj.config_obj.var_dic, **task_var_dic)
         start_interval = self.task_obj.InProcessCheck.get('START_INTERVAL', 120)
 
-        if command is None or notification is None or not interval:
-            self.ifp_obj.update_message_text({
-                'message': 'Definition of COMMAND or NOTIFICATION not found or INTERVAL is invalid.',
+        if command is None:
+            self.msg_signal.emit({
+                'message': 'Definition of COMMAND is invalid.',
                 'color': 'red'})
 
-        url = f'http://{str(self.in_process_check_server)}:12345/add_task'
+        url = f'http://{str(self.in_process_check_server)}/add_task'
         data = {
             'id': job_id,
             'path': path,
             'command': command,
-            'notification': notification,
+            'notification': notification if notification else '',
             'interval': interval,
             'start_interval': start_interval
         }
 
-        response = requests.post(url, json=data)
+        try:
+            response = requests.post(url, json=data)
+        except Exception:
+            pass
 
         if not self.in_process_check_server:
-            self.ifp_obj.update_message_text({
+            self.msg_signal.emit({
                 'message': str(response),
                 'html': True})
 
@@ -1271,36 +1736,170 @@ class TaskObject(QObject):
 
         return predict_job_info
 
+    def wait_for_signal(self, timeout_ms=None):
+        if self.action is None or self.action == common.action.kill:
+            return
+
+        loop = QEventLoop()
+        self.wait_signal.connect(loop.quit)
+
+        if timeout_ms:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(timeout_ms, loop.quit)
+
+        from PyQt5.QtCore import QTimer
+        checker = QTimer()
+        checker.setInterval(100)
+        checker.timeout.connect(lambda: (loop.quit() if self.stop_event.is_set() else None))
+        checker.start()
+
+        loop.exec_()
+        checker.stop()
+
+    def wait_execute_signal(self, timeout_ms=None):
+        if self.action is None or self.action == common.action.kill:
+            return
+
+        loop = QEventLoop()
+        self.post_execute_signal.connect(loop.quit)
+
+        if timeout_ms:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(timeout_ms, loop.quit)
+
+        from PyQt5.QtCore import QTimer
+        checker = QTimer()
+        checker.setInterval(100)
+        checker.timeout.connect(lambda: (loop.quit() if self.stop_event.is_set() else None))
+        checker.start()
+
+        loop.exec_()
+        checker.stop()
+
     def manage_action(self):
         """
         Manage action for BUILD/RUN/CHECK/SUMMARIZE/RELEASE
         """
-        # Check license for RUN action
-        if self.action in [common.action.run] and not self.skipped:
-            if not self.check_file_and_license():
-                self.current_formula_id = None
-                self.current_formula = None
+        while not self.stop_event.is_set():
+            self.managed = True
+            # print("in license check")
+            # Check license for RUN action
+            if self.action in [common.action.run] and not self.skipped:
+                if not self.check_file_and_license():
+                    self.current_formula_id = None
+                    self.current_formula = None
+                    self.managed = False
+                    return
+            # print("out license check")
+
+            # Return if user killed task when checking license
+            if not self.action:
+                self.managed = False
                 return
 
-        # Return if user killed task when checking license
-        if not self.action:
-            return
+            if self.run_all_steps and not self.skipped:
+                self.action = common.action.build
+                waive = self.execute_action(common.action.build)
 
-        if self.run_all_steps and not self.skipped:
-            self.action = common.action.build
-            self.execute_action(common.action.build)
-            self.action = common.action.run
+                if not waive and self.action != common.action.kill:
+                    self.wait_for_signal()
 
-        # Execute action
-        self.print_task_progress(self.task, '[ACTION] : Start execute %s action' % self.action)
-        self.execute_action(self.action)
+                self.action = common.action.run
 
-        all_finished_flag = True
-        # If action is RUN or KILL, flow will update dependency state in child based on current task's result
-        if self.action == common.action.run or (self.action == common.action.kill and self.killed_action == common.action.run):
+            # Execute action
+            self.print_task_progress(self.task, '[ACTION] : Start execute %s action' % self.action)
 
-            # Force execute CHECK after RUN
-            if self.action == common.action.run and not self.skipped and self.ifp_obj.auto_check and not self.run_all_steps:
+            if self.action == common.action.run:
+                self.job_manager.current_running_jobs += 1
+
+            waive = self.execute_action(self.action)
+
+            if not waive and self.action != common.action.kill:
+                # print("in 1", self.task)
+                self.wait_for_signal()
+                # print("out 1", self.task)
+
+            all_finished_flag = True
+            # If action is RUN or KILL, flow will update dependency state in child based on current task's result
+            if self.action == common.action.run or (self.action == common.action.kill and self.killed_action == common.action.run):
+
+                # Force execute CHECK after RUN
+                if self.action == common.action.run and not self.skipped and self.ifp_obj.auto_check and not self.run_all_steps:
+                    check_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(common.action.check.upper(), None),
+                                                   {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
+
+                    if (not check_action) or (not check_action.get('COMMAND')):
+                        pass
+                    else:
+                        self.action = common.action.check
+                        waive = self.execute_action(common.action.check)
+
+                        if not waive and self.action != common.action.kill:
+                            # print("in 2", self.task)
+                            self.wait_for_signal()
+                            # print("out 2", self.task)
+
+                # Judge if all conditions are finished or not
+                if self.formula_list:
+                    if self.current_formula_id:
+                        self.formula_list[self.current_formula_id]['finish'] = True
+
+                    for i in self.formula_list.keys():
+                        if self.formula_list[i]['enable'] and not self.formula_list[i]['finish']:
+                            all_finished_flag = False
+
+                # If status is PASSED or user set ignore fail tasks, set TRUE for dependency state in self.child
+                if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed), '{} {}'.format(common.action.run, common.status.skipped)] or \
+                        ((self.ifp_obj.ignore_fail or self.ignore_fail) and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
+
+                    if all_finished_flag:
+                        self.action = None
+
+                    # Only first condition is passed , set True in child
+                    if self.current_run_times == 1:
+                        time.sleep(2)
+
+                        for child_task in self.child:
+                            child_task.parent[self] = 'True'
+                            self.update_debug_info_signal.emit(child_task)
+
+                # If state is FAILED or COMMAND UNDEFINED and all conditions are finished, set CANCEL for dependency state
+                elif self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.run, common.status.undefined), '{} {}'.format(common.action.check, common.status.failed), common.status.killed]:  # Cancel child tasks if failed or run undefined
+                    # If all conditions of task finished, and all failed, then cancel child task, otherwise, keep False in child
+                    if all_finished_flag:
+                        self.action = None
+                        self.set_cancel_for_child_tasks()
+
+                # If state is KILLED, set CANCEL for dependency state
+                elif self.status == common.status.killed:
+                    self.action = None
+                    self.set_cancel_for_child_tasks()
+
+                # Change dependency state to True for parent tasks in self.parent
+                for task_obj in self.parent.keys():
+                    if self.formula_list:
+                        if not self.current_formula or task_obj not in self.current_formula:
+                            continue
+                        else:
+                            self.parent[task_obj] = 'True'
+                    else:
+                        self.parent[task_obj] = 'True'
+
+                self.job_manager.current_running_jobs -= 1
+            elif self.action == common.action.kill:
+                self.action = None
+                self.killed_action = None
+            else:
+                self.action = None
+
+            # Reset all important parameters to None
+            self.current_formula = None
+            self.current_formula_id = None
+            # print("manage action: ", self.job_id)
+            # self.job_id = None
+
+            # If user defined run_all_steps and all run times have finished which means RUN action has finished and need to execute CHECK and SUMMARIZE
+            if self.run_all_steps and all_finished_flag and not self.skipped:
                 check_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(common.action.check.upper(), None),
                                                {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
 
@@ -1308,94 +1907,44 @@ class TaskObject(QObject):
                     pass
                 else:
                     self.action = common.action.check
-                    self.execute_action(common.action.check)
+                    # TODO: execute check
+                    waive = self.execute_action(common.action.check)
 
-            # Judge if all conditions are finished or not
-            if self.formula_list:
-                self.formula_list[self.current_formula_id]['finish'] = True
+                    if not waive and self.action != common.action.kill:
+                        # print("in 3", self.task)
+                        self.wait_for_signal()
+                        # print("out 3", self.task)
 
-                for i in self.formula_list.keys():
-                    if self.formula_list[i]['enable'] and not self.formula_list[i]['finish']:
-                        all_finished_flag = False
+                if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed)] or \
+                        ((self.ifp_obj.ignore_fail or self.ignore_fail) and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
 
-            # If status is PASSED or user set ignore fail tasks, set TRUE for dependency state in self.child
-            if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed), '{} {}'.format(common.action.run, common.status.skipped)] or \
-                    ((self.ifp_obj.ignore_fail or self.ignore_fail) and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
+                    self.action = common.action.summarize
+                    waive = self.execute_action(common.action.summarize)
 
-                if all_finished_flag:
+                    if not waive and self.action != common.action.kill:
+                        # print("in 4", self.task)
+                        self.wait_for_signal()
+                        # print("out 4", self.task)
+
+                    self.action = common.action.release
+                    waive = self.execute_action(common.action.release)
+
+                    if not waive and self.action != common.action.kill:
+                        # print("in 5", self.task)
+                        self.wait_for_signal()
+                        # print("out 5", self.task)
+
                     self.action = None
 
-                # Only first condition is passed , set True in child
-                if self.current_run_times == 1:
-                    time.sleep(2)
+                self.run_all_steps = False
 
-                    for child_task in self.child:
-                        child_task.parent[self] = 'True'
-                        self.update_debug_info_signal.emit(child_task)
-
-            # If state is FAILED or COMMAND UNDEFINED and all conditions are finished, set CANCEL for dependency state
-            elif self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.run, common.status.undefined), '{} {}'.format(common.action.check, common.status.failed), common.status.killed]:  # Cancel child tasks if failed or run undefined
-                # If all conditions of task finished, and all failed, then cancel child task, otherwise, keep False in child
-                if all_finished_flag:
-                    self.action = None
-                    self.set_cancel_for_child_tasks()
-
-            # If state is KILLED, set CANCEL for dependency state
-            elif self.status == common.status.killed:
-                self.action = None
-                self.set_cancel_for_child_tasks()
-
-            # Change dependency state to True for parent tasks in self.parent
-            for task_obj in self.parent.keys():
-                if self.formula_list:
-                    if task_obj not in self.current_formula:
-                        continue
-                    else:
-                        self.parent[task_obj] = 'True'
-                else:
-                    self.parent[task_obj] = 'True'
-
-            self.job_manager.current_running_jobs -= 1
-        elif self.action == common.action.kill:
-            self.action = None
-            self.killed_action = None
-        else:
-            self.action = None
-
-        # Reset all important parameters to None
-        self.current_formula = None
-        self.current_formula_id = None
-        self.job_id = None
-
-        # If user defined run_all_steps and all run times have finished which means RUN action has finished and need to execute CHECK and SUMMARIZE
-        if self.run_all_steps and all_finished_flag and not self.skipped:
-            check_action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(common.action.check.upper(), None),
-                                           {'BLOCK': self.block, 'VERSION': self.version, 'FLOW': self.flow, 'TASK': self.task})
-
-            if (not check_action) or (not check_action.get('COMMAND')):
-                pass
-            else:
-                self.action = common.action.check
-                self.execute_action(common.action.check)
-
-            if self.status in ['{} {}'.format(common.action.run, common.status.passed), '{} {}'.format(common.action.check, common.status.passed)] or \
-                    ((self.ifp_obj.ignore_fail or self.ignore_fail) and self.status in ['{} {}'.format(common.action.run, common.status.failed), '{} {}'.format(common.action.check, common.status.failed)]):
-
-                self.action = common.action.summarize
-                self.execute_action(common.action.summarize)
-                self.action = common.action.release
-                self.execute_action(common.action.release)
-                self.action = None
-
-            self.run_all_steps = False
-
-        self.update_debug_info_signal.emit(self)
+            self.update_debug_info_signal.emit(self)
+            self.managed = False
 
     def kill_action(self):
         """
         Kill action for BUILD/RUN/CHECK/SUMMARIZE/RELEASE
         """
-
         self.status = common.status.killing
         self.msg_signal.emit({'message': '[%s/%s/%s/%s] is %s' % (self.block, self.version, self.flow, self.task, common.status.killing), 'color': 'red'})
         self.update_status_signal.emit(self, self.killed_action, common.status.killing)
@@ -1419,12 +1968,20 @@ class TaskObject(QObject):
             except Exception:
                 pass
 
+        self.stop_event.set()
+
         self.status = common.status.killed
+        # self.update_status_signal.emit(self, self.killed_action, self.status)
         self.run_all_steps = False
 
     def view(self):
         if not self.ifp_obj.read_mode and self.rerun_command_before_view:
-            self.execute_action(self.rerun_command_before_view)
+            # self.action = self.rerun_command_before_view
+            waive = self.execute_action(self.rerun_command_before_view)
+            # print("is waive?", waive)
+
+            if not waive:
+                self.wait_for_signal()
 
         # Run viewer command under task check directory.
         action = self.expand_var(self.config_dic['BLOCK'][self.block][self.version][self.flow][self.task]['ACTION'].get(self.view_action.split()[0].upper(), None),
@@ -1486,6 +2043,48 @@ class TaskObject(QObject):
     def debug_print(self, message):
         if self.debug:
             print(message)
+
+
+class JobBuffer:
+    def __init__(self, job_store: str, batch_size: int = 100, flush_interval: int = 1):
+        self.batch_size = batch_size
+        self.flush_interval = flush_interval
+        self.buffer = []
+        self.job_store = job_store
+        self.lock = threading.RLock()
+        self.timer = threading.Thread(target=self.flush_timer, daemon=True)
+        self.timer.start()
+
+    def add_job(self, job_data):
+        with self.lock:
+            self.buffer.append(job_data)
+
+            if len(self.buffer) >= self.batch_size:
+                self.flush()
+
+    def flush_timer(self):
+        while True:
+            time.sleep(self.flush_interval)
+            self.flush()
+
+    @staticmethod
+    def save_with_retry(jobs_to_insert, job_store, retries=10, delay=0.2):
+        for attempt in range(retries):
+            try:
+                common_db.save_job_store_batch(jobs_to_insert, job_store)
+                return
+            except Exception:
+                pass
+
+    def flush(self):
+        with self.lock:
+            if not self.buffer:
+                return
+
+            jobs_to_insert = self.buffer.copy()
+            self.buffer.clear()
+
+        self.save_with_retry(jobs_to_insert, self.job_store)
 
 
 class ActionProgressObject:

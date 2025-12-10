@@ -1,10 +1,18 @@
+import argparse
 import copy
 import datetime
+import functools
+import getpass
+import json
+import logging
 import os
 import re
+import sys
 import traceback
+import uuid
+from functools import wraps
 from string import Template
-from typing import Tuple
+from typing import Tuple, List
 
 import psutil
 import signal
@@ -15,11 +23,94 @@ from ansi2html import Ansi2HTMLConverter
 import yaml
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QMessageBox, QAction
+from PyQt5.QtWidgets import QMessageBox, QAction, QMenu
 from PIL import Image, ImageDraw, ImageFont
 
 import time
 import common_pyqt5
+
+
+IFP_VERSION = 'V1.4.3 (2025.12.10)'
+
+
+# Process input arguments (start) #
+def readArgs():
+    """
+    Read in arguments.
+    """
+    parser = argparse.ArgumentParser()
+
+    # Basic arguments.
+    parser.add_argument('-config_file', '--config_file',
+                        default=str(CWD) + '/ifp.cfg.yaml',
+                        help='Specify the configure file, default is "<CWD>/ifp.cfg.yaml".')
+    parser.add_argument('-d', '--debug',
+                        default=False,
+                        action='store_true',
+                        help='Enable debug mode, will print more useful messages.')
+    parser.add_argument('-r', '--read',
+                        default=False,
+                        action='store_true',
+                        help='Read-Only Mode.')
+    parser.add_argument('-a', '--action',
+                        default='',
+                        choices=['build', 'run', 'check', 'summarize'],
+                        help='Execute action after launch IFP')
+    parser.add_argument('-t', '--title',
+                        default='IC Flow Platform %s' % IFP_VERSION,
+                        help='Specify GUI title')
+
+    args = parser.parse_args()
+
+    # get config_file.
+    config_file_path = os.path.abspath(args.config_file)
+    status_file_name, cache_dir_name = gen_cache_file_name(config_file=os.path.basename(args.config_file))
+
+    if not args.read:
+        if os.path.exists(config_file_path):
+            if not os.access(os.getcwd(), os.W_OK) or not os.access(config_file_path, os.W_OK):
+                print('*Error*: You do not have write permission in this path or ifp.cfg.yaml')
+                print('*Error*: add \'-r\', and IFP will launch in Read-Only Mode.')
+                sys.exit(1)
+
+        # Normal Mode: Generating status & cache from current directory
+        status_file_path = os.path.join(os.getcwd(), status_file_name)
+        cache_dir_path = os.path.join(os.getcwd(), cache_dir_name)
+
+        if not os.path.exists(config_file_path):
+            gen_config_file(config_file_path)
+
+        if not os.path.exists(status_file_path):
+            gen_config_file(status_file_path)
+
+        try:
+            os.makedirs(os.path.join(os.path.dirname(args.config_file), cache_dir_path), exist_ok=True)
+        except Exception as error:
+            print('*Error*: Failed on creating .ifp.')
+            print('*Error*: add \'-r\', and IFP will launch in Read-Only Mode.')
+            print('         ' + str(error))
+            sys.exit(1)
+
+    if os.environ.get('IFP_DEMO_MODE', 'FALSE') == 'TRUE':
+        print('>>> IFP Demo mode, you can set $IFP_DEMO_MODE=FALSE to exit')
+
+    return config_file_path, args.read, args.debug, args.action, args.title
+
+
+def gen_config_file(config_file):
+    """
+    Generate configure file.
+    """
+
+    try:
+        with open(config_file, 'w') as CF:
+            CF.write('')
+
+    except Exception as error:
+        print('*Error*: Failed on creating config file "' + str(config_file) + '".')
+        print('*Error*: add \'-r\', and IFP will launch in Read-Only Mode.')
+        print('         ' + str(error))
+        sys.exit(1)
 
 
 def bprint(message, color='', background_color='', display_method='', date_format='', level='', indent=0, end='\n', save_file='', save_file_method='a'):
@@ -327,6 +418,11 @@ def print_warning(message):
     print('\033[1;33m' + str(message) + '\033[0m')
 
 
+def generate_uuid_from_components(item_list: List[str]) -> str:
+    combined_string = '_'.join(item_list)
+    return str(uuid.uuid3(uuid.NAMESPACE_DNS, combined_string))
+
+
 def timer(func):
     def timer_wrapper(*args, **kwargs):
         time_start = time.time()
@@ -340,6 +436,20 @@ def timer(func):
     return timer_wrapper
 
 
+def count_calls(func):
+    if not hasattr(count_calls, 'counters'):
+        count_calls.counters = {}
+
+    count_calls.counters[func.__name__] = 0
+
+    def wrapper(*args, **kwargs):
+        count_calls.counters[func.__name__] += 1
+        return func(*args, **kwargs)
+
+    wrapper.get_count = lambda: count_calls.counters[func.__name__]
+    return wrapper
+
+
 def run_command(command, shell=True, xterm=False):
     """
     Run shell command with subprocess.Popen.
@@ -349,9 +459,14 @@ def run_command(command, shell=True, xterm=False):
     return_code = SP.returncode
 
     if xterm and return_code > 0 and re.search(r'Couldn\'t connect to accessibility bus', str(stdout, 'utf-8').strip(), re.I):
-        SP = subprocess.Popen('/usr/bin/dbus-launch ' + command, shell=shell, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        SP = subprocess.Popen(f'/usr/bin/dbus-launch --autolaunch={IFP_MACHINE_ID} ' + command, shell=shell, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         (stdout, stderr) = SP.communicate()
         return_code = SP.returncode
+
+        if return_code > 0:
+            SP = subprocess.Popen('/usr/bin/dbus-launch ' + command, shell=shell, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            (stdout, stderr) = SP.communicate()
+            return_code = SP.returncode
 
     return return_code, stdout, stderr
 
@@ -400,7 +515,8 @@ def run_command_for_api(command, msg_signal, path, info_signal=None, finish_sign
         if msg_signal and errs:
             msg_signal.emit({'message': '[API] : %s' % '\n'.join(errs), 'color': 'red'})
         else:
-            print_error(errs)
+            if errs:
+                print_error(errs)
 
     if finish_signal:
         finish_signal.emit()
@@ -411,6 +527,14 @@ def spawn_process(command, shell=True):
     Return the underlying Popen obj
     """
     SP = subprocess.Popen(command, shell=shell, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return SP
+
+
+def spawn_process_with_env(command, shell=True, env=None):
+    """
+    Return the underlying Popen obj
+    """
+    SP = subprocess.Popen(command, shell=shell, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     return SP
 
 
@@ -615,7 +739,7 @@ def parse_user_api(api_yaml):
                 print('Please define LABEL for each API item!')
                 exit(1)
 
-            menu_bar_items = ['LABEL', 'MENU_BAR_GROUP', 'PATH', 'COMMAND', 'ENABLE', 'COMMENT', 'GUI_BLOCKING', 'RELOAD']  # noqa: F841
+            # menu_bar_items = ['LABEL', 'MENU_BAR_GROUP', 'PATH', 'COMMAND', 'ENABLE', 'COMMENT', 'GUI_BLOCKING', 'RELOAD']
             menu_bar_must_items = ['LABEL', 'MENU_BAR_GROUP', 'PATH', 'COMMAND']
 
             for key in menu_bar_must_items:
@@ -637,12 +761,12 @@ def parse_user_api(api_yaml):
                 print('Please define LABEL for each API item!')
                 exit(1)
 
-            menu_bar_items = ['LABEL', 'PATH', 'COMMAND', 'ENABLE', 'COMMENT', 'GUI_BLOCKING', 'RELOAD']  # noqa: F841
-            menu_bar_must_items = ['LABEL', 'PATH', 'COMMAND']
+            # tool_bar_items = ['LABEL', 'PATH', 'COMMAND', 'ENABLE', 'COMMENT', 'GUI_BLOCKING', 'RELOAD']
+            tool_bar_must_items = ['LABEL', 'PATH', 'COMMAND']
 
-            for key in menu_bar_must_items:
+            for key in tool_bar_must_items:
                 if key not in item.keys():
-                    print('You must define %s for MENU_BAR API, corresponding label is %s' % (key, item['LABEL']))
+                    print('You must define %s for TOOL_BAR API, corresponding label is %s' % (key, item['LABEL']))
                     exit(1)
 
             item['ENABLE'] = item['ENABLE'] if 'ENABLE' in item else True
@@ -656,7 +780,9 @@ def parse_user_api(api_yaml):
     return yaml_file
 
 
-def add_api_menu_bar(ifp_obj, user_api, menubar):
+def add_api_menu_bar(ifp_obj, user_api, menubar) -> list:
+    menu_list = []
+
     if 'MENU_BAR' in user_api['API'].keys():
         all_menus = {}
         for item in user_api['API']['MENU_BAR']:
@@ -672,6 +798,7 @@ def add_api_menu_bar(ifp_obj, user_api, menubar):
 
         for group in all_menus.keys():
             group_menu = menubar.addMenu(group)
+            menu_list.append(group_menu)
 
             for item in all_menus[group]:
                 action_obj = CreateAction(item['LABEL'],
@@ -682,6 +809,8 @@ def add_api_menu_bar(ifp_obj, user_api, menubar):
                                           reload=item['RELOAD'])
                 action_obj.msg_signal.connect(ifp_obj.update_message_text)
                 group_menu.addAction(action_obj.run())
+
+    return menu_list
 
 
 def add_api_tool_bar(ifp_obj, user_api):
@@ -818,12 +947,30 @@ class CreateAction(QThread):
     def execute_action(self):
         self.msg_signal.emit({'message': '[API]: %s' % self.command, 'color': 'black'})
         self.save_status_signal.emit(self.ifp_obj.ifp_status_file)
+        self.ifp_obj.memos_logger.log(f'Run API <{str(self.action_name)}>')
 
         thread = threading.Thread(target=run_command_for_api, args=(self.command, self.msg_signal, self.path, self.info_signal, self.finish_signal))
         thread.start()
 
         if self.blocking:
             self.blocking_signal.emit(self.action_name)
+
+
+def profile_function_stats(stats_dict, name=None):
+    def decorator(func):
+        counter_name = name or func.__name__
+        stats_dict[counter_name] = {'count': 0, 'total_time': 0.0}
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = func(*args, **kwargs)
+            end = time.perf_counter()
+            stats_dict[counter_name]['count'] += 1
+            stats_dict[counter_name]['total_time'] += (end - start)
+            return result
+        return wrapper
+    return decorator
 
 
 def expand_var(setting_str, ifp_var_dic=None, show_warning=True, **kwargs):
@@ -966,6 +1113,98 @@ def gen_cache_file_name(config_file: str) -> Tuple[str, str]:
     return status_file, ifp_cache_dir
 
 
+class CustomPrintFormatter(logging.Formatter):
+    # logging color setting
+    grey = "\x1b[38;20m"
+    bold_grey = "\x1b[38;1m"
+    green = "\x1b[32;20m"
+    bold_green = "\x1b[32;1m"
+    yellow = "\x1b[33;20m"
+    bold_yellow = "\x1b[33;1m"
+    red = "\x1b[31;20m"
+    bold_red = "\x1b[31;1m"
+    purple = "\x1b[35;20m"
+    bold_purple = "\x1b[35;1m"
+
+    reset = "\x1b[0m"
+    error_format = '[%(asctime)s] *Error*: %(message)s'
+    warning_format = '[%(asctime)s] *Warning*: %(message)s'
+    info_format = '[%(asctime)s] *Info*: %(message)s'
+    debug_format = '[%(asctime)s] *Debug*: %(message)s'
+    critical_format = '[%(asctime)s] *Critical*: %(message)s'
+
+    FORMATS = {
+        logging.DEBUG: bold_purple + debug_format + reset,
+        logging.INFO: bold_green + info_format + reset,
+        logging.WARNING: bold_yellow + warning_format + reset,
+        logging.ERROR: bold_red + error_format + reset,
+        logging.CRITICAL: bold_grey + critical_format + reset,
+    }
+
+    def __init__(self):
+        super().__init__(datefmt='%Y-%m-%d %H:%M:%S')
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(fmt=log_fmt, datefmt=self.datefmt)
+        return formatter.format(record)
+
+
+class CustomFileFormatter(logging.Formatter):
+    error_format = '[%(asctime)s] *Error*: %(message)s'
+    warning_format = '[%(asctime)s] *Warning*: %(message)s'
+    info_format = '[%(asctime)s] *Info*: %(message)s'
+    debug_format = '[%(asctime)s] *Debug*: %(message)s'
+    critical_format = '[%(asctime)s] *Critical*: %(message)s'
+
+    FORMATS = {
+        logging.DEBUG: debug_format,
+        logging.INFO: info_format,
+        logging.WARNING: warning_format,
+        logging.ERROR: error_format,
+        logging.CRITICAL: critical_format,
+    }
+
+    def __init__(self):
+        super().__init__(datefmt='%Y-%m-%d %H:%M:%S')
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(fmt=log_fmt, datefmt=self.datefmt)
+        return formatter.format(record)
+
+
+_loggers = {}
+
+
+def get_logger(name='root'):
+    return logging.getLogger(name)
+
+
+def init_logger(log_path=None, name='root', level=logging.DEBUG, console_log=True):
+    if name in _loggers:
+        return _loggers[name]
+
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    logger.propagate = False
+
+    if console_log:
+        ch = logging.StreamHandler()
+        ch.setLevel(level)
+        ch.setFormatter(CustomPrintFormatter())
+        logger.addHandler(ch)
+
+    if log_path:
+        file_handler = logging.FileHandler(log_path)
+        file_handler.setLevel(level=logging.INFO)
+        file_handler.setFormatter(CustomFileFormatter())
+        logger.addHandler(file_handler)
+
+    _loggers[name] = logger
+    return logger
+
+
 class ThreadRun(QThread):
     """
     This class is used to run command on a thread.
@@ -1048,6 +1287,55 @@ class AutoVivification(dict):
         return False if self == type(self)() or self == {} else True
 
 
+class ProcessUsageMonitor:
+    def __init__(self, threshold_ratio=0.8):
+        """
+        Initialize the monitor with a threshold ratio.
+        If current_process_count >= threshold_ratio * max_user_processes,
+        it is considered over the limit.
+        """
+        self.username = getpass.getuser()
+        self.threshold_ratio = threshold_ratio
+        self.max_limit = int(self.get_max_user_processes() * self.threshold_ratio) if self.get_max_user_processes() != -1 else -1
+
+    @staticmethod
+    def get_max_user_processes():
+        """
+        Get the max number of user processes from /proc/self/limits.
+        Equivalent to `ulimit -u`.
+        Returns:
+            int: Max allowed processes.
+        """
+        try:
+            with open('/proc/self/limits') as f:
+                for line in f:
+                    if 'Max processes' in line:
+                        return int(line.split()[3])
+        except Exception as e:
+            print(f"[Error] Failed to get max user processes: {e}")
+        return -1
+
+    def is_process_count_safe(self, current: int):
+        """
+        Check whether the current process count is below the threshold.
+        Returns:
+            (bool, int, int): (is_safe, current_count, max_count)
+        """
+        maximum = self.max_limit
+        if current == -1 or maximum == -1:
+            return False, current, maximum
+        return current < self.max_limit, current, maximum
+
+    def __str__(self):
+        safe, current, maximum = self.is_process_count_safe()
+        return (
+            f"ProcessUsageMonitor(threshold={self.threshold_ratio:.2f}):\n"
+            f"  Current processes: {current}\n"
+            f"  Max allowed: {maximum}\n"
+            f"  Safe: {safe}"
+        )
+
+
 def convert_to_autovivification(d):
     if isinstance(d, dict):
         av = AutoVivification()
@@ -1074,6 +1362,7 @@ ING_STATUS = [status.building, status.running]
 CONFIG_DIC = {**config.admin_setting_dic, **config.user_setting_dic}
 USER = os.popen('whoami').read().strip()
 CWD = os.getcwd()
+IFP_MACHINE_ID = uuid.uuid4().hex
 
 
 def update_for_read_mode(cwd: str, user: str):
@@ -1082,3 +1371,76 @@ def update_for_read_mode(cwd: str, user: str):
 
     global USER
     USER = user
+
+
+class MemosLogger:
+    def __init__(self, log_path):
+        self.log_file = open(log_path, 'a', encoding='utf-8')
+
+    def log(self, content):
+        try:
+            record = {
+                'timestamp': datetime.datetime.now().isoformat(),
+                'content': content
+            }
+            self.log_file.write(json.dumps(record) + '\n')
+            self.log_file.flush()
+        except Exception:
+            pass  # Silent fail
+
+    def setup_menu_bar_memos(self, menubar):
+        try:
+            for menu in menubar.findChildren(QMenu):
+                menu_name = menu.title()
+
+                for action in menu.actions():
+                    if action.text():
+                        action.triggered.connect(functools.partial(self.log, f'Click MenuBar Menu <{menu_name}> -> Action <{action.text()}>'))
+        except Exception:
+            pass
+
+    def setup_tool_bar_memos(self, toolbar_list):
+        try:
+            for toolbar in toolbar_list:
+                for action in toolbar.actions():
+                    if action.text():
+                        action.triggered.connect(functools.partial(self.log, f'Click ToolBar <{action.text()}>'))
+        except Exception:
+            pass
+
+    def setup_menu_memos(self, menu, menu_name=None):
+        try:
+            actual_menu_name = menu_name or menu.title() or "Unknown Menu"
+            self._setup_menu_recursive(menu, actual_menu_name)
+        except Exception:
+            pass
+
+    def _setup_menu_recursive(self, menu, current_path):
+        try:
+            for action in menu.actions():
+                if action.menu():
+                    submenu = action.menu()
+                    submenu_path = f"{current_path} -> {action.text()}"
+                    self._setup_menu_recursive(submenu, submenu_path)
+                elif action.text():
+                    action.triggered.connect(
+                        lambda checked, act=action: self.setup_menu_action_log(current_path, act)
+                    )
+        except Exception:
+            pass
+
+    def setup_menu_action_log(self, menu_path, action):
+        try:
+            self.log(f'Click Menu -> {menu_path} -> {action.text()}')
+        except Exception:
+            pass
+
+    def close(self):
+        try:
+            if hasattr(self, 'log_file'):
+                self.log_file.close()
+        except Exception:
+            pass
+
+    def __del__(self):
+        self.close()

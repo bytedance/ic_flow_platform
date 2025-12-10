@@ -1,5 +1,6 @@
 import os
 import re
+import shlex
 import subprocess
 from typing import Dict
 
@@ -22,8 +23,8 @@ class PredictionModel:
     def __init__(self):
         self.config_dic = read_conf()
 
-    def predict_job(self, job_info: Dict[str, str], run_method: str) -> str:
-        new_run_method = run_method
+    def predict_job(self, job_info: Dict[str, str], command: str) -> str:
+        new_command = command
 
         try:
             ori_res_req = job_info['res_req']
@@ -32,16 +33,15 @@ class PredictionModel:
 
             # If check failed, return
             if not check:
-                return new_run_method
+                return new_command
 
             # If Check passed, predicting max memory for job, generating new res_req and modifying job res_req
             predict_mem = self.predict_job_memory(job_info)
-            new_res_req = self._gen_res_req(res_req=ori_res_req, memory=predict_mem)
-            new_run_method = self._gen_run_method(run_method=run_method, new_res_req=new_res_req, old_res_req=ori_res_req)
+            new_command = self._gen_new_command(command=command, res_req=str(predict_mem))
         except Exception:
             pass
 
-        return new_run_method
+        return new_command
 
     @staticmethod
     def check_job_res_req(res_req: str) -> bool:
@@ -90,3 +90,18 @@ class PredictionModel:
 
         return run_method
 
+    def _gen_new_command(self, command: str, res_req: str):
+        run_info_list = shlex.split(command)
+
+        insert_index = 1
+        for i, item in enumerate(run_info_list):
+            if item == '-q' and i + 1 < len(run_info_list):
+                insert_index = i + 2
+                break
+
+        res_req_token = f'rusage[mem={res_req}]'
+        res_req_tokens = ['-R', f'"{res_req_token}"']
+
+        run_info_list = run_info_list[:insert_index] + res_req_tokens + run_info_list[insert_index:]
+        new_command = ' '.join(run_info_list)
+        return new_command

@@ -3,9 +3,13 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
+import threading
+import traceback
 from collections import deque
 from dataclasses import dataclass, asdict
+from pathlib import Path
 
 import pandas as pd
 import psutil
@@ -21,7 +25,7 @@ from typing import Tuple, Dict, List
 from screeninfo import get_monitors
 
 from PyQt5.QtWidgets import QWidget, QMainWindow, QAction, QPushButton, QLabel, QHeaderView, QVBoxLayout, QHBoxLayout, QLineEdit, QTableView, QAbstractItemView, QMenu, QToolTip, QDesktopWidget, QMessageBox, QComboBox, QFileDialog, QApplication, QGridLayout, \
-    QTableWidget, QTableWidgetItem, QCompleter, QCheckBox, QStyledItemDelegate, QFormLayout, QScrollArea, QTabWidget, QTextEdit, QPlainTextEdit, QButtonGroup, QRadioButton, QFrame, QSizePolicy
+    QTableWidget, QTableWidgetItem, QCompleter, QCheckBox, QStyledItemDelegate, QFormLayout, QScrollArea, QTabWidget, QTextEdit, QPlainTextEdit, QButtonGroup, QRadioButton, QFrame, QSizePolicy, QTextBrowser
 from PyQt5.QtGui import QBrush, QFont, QColor, QStandardItem, QStandardItemModel, QCursor, QPalette, QPixmap, QPen, QPainter, QTextFormat, QTextDocument, QTextCursor, QTextCharFormat, QIcon
 from PyQt5.QtCore import Qt, pyqtSignal, QObject, QThread, QSize, QRegularExpression, QTimer, QProcess
 
@@ -84,28 +88,6 @@ def parsing_blank_setting():
                      }
 
     return blank_setting
-
-
-def check_task_items(task):
-    invalid_dic = {}
-
-    for action2 in task:
-        for item in task[action2]:
-            if item == 'PATH':
-                # PATH must exist
-                if not os.path.isdir(task[action2][item]):
-                    invalid_dic.setdefault(action2, []).append(item)
-
-            elif item == 'RUN_METHOD':
-                # xterm must be used with -e
-                if re.search(r"xterm(?!\s+-e)", str(task[action2][item])):
-                    invalid_dic.setdefault(action2, []).append(item)
-
-                # Do not allow '/" marks around bsub command
-                if re.search(r"(\'\s*bsub.+\')|(\"\s*bsub.+\")", str(task[action2][item])):
-                    invalid_dic.setdefault(action2, []).append(item)
-
-    return invalid_dic
 
 
 def custom_format_map(s, d):
@@ -284,14 +266,14 @@ class TaskJobCheckWorker(QThread):
             return {"error": str(e)}
 
     @staticmethod
-    def get_lsf_job_status(job_id: str) -> str:
+    def get_lsf_job_status(job_id: str, api_reload: bool = False) -> str:
         try:
             status = os.popen(f'bjobs {job_id} | tail -n 1').read().split()[2]
         except Exception:
             status = ' '
 
         if status == 'RUN':
-            return ' '
+            return common.status.running if api_reload else ' '
         elif status == 'DONE':
             return '{} {}'.format(common.TaskAction().run, common.status.passed)
         elif status == 'EXIT':
@@ -366,8 +348,8 @@ class UserConfig(QMainWindow):
         self.task_row_mapping = AutoVivification()
         self.view_status_dic = {}
         self.task_cache = AutoVivification()
-        self.info_cache_path = os.path.join(common.get_user_cache_path(), 'INFO/{BLOCK}/{VERSION}/{FLOW}/{TASK}/task.json')
-        self.history_cache_path = os.path.join(common.get_user_cache_path(), 'SUMMARY/summary.csv')
+        self.info_cache_path = os.path.join(self.ifp_obj.ifp_cache_dir, 'INFO/{BLOCK}/{VERSION}/{FLOW}/{TASK}/task.json')
+        self.history_cache_path = os.path.join(self.ifp_obj.ifp_cache_dir, 'SUMMARY/summary.csv')
         self.history_cache_df = pd.DataFrame(columns=['block', 'version', 'flow', 'task', 'job_id', 'timestamp'])
 
         self.view_status_dic.setdefault('column', {})
@@ -429,6 +411,8 @@ class UserConfig(QMainWindow):
         self.ifp_monitor = IFPMonitor(self)
         self.ifp_monitor.moveToThread(self.thread)
         self.ifp_monitor.message.connect(self.update_state)
+        self.ifp_monitor.pnum.connect(self.ifp_obj.update_pnum)
+        self.ifp_monitor.config_update.connect(self.ifp_obj.update_status_bar_tip)
         self.thread.started.connect(self.ifp_monitor.run)
         self.thread.start()
         self.tab_name = 'CONFIG'
@@ -449,7 +433,7 @@ class UserConfig(QMainWindow):
 
         self.setup_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.setup_table.customContextMenuRequested.connect(self.generate_menu)
-        self.setup_table.setItemDelegate(common_pyqt5.CustomDelegate(wrap_columns=[0, 1]))
+        self.setup_table.setItemDelegate(common_pyqt5.CustomDelegate(wrap_columns=[0, 1], table_view=self.setup_table))
         self.setup_table.doubleClicked.connect(self.generate_double_clicked)
 
         self.top_layout.addWidget(self.config_path_widget)
@@ -472,6 +456,34 @@ class UserConfig(QMainWindow):
     def enable_gui(self):
         self.disable_gui_flag = False
 
+    def check_task_items(self, block: str, version: str, flow: str, task: str, task_dic: dict):
+        invalid_dic = {}
+        var_dic = {'BLOCK': block,
+                   'VERSION': version,
+                   'FLOW': flow,
+                   'TASK': task}
+
+        for action2 in task_dic:
+            for item in task_dic[action2]:
+                if item == 'PATH':
+                    # PATH must exist
+                    item_path = common.expand_var(str(task_dic[action2][item]), ifp_var_dic=self.config_obj.var_dic, **var_dic)
+                    if not os.path.isdir(item_path):
+                        invalid_dic.setdefault(action2, []).append(item)
+
+                elif item == 'RUN_METHOD':
+                    # xterm must be used with -e
+                    run_method = common.expand_var(str(task_dic[action2][item]), ifp_var_dic=self.config_obj.var_dic, **var_dic)
+
+                    if re.search(r"xterm(?!\s+-e)", run_method):
+                        invalid_dic.setdefault(action2, []).append(item)
+
+                    # Do not allow '/" marks around bsub command
+                    if re.search(r"(\'\s*bsub.+\')|(\"\s*bsub.+\")", str(run_method)):
+                        invalid_dic.setdefault(action2, []).append(item)
+
+        return invalid_dic
+
     def update_status_bar(self, index):
         self.current_selected_row = index.row()
         self.current_selected_column = index.column()
@@ -480,6 +492,8 @@ class UserConfig(QMainWindow):
         self.current_selected_version = self.setup_model.index(self.current_selected_row, 1).data()
         self.current_selected_flow = self.setup_model.index(self.current_selected_row, 2).data()
         self.current_selected_task = self.setup_model.index(self.current_selected_row, 3).data()
+
+        self.ifp_obj.memos_logger.log(f'Select Config Table Item -> ({self.current_selected_block}, {self.current_selected_version}, {self.current_selected_flow}, {self.current_selected_task})')
         all_items = [self.current_selected_block, self.current_selected_version, self.current_selected_flow, self.current_selected_task]
         message_items = []
 
@@ -827,6 +841,8 @@ class UserConfig(QMainWindow):
             self.current_selected_flow = self.setup_model.index(self.current_selected_row, 2).data()
             self.current_selected_task = self.setup_model.index(self.current_selected_row, 3).data()
 
+        self.ifp_obj.memos_logger.log(f'Right Click Config Table Item -> ({self.current_selected_block}, {self.current_selected_version}, {self.current_selected_flow}, {self.current_selected_task})')
+
         if len(self.setup_table.selectedIndexes()) == 0 or self.setup_table.indexAt(pos).column() < 0 or self.setup_table.indexAt(pos).row() < 0:
             action1 = QAction('Create block')
             action1.triggered.connect(lambda: self.add_more_item('block'))
@@ -948,7 +964,7 @@ class UserConfig(QMainWindow):
                                              'VERSION': self.current_selected_version,
                                              'FLOW': self.current_selected_flow,
                                              'TASK': self.current_selected_task})
-
+        self.ifp_obj.memos_logger.setup_menu_memos(menu, 'Config Table Menu')
         menu.exec_(self.setup_table.mapToGlobal(pos))
 
     def generate_double_clicked(self, item):
@@ -964,6 +980,7 @@ class UserConfig(QMainWindow):
             version = self.setup_model.index(row, 1).data()
             flow = self.setup_model.index(row, 2).data()
             task = self.setup_model.index(row, 3).data()
+            self.ifp_obj.memos_logger.log(f'DoubleClick Config Table Item -> ({block}, {version}, {flow}, {task})')
 
             self.edit_detailed_config(read_only=True if self.disable_gui_flag else False,
                                       block=block,
@@ -1183,9 +1200,11 @@ class UserConfig(QMainWindow):
                              task=None):
         status = self.ifp_obj.job_manager.all_tasks[block][version][flow][task].status
         read_only = True if read_only and status == common.status.running else False
+        self.ifp_obj.task_information_show = True
         self.child = WindowForTaskInformation(task_obj=self.ifp_obj.job_manager.all_tasks[block][version][flow][task], user_config_obj=self, read_only=read_only)
         self.child.setWindowModality(Qt.ApplicationModal)
         self.child.detailed_task_window.message.connect(self.update_detailed_setting)
+        self.child.show_sig.connect(self.ifp_obj.change_task_information_show_status)
         self.child.show()
 
     def update_detailed_setting(self, value):
@@ -1322,6 +1341,8 @@ class UserConfig(QMainWindow):
 
 class IFPMonitor(QObject):
     message = pyqtSignal(dict)
+    pnum = pyqtSignal(int)
+    config_update = pyqtSignal()
 
     def __init__(self, mainwindow):
         super(QObject, self).__init__()
@@ -1330,10 +1351,49 @@ class IFPMonitor(QObject):
         self.detailed_setting = AutoVivification()
         self.default_setting = AutoVivification()
         self.state = AutoVivification()
+        self.stop_event = threading.Event()
         self.wake_up = False
 
     def run(self):
-        while True:
+        while not self.stop_event.is_set():
+            try:
+                default_file_mtime = None
+                api_file_mtime = None
+                update_flag = False
+
+                if os.path.exists(self.mainwindow.config_obj.default_config_file):
+                    default_file_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(self.mainwindow.config_obj.default_config_file))
+
+                if os.path.exists(self.mainwindow.config_obj.api_yaml):
+                    api_file_mtime = datetime.datetime.fromtimestamp(os.path.getmtime(self.mainwindow.config_obj.api_yaml))
+
+                if default_file_mtime is not None and default_file_mtime > self.mainwindow.config_obj.default_config_file_mtime:
+                    update_flag = True
+
+                if api_file_mtime is not None and api_file_mtime > self.mainwindow.config_obj.api_file_mtime:
+                    update_flag = True
+
+                if update_flag:
+                    self.config_update.emit()
+
+            except Exception:
+                pass
+
+            try:
+                result = subprocess.run(
+                    "ps -U $(id -u) --no-headers | wc -l",
+                    shell=True,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=2
+                )
+                current_pnum = int(result.stdout.strip())
+                self.pnum.emit(current_pnum)
+            except Exception:
+                self.pnum.emit(-1)
+
             if self.wake_up:
                 self.task_setting = copy.deepcopy(self.mainwindow.task_setting)
                 self.detailed_setting = copy.deepcopy(self.mainwindow.task_setting)
@@ -1346,7 +1406,7 @@ class IFPMonitor(QObject):
                                 if self.detailed_setting[block][version][flow][task]:
                                     self.state[block][version][flow][task] = 'user'
 
-                                    if len(check_task_items(self.detailed_setting[block][version][flow][task])):
+                                    if len(self.mainwindow.check_task_items(block, version, flow, task, self.detailed_setting[block][version][flow][task])):
                                         self.state[block][version][flow][task] = 'blank'
 
                                     continue
@@ -1667,10 +1727,11 @@ class WindowForAddItems(QMainWindow):
                 all_tasks = list(self.task_setting[block][version][flow].keys())
                 index = all_tasks.index(self.task)
                 all_tasks.insert(index + 1, task)
-                self.task_setting[block][version][flow] = {}
+                self.task_setting[block][version][flow][task] = {}
+                # self.task_setting[block][version][flow] = {}
 
-                for k in all_tasks:
-                    self.task_setting[block][version][flow][k] = {}
+                # for k in all_tasks:
+                #     self.task_setting[block][version][flow][k] = {}
             else:
                 if self.item in ['block', 'version', 'flow'] and self.auto_import_tasks:
                     if not self.table_model.item(i, 3).checkState() == Qt.Checked:
@@ -2020,7 +2081,6 @@ class WindowForTaskConfig(QMainWindow):
         self.var = self.config_obj.var_dic
         self.raw_setting = AutoVivification()
         self.tips = AutoVivification()
-        self.invalid_dic = check_task_items(self.detailed_setting)
         self.read_only = read_only
         self.all_tasks = self.user_task_setting[self.block][self.version][self.flow].keys()
 
@@ -2072,9 +2132,26 @@ class WindowForTaskConfig(QMainWindow):
         # Task Setting
         self.setup_table = QTableView()
         self.setup_model = QStandardItemModel(1, 2)
+        self.setup_model.itemChanged.connect(self.check_path_validity)
         self.setup_delegate = CustomDelegate2()
-        self.license_dependency = QPushButton()
-        self.file_dependency = QPushButton()
+        self.license_dependency = ShrinkablePushButton()
+        self.file_dependency = ShrinkablePushButton()
+        self.run_log_files = ShrinkablePushButton()
+
+        pushbutton_style = """
+            QPushButton {
+                background-color: transparent;
+                color: rgba(0, 0, 0, 0);
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: transparent;
+            }
+        """
+        self.license_dependency.setStyleSheet(pushbutton_style)
+        self.file_dependency.setStyleSheet(pushbutton_style)
+        self.run_log_files.setStyleSheet(pushbutton_style)
+
         self.run_combo = QComboBox()
         self.run_label = QLabel()
 
@@ -2084,8 +2161,6 @@ class WindowForTaskConfig(QMainWindow):
         self.button_widget = QWidget()
         self.button_layout = QHBoxLayout()
 
-        common_pyqt5.auto_resize(self, 800, 800)
-        self.resize_signal.emit(800, 800)
         center(self)
 
         self.child = None
@@ -2096,10 +2171,32 @@ class WindowForTaskConfig(QMainWindow):
         if self.read_only:
             self.disable_gui()
 
+        common_pyqt5.auto_resize(self, 800, 800)
+        self.resize_signal.emit(800, 800)
+
     def disable_gui(self):
         self.setup_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.save_button.setEnabled(False)
         self.line_edit_task_name.setEnabled(False)
+
+    def check_path_validity(self, item: QStandardItem):
+        try:
+            if self.setup_model and item.whatsThis():
+                what_is_this = item.whatsThis()
+                key = what_is_this.split()[-1]
+
+                if key == 'PATH':
+                    value = self.setup_model.item(item.row(), 1).text().strip()
+
+                    if value:
+                        real_path = custom_format_map(value, self.replace_var_mapping) if isinstance(value, str) else value
+
+                        if not os.path.exists(str(real_path)):
+                            self.setup_model.item(item.row(), 0).setForeground(QColor(Qt.red))
+                        else:
+                            self.setup_model.item(item.row(), 0).setForeground(QColor(Qt.black))
+        except Exception:
+            pass
 
     def init_ui(self):
         # Top Layout
@@ -2109,7 +2206,7 @@ class WindowForTaskConfig(QMainWindow):
         # Task name
         self.label_task_name.setStyleSheet('font-weight : bold;font-size : 15px')
         self.line_edit_task_name.setFixedWidth(100)
-        self.line_edit_task_name.textChanged.connect(self.draw_table)
+        self.line_edit_task_name.returnPressed.connect(self.change_new_task)
         self.layout_task_name.addWidget(self.label_task_name)
         self.layout_task_name.addWidget(self.line_edit_task_name)
         self.layout_task_name.addWidget(self.reset_to_default_button)
@@ -2140,8 +2237,12 @@ class WindowForTaskConfig(QMainWindow):
         self.setup_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.setup_table.setShowGrid(True)
 
-        self.license_dependency.clicked.connect(functools.partial(self.edit_task_requirements, 'LICENSE'))
-        self.file_dependency.clicked.connect(functools.partial(self.edit_task_requirements, 'FILE'))
+        self.license_dependency.clicked.connect(functools.partial(self.edit_task_requirements, 'DEPENDENCY', 'LICENSE'))
+        self.file_dependency.clicked.connect(functools.partial(self.edit_task_requirements, 'DEPENDENCY', 'FILE'))
+        self.run_log_files.clicked.connect(functools.partial(self.edit_task_requirements, 'RUN', 'LOG'))
+        self.license_dependency.setWhatsThis('DEPENDENCY LICENSE')
+        self.file_dependency.setWhatsThis('DEPENDENCY FILE')
+        self.run_log_files.setWhatsThis('RUN LOG')
         self.run_label.setStyleSheet("QLabel { color: gray; font-size: 14px; font-style: italic; }")
 
         if self.read_only:
@@ -2193,9 +2294,13 @@ class WindowForTaskConfig(QMainWindow):
         self.draw_table(self.raw_task)
         self.hide_env()
 
+    def change_new_task(self):
+        self.new_task = self.line_edit_task_name.text().strip()
+
     def update_table(self):
         for row in range(self.setup_model.rowCount()):
             standard_item = self.setup_model.item(row, 1)
+            widget = self.setup_table.indexWidget(self.setup_model.index(row, 1))
 
             if standard_item is None:
                 continue
@@ -2209,8 +2314,14 @@ class WindowForTaskConfig(QMainWindow):
             user_value = self.task_config_obj.UserSetting.get_definition(what_is_this)
 
             if user_value is not None:
+                if isinstance(widget, QPushButton):
+                    user_value = ','.join(user_value) if isinstance(user_value, list) else user_value
+
                 standard_item.setData(user_value, Qt.DisplayRole)
             else:
+                if isinstance(widget, QPushButton):
+                    default_value = ','.join(default_value) if isinstance(default_value, list) else default_value
+
                 standard_item.setData(default_value, Qt.DisplayRole)
 
             if default_value is not None:
@@ -2231,9 +2342,17 @@ class WindowForTaskConfig(QMainWindow):
             if standard_item is None:
                 continue
 
-            default_value = self.task_config_obj.DefaultSetting.get_definition(standard_item.whatsThis())
+            what_is_this = standard_item.whatsThis()
+            default_value = self.task_config_obj.DefaultSetting.get_definition(what_is_this)
+            user_value = self.task_config_obj.UserSetting.get_definition(what_is_this)
 
-            if default_value is not None:
+            if default_value is not None or (user_value is not None and default_value is None):
+                if default_value is None:
+                    default_value = ''
+
+                if isinstance(default_value, list):
+                    default_value = ','.join(default_value)
+
                 standard_item.setData(default_value, Qt.DisplayRole)
                 standard_item.setData(default_value, Qt.UserRole + 1)
 
@@ -2291,6 +2410,9 @@ class WindowForTaskConfig(QMainWindow):
                 elif category == 'DEPENDENCY' and key == 'FILE':
                     index = self.setup_model.indexFromItem(item)
                     self.setup_table.setIndexWidget(index, self.file_dependency)
+                elif category == 'RUN' and key == 'LOG':
+                    index = self.setup_model.indexFromItem(item)
+                    self.setup_table.setIndexWidget(index, self.run_log_files)
 
                 row += 1
 
@@ -2361,22 +2483,22 @@ class WindowForTaskConfig(QMainWindow):
         elif reply == QMessageBox.No:
             return
 
-    def edit_task_requirements(self, category: str = 'LICENSE'):
+    def edit_task_requirements(self, category: str = 'DEPENDENCY', item: str = 'LICENSE'):
         row = self.setup_table.indexAt(self.sender().pos()).row()
         text = self.setup_model.index(row, 1).data() if self.setup_model.index(row, 1).data() else ''
-        self.child = WindowForEditTaskRequirement(row, text, category)
+        self.child = WindowForEditTaskRequirement(row, text, category, item)
         self.child.setWindowModality(Qt.ApplicationModal)
         self.child.message.connect(self.update_task_requirement)
         self.child.show()
 
-    def update_task_requirement(self, row, text, category):
+    def update_task_requirement(self, row, text, category, item):
         if text == '':
-            if dependency := self.default_task_setting.get(self.raw_task, {}).get('DEPENDENCY', {}).get(category):
-                text = ', '.join(dependency)
+            if dependency := self.default_task_setting.get(self.raw_task, {}).get(category, {}).get(item):
+                text = ','.join(dependency)
 
-        self.setup_model.setItem(row, 1, QStandardItem(text))
-        button = self.setup_table.indexWidget(self.setup_model.index(row, 1))
-        button.setText(text)
+        table_item = QStandardItem(text)
+        table_item.setWhatsThis(f'{category} {item}')
+        self.setup_model.setItem(row, 1, table_item)
 
     def show_tips(self, index):
         desktop = QApplication.desktop()
@@ -2412,6 +2534,7 @@ class WindowForTaskConfig(QMainWindow):
 
         for i in range(self.setup_model.rowCount()):
             model_item = self.setup_model.item(i, 1)
+            widget = self.setup_table.indexWidget(self.setup_model.index(i, 1))
 
             if model_item is None:
                 continue
@@ -2426,8 +2549,15 @@ class WindowForTaskConfig(QMainWindow):
 
             setting[category][item] = value
 
-            if category == 'DEPENDENCY' and value:
-                setting[category][item] = [item.strip() for item in value.split(',')]
+            if isinstance(widget, QPushButton) and isinstance(value, str):
+                if category == 'RUN':
+                    if isinstance(value, str) and len(value.split(',')) > 1:
+                        setting[category][item] = [item.strip() for item in value.split(',')]
+
+                    if isinstance(value, list) and len(value) < 2:
+                        setting[category][item] = value[0].strip()
+                else:
+                    setting[category][item] = [item.strip() for item in value.split(',')] if value else []
 
             if value == '':
                 if category in self.detailed_setting.keys() and category in self.default_task_setting[self.new_task].keys():
@@ -2529,6 +2659,9 @@ class WindowForTaskConfig(QMainWindow):
         self.run_combo.setDisabled(True)
         self._update_table(show_value_flag=True)
         self.setup_table.setEditTriggers(QTableView.NoEditTriggers)
+        self.setup_table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.setup_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setup_table.setTextElideMode(Qt.ElideNone)
         self.show_var_values_flag = True
 
     def _show_var_values_false(self):
@@ -2554,18 +2687,21 @@ class WindowForTaskConfig(QMainWindow):
 
 
 class WindowForEditTaskRequirement(QMainWindow):
-    message = pyqtSignal(int, str, str)
+    message = pyqtSignal(int, str, str, str)
 
-    def __init__(self, row, requirements, category: str = 'LICENSE'):
+    def __init__(self, row, requirements, category: str, item: str = 'LICENSE'):
         super().__init__()
         self.requirement = requirements
         self.category = category
+        self.item = item
         self.row = row
 
-        if self.category == 'LICENSE':
+        if self.item == 'LICENSE':
             self.init_license_ui()
-        elif self.category == 'FILE':
-            self.init_file_ui()
+        elif self.item == 'FILE':
+            self.init_file_ui(title='Edit Required File')
+        elif self.item == 'LOG':
+            self.init_file_ui(title='Edit Log Files')
 
     def init_license_ui(self):
         title = 'Edit Required License'
@@ -2623,8 +2759,7 @@ class WindowForEditTaskRequirement(QMainWindow):
                 self.setup_model.setItem(row, 1, item)
                 row += 1
 
-    def init_file_ui(self):
-        title = 'Edit Required File'
+    def init_file_ui(self, title: str):
         self.setFixedWidth(600)
         self.setFixedHeight(300)
         self.setWindowTitle(title)
@@ -2674,7 +2809,7 @@ class WindowForEditTaskRequirement(QMainWindow):
         text = []
 
         for i in range(self.setup_model.rowCount()):
-            if self.category == 'LICENSE':
+            if self.item == 'LICENSE':
                 feature = self.setup_model.index(i, 0).data()
 
                 if not feature:
@@ -2683,7 +2818,7 @@ class WindowForEditTaskRequirement(QMainWindow):
                 quantity = self.setup_model.index(i, 1).data()
 
                 text.append('%s : %s' % (feature, quantity))
-            elif self.category == 'FILE':
+            elif self.item == 'FILE' or self.item == 'LOG':
                 file = self.setup_model.index(i, 0).data()
 
                 if not file:
@@ -2693,7 +2828,7 @@ class WindowForEditTaskRequirement(QMainWindow):
 
         text_content = str(',  '.join(text))
 
-        self.message.emit(self.row, text_content, self.category)
+        self.message.emit(self.row, text_content, self.category, self.item)
 
         self.close()
 
@@ -2772,13 +2907,18 @@ class WindowForDependency(QMainWindow):
             self.current_block = list(self.dependency_priority_dic.keys())[0]
             self.current_version = list(self.dependency_priority_dic[self.current_block].keys())[0]
 
+        if not os.access(os.getcwd(), os.W_OK):
+            picture_base_dir = Path.home()
+        else:
+            picture_base_dir = os.getcwd()
+
         if not self.current_block or not self.current_version or not dependency_priority_dic.get(self.current_block, {}).get(self.current_version):
             self.current_dependency_priority_dic = {}
-            self.picture_dir = os.path.join(os.getcwd(), '.ifp/pictures')
+            self.picture_dir = os.path.join(picture_base_dir, '.ifp/pictures')
             self.gen_current_picture_dir()
         else:
             self.current_dependency_priority_dic = copy.deepcopy(dependency_priority_dic[self.current_block][self.current_version])
-            self.picture_dir = os.path.join(os.getcwd(), '.ifp/pictures/%s/%s/' % (self.current_block, self.current_version))
+            self.picture_dir = os.path.join(picture_base_dir, '.ifp/pictures/%s/%s/' % (self.current_block, self.current_version))
             self.gen_current_picture_dir()
 
         self.update_ui()
@@ -2844,7 +2984,7 @@ class WindowForDependency(QMainWindow):
 
     def _eog_graph(self):
         try:
-            os.popen('/bin/eog {}'.format(os.path.join(self.picture_dir, 'full_dependency.png')))
+            os.popen('NO_AT_BRIDGE=1 /usr/bin/dbus-launch /bin/eog {}'.format(os.path.join(self.picture_dir, 'full_dependency.png')))
         except Exception as error:
             print(error)
 
@@ -2978,8 +3118,10 @@ class WindowForDependency(QMainWindow):
         for edge in edge_list:
             dot.edge(edge['from'], edge['to'])
 
+        dot.graph_attr['dpi'] = '300'
         dot.graph_attr['size'] = '10, 10'
         dot.render(os.path.join(self.picture_dir, 'full_dependency'), format='png')
+        dot.graph_attr['dpi'] = '96'
         dot.graph_attr['size'] = '%s, %s' % (str(width), str(height))
         dot.render(os.path.join(self.picture_dir, 'dependency'), format='png')
 
@@ -3263,6 +3405,7 @@ class WindowForDependency(QMainWindow):
 
                         for first_item in first_condition_list:
                             edge_list.append({'from': f'{tag}-{first_item}', 'to': f'{tag}-{str(link_node)}'})
+                            flow_chart_dic.setdefault(first_item, [])
                             flow_chart_dic[first_item].append(str(link_node))
                     else:
                         continue
@@ -3594,21 +3737,22 @@ class WindowForDependency(QMainWindow):
         if not item_name:
             return
 
-        menu = QMenu()
-        add_action = menu.addAction('Add Another Condition')
-        add_action.triggered.connect(functools.partial(self.add_repeat_dependency, current_selected_item))
+        if item_name in self.current_dependency_priority_dic:
+            menu = QMenu()
+            add_action = menu.addAction('Add Another Condition')
+            add_action.triggered.connect(functools.partial(self.add_repeat_dependency, current_selected_item))
 
-        delete_action = menu.addAction('Delete Current Condition')
+            delete_action = menu.addAction('Delete Current Condition')
 
-        if item_name == current_selected_item:
-            delete_action.setDisabled(True)
+            if item_name == current_selected_item:
+                delete_action.setDisabled(True)
 
-        delete_action.triggered.connect(functools.partial(self.delete_repeat_dependency, current_selected_item))
+            delete_action.triggered.connect(functools.partial(self.delete_repeat_dependency, current_selected_item))
 
-        reset_action = menu.addAction('Reset To Default Condition')
-        reset_action.triggered.connect(functools.partial(self.reset_to_default_condition, current_selected_item))
+            reset_action = menu.addAction('Reset To Default Condition')
+            reset_action.triggered.connect(functools.partial(self.reset_to_default_condition, current_selected_item))
 
-        menu.exec_(table.mapToGlobal(pos))
+            menu.exec_(table.mapToGlobal(pos))
 
     def add_repeat_dependency(self, item=''):
         if not item:
@@ -3831,6 +3975,7 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
         self.main_layout.setAlignment(Qt.AlignLeft)
 
         self.table = QTableWidget()
+        self.table.mousePressEvent = self.table_mouse_press_event
         self.main_label = QLabel()
         self.env_table = QTableWidget()
         self.env_label = QLabel()
@@ -3882,6 +4027,15 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
         common_pyqt5.center_window(self)
 
         return self
+
+    def table_mouse_press_event(self, event):
+        if event.button() == Qt.RightButton:
+            item = self.table.itemAt(event.pos())
+            if item is None:
+                self.table.clearSelection()
+
+        # Call original mousePressEvent
+        QTableWidget.mousePressEvent(self.table, event)
 
     def gen_main_tab(self):
         font = QFont('Calibri', 10, QFont.Bold)
@@ -4033,11 +4187,11 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
         for key, value in env_dic.items():
             value = str(value)
             key_item = QTableWidgetItem(key)
-            key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
+            key_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             key_item.setForeground(QBrush(QColor(125, 125, 125)))
 
             value_item = QTableWidgetItem(value)
-            value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
+            value_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             value_item.setForeground(QBrush(QColor(125, 125, 125)))
 
             if self.window == 'config':
@@ -4092,33 +4246,24 @@ class WindowForToolGlobalEnvEditor(QMainWindow):
         if not self.gui_enable_signal:
             return
 
-        current_selected_row = self.table.currentIndex().row()
-        current_selected_column = self.table.currentIndex().column()
+        # Check if there's an item at the clicked position
+        item = self.table.itemAt(pos)
 
-        if current_selected_column != 0:
-            if current_selected_row == -1 and current_selected_column == -1:
-                menu = QMenu()
-                add_action = menu.addAction('Add Variable')
-                add_action.triggered.connect(self.add_var)
-
-                menu.exec_(self.table.mapToGlobal(pos))
-            return
-        else:
-            if not self.table.item(current_selected_row, current_selected_column):
-                return
-
-            current_selected_item_row = self.table.item(current_selected_row, current_selected_column).row()
-            current_selected_item = self.table.item(current_selected_row, current_selected_column).text()
-
+        if not item:
+            # No item at clicked position - show simple menu
             menu = QMenu()
             add_action = menu.addAction('Add Variable')
             add_action.triggered.connect(self.add_var)
-
+        else:
+            # Item exists - show full menu
+            current_selected_item_row = item.row()
+            current_selected_item = item.text()
+            menu = QMenu()
+            add_action = menu.addAction('Add Variable')
+            add_action.triggered.connect(self.add_var)
             delete_action = menu.addAction('Delete Variable')
-
             if self.mode == 'user' and current_selected_item in self.default_var:
                 delete_action.setDisabled(True)
-
             delete_action.triggered.connect(functools.partial(self.delete_var, current_selected_item_row, current_selected_item))
 
         menu.exec_(self.table.mapToGlobal(pos))
@@ -4273,7 +4418,7 @@ class WindowForAPI(QMainWindow):
         self.table_column_list = ['Enable', 'Type', 'Label', 'Project', 'Group', 'Tab', 'Column', 'Path', 'Command', 'Comment', 'Task_name',
                                   'Flow_name', 'Version_name', 'Block_name']
         self.api_order_list = ['Label', 'Enable', 'Type', 'Project', 'Group', 'Tab', 'Column', 'Path', 'Command', 'Comment', 'Task_name',
-                               'Flow_name', 'Version_name', 'Block_name', 'API-2']
+                               'Flow_name', 'Version_name', 'Block_name', 'API-2', 'GUI_BLOCKING', 'RELOAD', 'MENU_BAR_GROUP']
         self.label_index = 2
         self.column_button_count = 9
 
@@ -4416,8 +4561,11 @@ class WindowForAPI(QMainWindow):
             menu = QMenu()
             edit_action = menu.addAction('Add API')
             edit_action.triggered.connect(self.add_api)
-            edit_action = menu.addAction('Edit API')
-            edit_action.triggered.connect(functools.partial(self.edit_api, current_selected_item_row))
+
+            if self.table.item(current_selected_row, 1).text().strip().upper() in ['TABLE_RIGHT_KEY_MENU', 'PRE_IFP']:
+                edit_action = menu.addAction('Edit API')
+                edit_action.triggered.connect(functools.partial(self.edit_api, current_selected_item_row))
+
             delete_action = menu.addAction('Delete API')
             delete_action.triggered.connect(functools.partial(self.delete_api, current_selected_item_row))
 
@@ -4437,6 +4585,10 @@ class WindowForAPI(QMainWindow):
 
     def edit_api(self, row):
         api_dic, api_type = self._get_api_dic_from_row(row=row)
+
+        if api_type not in ['TABLE_RIGHT_KEY_MENU', 'PRE_IFP']:
+            return
+
         self.api_edit_window = WindowForAPIEdit('EDIT API', api_dic, api_type)
         self.api_edit_window.save_signal.connect(self.update_api_dic_after_edit)
         self.api_edit_window.show()
@@ -4450,7 +4602,7 @@ class WindowForAPI(QMainWindow):
                     same_label += 1
 
             if same_label >= 1:
-                QMessageBox.warning(self, 'Error', 'Please make sure that all API have <span style="color:red"> labels </span>!', QMessageBox.Ok)
+                QMessageBox.warning(self, 'Error', 'Please make sure that all API have <span style="color:red"> different labels </span>!', QMessageBox.Ok)
                 return
 
             self.api_dic['API'].setdefault(api_type, [])
@@ -4570,7 +4722,7 @@ class WindowForAPI(QMainWindow):
 
         api_list = []
 
-        for api_type in ['TABLE_RIGHT_KEY_MENU', 'PRE_IFP']:
+        for api_type in ['TABLE_RIGHT_KEY_MENU', 'PRE_IFP', 'MENU_BAR', 'TOOL_BAR']:
             for api_dic in total_api_dic['API'][api_type]:
                 api_dic['TYPE'] = api_type
                 api_list.append(api_dic)
@@ -4586,7 +4738,7 @@ class WindowForAPI(QMainWindow):
             label = self.table.item(i, self.label_index).text().strip()
             api_status_dic[label] = status
 
-        for api_type in ['TABLE_RIGHT_KEY_MENU', 'PRE_IFP']:
+        for api_type in ['TABLE_RIGHT_KEY_MENU', 'PRE_IFP', 'MENU_BAR', 'TOOL_BAR']:
             if api_type not in self.api_dic['API']:
                 continue
 
@@ -4896,7 +5048,7 @@ class WindowForAPIEdit(QMainWindow):
 
     def _check_temp_api(self) -> bool:
         for item in self.must_have_list[self.current_api_type]:
-            if 'API-2' in self.temp_api_dic:
+            if 'API-2' in self.temp_api_dic and self.temp_api_dic['API-2']:
                 for api_2_dic in self.temp_api_dic['API-2']:
                     for item_2 in self.must_have_list['API-2']:
                         if not api_2_dic[item_2]:
@@ -5011,6 +5163,8 @@ class WindowForAPIEdit(QMainWindow):
 
 
 class WindowForTaskInformation(QMainWindow):
+    show_sig = pyqtSignal(bool)
+
     def __init__(self, task_obj: job_manager.TaskObject = None, user_config_obj: UserConfig = None, read_only: bool = False):
         super().__init__()
         self.task_obj = task_obj
@@ -5089,13 +5243,24 @@ class WindowForTaskInformation(QMainWindow):
         self.detailed_job_window = WindowForTaskJobInfo(task_obj=self.task_obj, user_obj=self.user_config_obj, cache=self.cache)
 
         # Task Log Info
-        log_file = self.user_config_obj.task_setting[self.task_obj.block][self.task_obj.version][self.task_obj.flow][self.task_obj.task].get('RUN', {}).get('LOG', '')
-        log_file = log_file if log_file else self.user_config_obj.default_setting.get(self.task_obj.task, {}).get('RUN', {}).get('LOG', '')
-        log_file = custom_format_map(log_file, {**self.user_config_obj.ifp_obj.config_obj.var_dic, **{'BLOCK': self.task_obj.block,
-                                                                                                      'VERSION': self.task_obj.version,
-                                                                                                      'FLOW': self.task_obj.flow,
-                                                                                                      'TASK': self.task_obj.task}})
-        self.detailed_log_window = WindowForTaskLogInfo(task_obj=self.task_obj, file_path=log_file, cache=self.cache)
+        log_files = self.user_config_obj.task_setting[self.task_obj.block][self.task_obj.version][self.task_obj.flow][self.task_obj.task].get('RUN', {}).get('LOG', [])
+        log_files = log_files if log_files else self.user_config_obj.default_setting.get(self.task_obj.task, {}).get('RUN', {}).get('LOG', [])
+        log_file_list = []
+
+        if isinstance(log_files, str):
+            log_file_list = [log_files, ]
+        elif isinstance(log_files, list):
+            log_file_list = copy.deepcopy(log_files)
+
+        for i in range(len(log_file_list)):
+            log_file_list[i] = custom_format_map(str(log_file_list[i]), {**self.user_config_obj.ifp_obj.config_obj.var_dic, **{'BLOCK': self.task_obj.block, 'VERSION': self.task_obj.version, 'FLOW': self.task_obj.flow, 'TASK': self.task_obj.task}})
+
+            if not os.path.isabs(log_file_list[i]):
+                log_file_list[i] = os.path.join(self.task_obj.task_obj.PATH if self.task_obj.task_obj.PATH else os.getcwd(), log_file_list[i])
+
+            log_file_list[i] = custom_format_map(str(log_file_list[i]), {**self.user_config_obj.ifp_obj.config_obj.var_dic, **{'BLOCK': self.task_obj.block, 'VERSION': self.task_obj.version, 'FLOW': self.task_obj.flow, 'TASK': self.task_obj.task}})
+
+        self.detailed_log_window = WindowForTaskLogInfo(task_obj=self.task_obj, log_files=log_file_list, cache=self.cache)
 
         self.top_widget.addTab(self.detailed_task_window, 'Detailed Setting')
         self.top_widget.addTab(self.detailed_job_window, 'Job Info')
@@ -5121,6 +5286,7 @@ class WindowForTaskInformation(QMainWindow):
     def closeEvent(self, a0):
         self.clean_thread()
         self._save_cache()
+        self.show_sig.emit(False)
         super().closeEvent(a0)
 
     def clean_thread(self):
@@ -5231,8 +5397,12 @@ class WindowForTaskJobInfo(QMainWindow):
         self.job_cwd_line.setReadOnly(True)
         self.job_cwd_term_button = QPushButton('Open Terminal')
         self.job_cwd_term_button.setIcon(QIcon(str(os.environ['IFP_INSTALL_PATH']) + '/data/pictures/other/terminal.png'))
-        self.job_msg_line = QTextEdit()
+        self.job_msg_line = QTextBrowser()
         self.job_msg_line.setReadOnly(True)
+        self.job_msg_line.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self.job_msg_line.setOpenExternalLinks(True)
+        self.job_msg_line.setOpenLinks(False)
+        self.job_msg_line.anchorClicked.connect(self.open_url)
         self.job_sub_time_line = QLineEdit()
         self.job_sub_time_line.setReadOnly(True)
         self.job_run_time_line = QLineEdit()
@@ -5246,6 +5416,19 @@ class WindowForTaskJobInfo(QMainWindow):
 
         self.init_ui()
         self.refresh()
+
+    @staticmethod
+    def open_url(url):
+        try:
+            if os.path.isdir(url.toLocalFile()):
+
+                command = str('/bin/dbus-launch /bin/gnome-terminal --tab -- bash -c' + ' "cd ' + url.toLocalFile() + '; exec ' + str(os.environ['SHELL']) + '"; exit')
+                subprocess.Popen(command, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            else:
+                subprocess.Popen('gvim -geometry 160x30 %s' % url.toLocalFile(), shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception as error:
+            print(error)
+            print(traceback.format_exc())
 
     def init_ui(self):
         # Top Layout
@@ -5479,7 +5662,39 @@ class WindowForTaskJobInfo(QMainWindow):
     def refresh(self):
         job_id = str(self.task_obj.action_progress[common.action.run].job_id) if self.task_obj.action_progress[common.action.run].job_id else str(self.task_obj.job_id)
         check, job_dic = TaskJobCheckWorker.check_job_id(job_id=job_id)
-        self.job_msg_line.setText(str('\n'.join(self.task_obj.action_progress[common.action.run].progress_message)))
+        progress_messages = self.task_obj.action_progress[common.action.run].progress_message
+
+        try:
+            working_path = self.task_obj.working_path if self.task_obj.working_path else ''
+            run_shell = self.task_obj.task_run_shell if self.task_obj.task_run_shell else ''
+
+            html_parts = []
+
+            if working_path:
+                html_parts.append(f'<div style="background-color: #f0f0f0;"><b>[Working Path]:</b> {working_path}</div>')
+
+            if run_shell:
+                html_parts.append(f'<div style="background-color: #f0f0f0;"><b>[Run Shell]:</b> {run_shell}</div>')
+
+            if progress_messages:
+                formatted_lines = []
+                html_parts.append("<b>[Progress Message]:</b><br>")
+
+                for line in progress_messages:
+                    if line.startswith("[") and "]" in line:
+                        tag_end = line.find("]") + 1
+                        tag = line[:tag_end]
+                        rest = line[tag_end:]
+                        formatted_line = f"<b>{tag}</b>{rest}"
+                    else:
+                        formatted_line = f"{line}"
+                    formatted_lines.append(formatted_line)
+                html_parts.append(f"{'<br>'.join(formatted_lines)}")
+
+            html_content = "\n".join(html_parts)
+            self.job_msg_line.setHtml(html_content)
+        except Exception:
+            self.job_msg_line.setText(str('\n'.join(self.task_obj.action_progress[common.action.run].progress_message)))
 
         if not check:
             self._load_cache()
@@ -5513,18 +5728,26 @@ class WindowForTaskJobInfo(QMainWindow):
         path = self.job_cwd_line.text().strip()
 
         if not os.path.exists(path):
-            return
+            path = os.getcwd()
 
-        command = str('/bin/gnome-terminal --tab -- bash -c' + ' "cd ' + path + '; exec ' + str(os.environ['SHELL']) + '"; exit')
+        command = str('/bin/dbus-launch /bin/gnome-terminal --tab -- bash -c' + ' "cd ' + path + '; exec ' + str(os.environ['SHELL']) + '"; exit')
         thread_run = common.ThreadRun()
         thread_run.run([command, ])
 
 
 class WindowForTaskLogInfo(QMainWindow):
-    def __init__(self, task_obj: job_manager.TaskObject, cache: TaskCache, file_path: str = ''):
+    def __init__(self, task_obj: job_manager.TaskObject, cache: TaskCache, log_files: List[str]):
         super().__init__()
         self.task_obj = task_obj
-        self.file_path = file_path if os.path.exists(file_path) else ''
+        self.log_files = log_files
+
+        for log_file in log_files:
+            if os.path.exists(log_file):
+                self.file_path = log_file
+                break
+        else:
+            self.file_path = ''
+
         self.cache = cache
 
         # GUI
@@ -5535,8 +5758,13 @@ class WindowForTaskLogInfo(QMainWindow):
         self.main_widget = QWidget()
         self.main_layout = QGridLayout()
 
-        self.log_path_line = QLineEdit(self.file_path)
-        self.log_path_line.textChanged.connect(self._load_file)
+        self.log_path_combo = QComboBox()
+        self.log_path_combo.setMaximumWidth(int(self.top_widget.width() * 0.9))
+        self.log_path_combo.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
+        self.log_path_combo.setEditable(True)
+        self.log_path_combo.addItems(self.log_files)
+        self.log_path_combo.editTextChanged.connect(self._load_file)
+        self.log_path_combo.currentIndexChanged.connect(self._load_file)
 
         self.log_file_search = QPushButton('Find')
         self.log_file_search.clicked.connect(self._open_file_to_check)
@@ -5594,7 +5822,7 @@ class WindowForTaskLogInfo(QMainWindow):
         return TaskLogCache(error=self.error_type_line.text().strip(),
                             warning=self.warn_type_line.text().strip(),
                             search=self.search_line.text().strip(),
-                            log=self.log_path_line.text().strip(),
+                            log=self.log_path_combo.lineEdit().text().strip(),
                             timestamp=int(datetime.datetime.now().timestamp())
                             )
 
@@ -5638,7 +5866,7 @@ class WindowForTaskLogInfo(QMainWindow):
         jump_line_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         self.main_layout.addWidget(file_label, 0, 0)
-        self.main_layout.addWidget(self.log_path_line, 0, 1, 1, 6)
+        self.main_layout.addWidget(self.log_path_combo, 0, 1, 1, 6)
         self.main_layout.addWidget(self.log_file_search, 0, 7)
         self.main_layout.addWidget(self.gvim_button, 0, 8)
         self.main_layout.addWidget(error_name_label, 1, 0)
@@ -5688,16 +5916,16 @@ class WindowForTaskLogInfo(QMainWindow):
                                                    "All Files (*);;Python Files (*.py)", options=options)
 
         self.file_path = file_path if os.path.exists(str(file_path)) else self.file_path
-        self.log_path_line.setText(self.file_path)
+        self.log_path_combo.lineEdit().setText(self.file_path)
 
     def _load_file(self):
-        log_file = self.log_path_line.text().strip()
-
-        if not os.path.isabs(log_file):
-            log_file = os.path.join(self.task_obj.task_obj.PATH if self.task_obj.task_obj.PATH else os.getcwd(), log_file)
+        log_file = self.log_path_combo.currentText().strip()
 
         # For Test
-        if os.path.exists(log_file):
+        if not os.path.exists(log_file):
+            self.file_path = log_file
+            self.file_editor.setPlainText("")
+        else:
             self.file_path = log_file
             last_lines = self.read_last_lines(self.file_path, 10000)
 
@@ -5708,26 +5936,25 @@ class WindowForTaskLogInfo(QMainWindow):
 
     @staticmethod
     def read_last_lines(file_path, num_lines=10000, buffer_size=8192):
-        with open(file_path, 'rb') as file:
-            file.seek(0, 2)
-            file_size = file.tell()
-            block_count = file_size // buffer_size
-            last_block_size = file_size % buffer_size
+        if not os.path.isfile(file_path):
+            return []
 
+        with open(file_path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            file_size = f.tell()
+            block_end = file_size
+            data = b''
             lines = []
-            for i in range(block_count, -1, -1):
-                if i == 0:
-                    file.seek(0)
-                    block = file.read(last_block_size)
-                else:
-                    file.seek(i * buffer_size)
-                    block = file.read(buffer_size)
 
-                lines = block.splitlines() + lines
-                if len(lines) >= num_lines:
-                    break
+            while block_end > 0 and len(lines) <= num_lines:
+                block_start = max(0, block_end - buffer_size)
+                f.seek(block_start)
+                block = f.read(block_end - block_start)
+                data = block + data
+                lines = data.splitlines()
+                block_end = block_start
 
-            return [line.decode('utf-8', errors='replace') for line in lines]
+            return [line.decode('utf-8', errors='replace') for line in lines[-num_lines:]]
 
     def _search_file(self):
         search_word = self.search_line.text().strip()
@@ -5760,18 +5987,16 @@ class WindowForTaskLogInfo(QMainWindow):
         self.file_editor.jumpToLogicLine(line_num)
 
     def _check_error_and_warning(self):
-        if not os.path.exists(self.file_path):
+        if not os.path.exists(self.file_path) or not os.path.isfile(self.file_path):
             return
 
         error_name = self.error_type_line.text().strip()
         warn_name = self.warn_type_line.text().strip()
 
-        error_result = os.popen('grep {} {} | wc -l'.format(error_name, self.file_path)).read().strip()
-        warn_result = os.popen('grep {} {} | wc -l'.format(warn_name, self.file_path)).read().strip()
+        error_result = os.popen('tail -10000 {} | grep {} | wc -l'.format(self.file_path, error_name)).read().strip()
+        warn_result = os.popen('tail -10000 {} | grep {} | wc -l'.format(self.file_path, warn_name)).read().strip()
         self.error_num_line.setText(error_result)
         self.warning_num_line.setText(warn_result)
-
-        self._load_file()
 
     def _gvim_file(self):
         if not os.path.exists(self.file_path):
@@ -5782,6 +6007,18 @@ class WindowForTaskLogInfo(QMainWindow):
 
         self.gvim_thread = TaskLogViewer(file_path=self.file_path)
         self.gvim_thread.run()
+
+    def resizeEvent(self, a0):
+        super().resizeEvent(a0)
+
+        total_width = 0
+
+        for col in range(1, 7):
+            rect = self.main_layout.cellRect(0, col)
+            total_width += rect.width()
+
+        if total_width > 0:
+            self.log_path_combo.setFixedWidth(total_width)
 
 
 class QComboBox2(QComboBox):
@@ -5963,11 +6200,16 @@ class CodeEditor(QPlainTextEdit):
     def __init__(self):
         super().__init__()
         self.lineNumberArea = LineNumberArea(self)
+
+        self.setReadOnly(True)
+        self.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+
         self.document().contentsChanged.connect(self.updateLogicLineStarts)
         self.logicLineStarts = []
         self.search_term = ''
         self.case_sensitive = False
         self.use_regex = False
+
         self.document().contentsChanged.connect(self.updateTextCache)
         self.text_cache = self.toPlainText()
 
@@ -5977,12 +6219,15 @@ class CodeEditor(QPlainTextEdit):
         self.cursorPositionChanged.connect(self.search)
         self.updateLineNumberAreaWidth(0)
 
+        self._searchSelections = []
+        self._currentLineSelection = None
+
     def updateTextCache(self):
         self.text_cache = self.toPlainText()
 
     def lineNumberAreaWidth(self):
         digits = len(str(self.blockCount()))
-        return 10 + self.fontMetrics().width('9') * digits
+        return 10 + self.fontMetrics().horizontalAdvance('9') * digits
 
     def updateLineNumberAreaWidth(self, _):
         self.setViewportMargins(self.lineNumberAreaWidth(), 0, 0, 0)
@@ -5992,7 +6237,6 @@ class CodeEditor(QPlainTextEdit):
             self.lineNumberArea.scroll(0, dy)
         else:
             self.lineNumberArea.update(0, rect.y(), self.lineNumberArea.width(), rect.height())
-
         if rect.contains(self.viewport().rect()):
             self.updateLineNumberAreaWidth(0)
 
@@ -6014,27 +6258,32 @@ class CodeEditor(QPlainTextEdit):
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(block_number + 1)
                 painter.setPen(Qt.black)
-                painter.drawText(0, top, self.lineNumberArea.width(), self.fontMetrics().height(),
-                                 Qt.AlignRight, number)
-
+                painter.drawText(
+                    0, int(top), self.lineNumberArea.width(), self.fontMetrics().height(),
+                    Qt.AlignRight, number
+                )
             block = block.next()
             top = bottom
             bottom = top + self.blockBoundingRect(block).height()
             block_number += 1
 
     def highlightCurrentLine(self):
-        extra_selections = []
+        selection = QTextEdit.ExtraSelection()
+        line_color = QColor(Qt.yellow).lighter(160)
+        selection.format.setBackground(line_color)
+        selection.format.setProperty(QTextFormat.FullWidthSelection, True)
+        selection.cursor = self.textCursor()
+        selection.cursor.clearSelection()
+        self._currentLineSelection = selection
+        self._applySelections()
 
-        if not self.isReadOnly():
-            selection = QTextEdit.ExtraSelection()
-            line_color = QColor(Qt.yellow).lighter(160)
-            selection.format.setBackground(line_color)
-            selection.format.setProperty(QTextFormat.FullWidthSelection, True)
-            selection.cursor = self.textCursor()
-            selection.cursor.clearSelection()
-            extra_selections.append(selection)
-
-        self.setExtraSelections(extra_selections)
+    def _applySelections(self):
+        extras = []
+        if self._currentLineSelection is not None:
+            extras.append(self._currentLineSelection)
+        if self._searchSelections:
+            extras.extend(self._searchSelections)
+        self.setExtraSelections(extras)
 
     def set_search_term(self, pattern, case_sensitive=False, use_regex=False):
         self.search_term = pattern
@@ -6043,12 +6292,14 @@ class CodeEditor(QPlainTextEdit):
 
     def search(self):
         if not self.search_term:
+            self._searchSelections = []
+            self._applySelections()
             return
 
         cursor = self.textCursor()
         current_position = cursor.position()
-        start = max(0, current_position - 1024)
-        end = min(len(self.toPlainText()), current_position + 1024)
+        start = max(0, current_position - 10240)
+        end = min(len(self.toPlainText()), current_position + 10240)
 
         text = self.text_cache[start:end]
         flags = 0 if self.case_sensitive else re.IGNORECASE
@@ -6059,17 +6310,25 @@ class CodeEditor(QPlainTextEdit):
             pattern = re.escape(self.search_term)
             matches = re.finditer(pattern, text, flags)
 
-        self.clearHighlights()
+        self._searchSelections = []
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor("yellow"))
 
-        for match in matches:
-            self.highlightText(start + match.start(), start + match.end())
+        for m in matches:
+            s = QTextEdit.ExtraSelection()
+            s.format = fmt
+            c = self.textCursor()
+            c.setPosition(start + m.start())
+            c.setPosition(start + m.end(), QTextCursor.KeepAnchor)
+            s.cursor = c
+            self._searchSelections.append(s)
+
+        self._applySelections()
 
     def searchText(self, text, case_sensitive=False, use_regex=False, backward=False):
         search_flag = QTextDocument.FindFlags()
-
         if backward:
             search_flag |= QTextDocument.FindBackward
-
         if case_sensitive:
             search_flag |= QTextDocument.FindCaseSensitively
 
@@ -6078,54 +6337,47 @@ class CodeEditor(QPlainTextEdit):
 
         if use_regex:
             regex = QRegularExpression(text)
-
-            if case_sensitive:
-                regex.setPatternOptions(QRegularExpression.NoPatternOption)
-            else:
-                regex.setPatternOptions(QRegularExpression.CaseInsensitiveOption)
-
+            regex.setPatternOptions(QRegularExpression.NoPatternOption if case_sensitive
+                                    else QRegularExpression.CaseInsensitiveOption)
             found = cursor = document.find(regex, cursor, search_flag)
         else:
             found = self.find(text, search_flag)
 
         if not found:
             self.moveCursor(QTextCursor.End if backward else QTextCursor.Start)
-
             if use_regex:
                 regex = QRegularExpression(text)
                 found = document.find(regex, cursor, search_flag)
             else:
                 found = self.find(text, search_flag)
-
         return found
 
-    def highlightText(self, start_pos, end_pos):
-        cursor = self.textCursor()
-        cursor.setPosition(start_pos)
-        cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, end_pos - start_pos)
-
-        highlight_format = QTextCharFormat()
-        highlight_format.setBackground(QColor("yellow"))
-        cursor.mergeCharFormat(highlight_format)
-
     def clearHighlights(self):
-        cursor = self.textCursor()
-        cursor.select(QTextCursor.Document)
-        cursor.setCharFormat(QTextCharFormat())
-        cursor.clearSelection()
+        self._searchSelections = []
+        self._applySelections()
+
+    def highlightText(self, start_pos, end_pos):
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor("yellow"))
+        sel = QTextEdit.ExtraSelection()
+        c = self.textCursor()
+        c.setPosition(start_pos)
+        c.setPosition(end_pos, QTextCursor.KeepAnchor)
+        sel.cursor = c
+        sel.format = fmt
+        self._searchSelections.append(sel)
+        self._applySelections()
 
     def updateLogicLineStarts(self):
         text = self.toPlainText()
         self.logicLineStarts = [0]
-
-        for i, char in enumerate(text):
-            if char == '\n':
+        for i, ch in enumerate(text):
+            if ch == '\n':
                 self.logicLineStarts.append(i + 1)
 
     def jumpToLogicLine(self, lineNum):
         if lineNum < 1 or lineNum > len(self.logicLineStarts):
             return
-
         start_pos = self.logicLineStarts[lineNum - 1]
         cursor = self.textCursor()
         cursor.setPosition(start_pos)
@@ -6147,3 +6399,9 @@ class ToggleButton(QPushButton):
         else:
             self.setStyleSheet(self.toggled_color)
         self.is_toggled = not self.is_toggled
+
+
+class ShrinkablePushButton(QPushButton):
+    def sizeHint(self):
+        original = super().sizeHint()
+        return QSize(100, original.height())  # 限死宽度

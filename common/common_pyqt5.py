@@ -1,12 +1,17 @@
 import math
 import os
 import re
+import signal
 import subprocess
+import sys
+import time
+from collections import deque
+
 import screeninfo
 import screeninfo.common
 from screeninfo import get_monitors
-from PyQt5.QtCore import Qt, QEvent, QRect
-from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem, QMessageBox, QStyledItemDelegate, QStyleOptionButton, QStyle, QApplication, QShortcut, QWidget, QTableWidget, QTableView, QLabel
+from PyQt5.QtCore import Qt, QEvent, QRect, QMutex, QTimer, QMutexLocker
+from PyQt5.QtWidgets import QDesktopWidget, QComboBox, QLineEdit, QListWidget, QCheckBox, QListWidgetItem, QMessageBox, QStyledItemDelegate, QStyleOptionButton, QStyle, QApplication, QShortcut, QWidget, QTableWidget, QTableView, QLabel, QTextEdit
 from PyQt5.QtGui import QTextCursor, QFont, QColor, QKeySequence
 from PyQt5.Qt import QFontMetrics
 
@@ -303,33 +308,79 @@ class Dialog:
 
 
 class CustomDelegate(QStyledItemDelegate):
-    def __init__(self, wrap_columns=None, check_available: bool = False):
+    def __init__(self, wrap_columns=None, check_available: bool = False, icon_columns=None, table_view=None):
         super().__init__()
         self.wrap_columns = wrap_columns
         self.check_available = check_available
-        self.icon_column = 3
+        self.icon_columns = icon_columns
+        self.table_view = table_view
+
+    def editorEvent(self, event, model, option, index):
+        if (self.icon_columns and index.column() in self.icon_columns and
+                index.column() == 3 and event.type() == QEvent.MouseButtonRelease):
+
+            checkbox_rect = QRect(option.rect.x() + 5, option.rect.y(), 20, option.rect.height())
+            if checkbox_rect.contains(event.pos()):
+                current_state = index.data(Qt.CheckStateRole)
+                new_state = Qt.Unchecked if current_state == Qt.Checked else Qt.Checked
+                return model.setData(index, new_state, Qt.CheckStateRole)
+
+        return super().editorEvent(event, model, option, index)
 
     def paint(self, painter, option, index):
         col = index.column()
         text = index.data(Qt.DisplayRole)
 
+        if not option.state & QStyle.State_Selected:
+            row = index.row()
+            span_group = 0
+            current_row = 0
+
+            while current_row <= row:
+                span_size = self.table_view.rowSpan(current_row, 0)
+                if span_size == 0:
+                    span_size = 1
+
+                if current_row <= row < current_row + span_size:
+                    break
+
+                span_group += 1
+                current_row += span_size
+
+            if span_group % 2 == 0:
+                painter.fillRect(option.rect, QColor(255, 255, 255))
+            else:
+                painter.fillRect(option.rect, QColor(250, 250, 250))
+
         if text and self.wrap_columns and col in self.wrap_columns:
             painter.drawText(option.rect, Qt.TextWrapAnywhere | Qt.AlignVCenter, text)
-        elif index.column() == self.icon_column and self.check_available:
-            checkbox_option = QStyleOptionButton()
-            checkbox_option.state = QStyle.State_Enabled | (QStyle.State_On if index.data(Qt.CheckStateRole) == Qt.Checked else QStyle.State_Off)
-            checkbox_option.rect = QRect(option.rect.x() + 5, option.rect.y(), 20, option.rect.height())
-            QApplication.style().drawControl(QStyle.CE_CheckBox, checkbox_option, painter)
+        elif self.icon_columns and index.column() in self.icon_columns:
+            if index.column() == 3:
+                foreground = index.data(Qt.ForegroundRole)
+                checkbox_option = QStyleOptionButton()
+                checkbox_option.state = QStyle.State_Enabled | (QStyle.State_On if index.data(Qt.CheckStateRole) == Qt.Checked else QStyle.State_Off)
+                checkbox_option.rect = QRect(option.rect.x() + 5, option.rect.y(), 20, option.rect.height())
+                QApplication.style().drawControl(QStyle.CE_CheckBox, checkbox_option, painter)
 
-            foreground = index.data(Qt.ForegroundRole)
+                if foreground:
+                    painter.setPen(foreground.color())
+                else:
+                    painter.setPen(QColor(0, 0, 0))
 
-            if foreground:
-                painter.setPen(foreground.color())
-            else:
-                painter.setPen(QColor(0, 0, 0))
+            if index.column() == 4:
+                foreground = index.data(Qt.ForegroundRole)
+
+                if foreground:
+                    painter.setPen(foreground.color())
+                else:
+                    painter.setPen(QColor(0, 0, 0))
 
             text = index.data(Qt.DisplayRole)
-            painter.drawText(option.rect.adjusted(25, 0, -20, 0), Qt.AlignLeft | Qt.AlignVCenter, text)
+
+            if index.column() == 3:
+                painter.drawText(option.rect.adjusted(25, 0, -20, 0), Qt.AlignLeft | Qt.AlignVCenter, text)
+            else:
+                painter.drawText(option.rect.adjusted(0, 0, 0, 0), Qt.AlignLeft | Qt.AlignVCenter, text)
 
             icon = index.data(Qt.DecorationRole)
 
@@ -342,6 +393,8 @@ class CustomDelegate(QStyledItemDelegate):
                 painter.save()
                 icon.paint(painter, *icon_rect)
                 painter.restore()
+
+            painter.setPen(QColor(0, 0, 0))
         else:
             super().paint(painter, option, index)
 
@@ -351,12 +404,52 @@ class WaitingWindow:
         self.worker_process = None
         self.message = message
 
+    def __enter__(self):
+        self.run()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+
     def run(self):
-        self.worker_process = subprocess.Popen(f'python3 {os.getenv("IFP_INSTALL_PATH")}/tools/waiting_window.py -m "{self.message}"', shell=True)
+        try:
+            cmd = [
+                sys.executable or "python3",
+                os.path.join(os.getenv("IFP_INSTALL_PATH"), "tools", "waiting_window.py"),
+                "-m", self.message
+            ]
+
+            self.worker_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid
+            )
+
+            return True
+
+        except Exception:
+            return False
 
     def close(self):
-        if self.worker_process.poll() is None:
-            self.worker_process.terminate()
+        if not self.worker_process or self.worker_process.poll() is not None:
+            return
+
+        try:
+            os.killpg(os.getpgid(self.worker_process.pid), signal.SIGTERM)
+
+            try:
+                self.worker_process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                os.killpg(os.getpgid(self.worker_process.pid), signal.SIGKILL)
+                self.worker_process.wait()
+
+        except Exception as e:
+            print(f"关闭等待窗口时出错: {e}")
+
+        finally:
+            self.worker_process = None
 
 
 class TableFilterRow(QWidget):
@@ -467,3 +560,65 @@ class TableFilterRow(QWidget):
             if self.filters:
                 first = next(iter(self.filters.values()))
                 first.setFocus()
+
+
+class BatchMessageBox(QTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.message_queue = deque()
+        self.mutex = QMutex()
+
+        self.batch_timer = QTimer()
+        self.batch_timer.timeout.connect(self.flush_messages)
+        self.batch_timer.setSingleShot(True)
+
+        self.update_interval = 50
+        self.max_queue_size = 1000
+
+    def add_message(self, message, color='black', html=False):
+        with QMutexLocker(self.mutex):
+            if len(self.message_queue) >= self.max_queue_size:
+                self.message_queue.popleft()
+
+            self.message_queue.append({
+                'message': message,
+                'color': color,
+                'html': html,
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+            })
+
+        if not self.batch_timer.isActive():
+            self.batch_timer.start(self.update_interval)
+
+    def flush_messages(self):
+        messages_to_process = []
+
+        with QMutexLocker(self.mutex):
+            while self.message_queue:
+                messages_to_process.append(self.message_queue.popleft())
+
+        if not messages_to_process:
+            return
+
+        self.blockSignals(True)
+
+        try:
+            cursor = self.textCursor()
+            cursor.movePosition(QTextCursor.End)
+            self.setTextCursor(cursor)
+
+            for msg_info in messages_to_process:
+                self._insert_message(msg_info)
+
+            self.ensureCursorVisible()
+
+        finally:
+            self.blockSignals(False)
+
+    def _insert_message(self, msg_info):
+        if msg_info['html']:
+            html_text = f"[{msg_info['timestamp']}] {msg_info['message']}<br>"
+            self.insertHtml(html_text)
+        else:
+            text = f"[{msg_info['timestamp']}] {msg_info['message']}\n"
+            self.insertPlainText(text)

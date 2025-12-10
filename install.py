@@ -46,15 +46,52 @@ python3 $IFP_INSTALL_PATH/""" + str(python_script) + """ \"$@\"
         sys.exit(1)
 
 
+def gen_ifp_script(wrapper_script):
+    """
+    Generate wrapper script (shell) for python script.
+    """
+    print('>>> Generate wrapper script "' + str(wrapper_script) + '" ...')
+
+    try:
+        python_path = os.path.dirname(os.path.abspath(sys.executable))
+        python_script = str(wrapper_script) + '.py'
+        ld_library_path_setting = ''
+
+        if 'LD_LIBRARY_PATH' in os.environ:
+            ld_library_path_setting = 'export LD_LIBRARY_PATH=' + str(os.environ['LD_LIBRARY_PATH'])
+
+        with open(wrapper_script, 'w') as TS:
+            TS.write("""#!/bin/bash
+
+# Set python3 path.
+export PATH=""" + str(python_path) + """:$PATH
+
+# Set install path.
+export IFP_INSTALL_PATH=""" + str(CWD) + """
+
+# Set LD_LIBRARY_PATH.
+""" + str(ld_library_path_setting) + """
+
+# Execute ifp.py.
+python3 $IFP_INSTALL_PATH/""" + str(python_script) + """ \"$@\"
+""")
+
+        os.chmod(wrapper_script, stat.S_IRWXU+stat.S_IRWXG+stat.S_IRWXO)
+    except Exception as err:
+        print('*Error*: Failed on generating top script "' + str(wrapper_script) + '": ' + str(err))
+        sys.exit(1)
+
+
 def gen_wrapper_scripts():
-    script_list = ['bin/ifp',
-                   'action/check/scripts/gen_checklist_scripts',
+    script_list = ['action/check/scripts/gen_checklist_scripts',
                    'action/check/scripts/gen_checklist_summary',
                    'action/check/scripts/ic_check',
                    'action/check/scripts/view_checklist_report']
 
     for wrapper_script in script_list:
         gen_wrapper_script(wrapper_script)
+
+    gen_ifp_script('bin/ifp')
 
 
 def gen_config_file():

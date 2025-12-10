@@ -1,22 +1,28 @@
 import datetime
+import enum
 import os
 import re
 import sys
 import time
 import uuid
 from hashlib import sha1
-from typing import Tuple, Dict, Union, List
+from typing import Tuple, Dict, Union, List, Any
 
 from dateutil import parser
-from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy import create_engine, Column, Integer, String, Enum
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker, declarative_base
+
+import warnings
+from sqlalchemy.exc import SAWarning
+warnings.filterwarnings("ignore", category=SAWarning)
 
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + 'config/')
 import config
 
 sys.path.append(str(os.environ['IFP_INSTALL_PATH']) + 'common/')
 import common_lsf
+import common
 
 Base = declarative_base()
 
@@ -33,7 +39,7 @@ class SqlDB:
         self.get_all(): get all data.
     """
     def __init__(self, db_url):
-        self.engine = create_engine(db_url)
+        self.engine = create_engine(db_url, connect_args={'check_same_thread': False})
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
@@ -130,6 +136,114 @@ class TaskJobs(Base):
     command_file = Column(String)
 
 
+class JobType(enum.Enum):
+    local: str = 'local'
+    lsf: str = 'lsf'
+
+
+class JobStatus(enum.Enum):
+    queued = common.status.queued
+    passed = common.status.passed
+    failed = common.status.failed
+    skipped = common.status.skipped
+    killed = common.status.killed
+    cancelled = common.status.cancelled
+    undefined = common.status.undefined
+    building = common.status.building
+    running = common.status.running
+    checking = common.status.checking
+    summarizing = common.status.summarizing
+    releasing = common.status.releasing
+    killing = common.status.killing
+    awaiting_dispatch = 'awaiting_dispatch'
+    dispatching = 'dispatching'
+    dispatched = 'dispatched'
+    submit_fail = 'submit_fail'
+
+
+class JobAction(enum.Enum):
+    build = common.action.build
+    run = common.action.run
+    check = common.action.check
+    check_view = common.action.check_view
+    summarize = common.action.summarize
+    summarize_view = common.action.summarize_view
+    release = common.action.release
+    kill = common.action.kill
+
+
+JobStoreTable: str = 'job_store'
+job_type_enum = Enum(JobType, name='job_type_enum', values_callable=lambda enum_cls: [e.value for e in enum_cls])
+job_action_enum = Enum(JobAction, name='job_action_enum', values_callable=lambda enum_cls: [e.value for e in enum_cls])
+job_status_enum = Enum(JobStatus, name='job_status_enum', values_callable=lambda enum_cls: [e.value for e in enum_cls])
+
+
+class JobStore(Base):
+    __tablename__ = 'job_store'
+    uuid = Column(String, primary_key=True)
+    job_type = Column(job_type_enum)
+    job_id = Column(Integer)
+    block = Column(String)
+    version = Column(String)
+    flow = Column(String)
+    task = Column(String)
+    command_file = Column(String)
+    action = Column(job_action_enum)
+    status = Column(job_status_enum)
+
+    def to_dict(self):
+        return {
+            "uuid": self.uuid,
+            "job_type": self.job_type.value if self.job_type else None,
+            "job_id": self.job_id,
+            "block": self.block,
+            "version": self.version,
+            "flow": self.flow,
+            "task": self.task,
+            "command_file": self.command_file,
+            "action": self.action.value if self.action else None,
+            "status": self.status.value if self.status else None,
+        }
+
+
+def save_job_store_batch(data_list: List[Dict[str, Any]], db_path: str):
+    db_path = f'sqlite:///{db_path}'
+    initialize_database(db_path)
+
+    engine = create_engine(db_path, connect_args={'check_same_thread': False})
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    by_uuid = {}
+
+    for data in data_list:
+        data['uuid'] = generate_uuid_from_components(item_list=[data['block'], data['version'], data['flow'], data['task']])
+        by_uuid[data["uuid"]] = data
+
+    data_list = list(by_uuid.values())
+    uuid_list = [data['uuid'] for data in data_list]
+    existing_records = session.query(JobStore).filter(JobStore.uuid.in_(uuid_list)).all()
+    existing_map = {record.uuid: record for record in existing_records}
+
+    new_records = []
+
+    for data in data_list:
+        if data['uuid'] in existing_map:
+            existing_record = existing_map[data['uuid']]
+
+            for key, value in data.items():
+                setattr(existing_record, key, value)
+        else:
+            new_record = JobStore(**data)
+            new_records.append(new_record)
+
+    if new_records:
+        session.bulk_save_objects(new_records)
+
+    session.commit()
+    session.close()
+
+
 def create_weekly_job_table(year: int, week_number: int):
     table_name = f'job_{str(year)}_{str(week_number)}'.lower()
     class_name = f'Job_{str(year)}_{str(week_number)}'
@@ -148,6 +262,7 @@ def create_weekly_job_table(year: int, week_number: int):
 
 def analysis_and_save_job(job_id: str, block: str, version: str, flow: str, task: str):
     time.sleep(10)
+    job_id = str(job_id)
 
     if my_match := re.match(r'^b:(\d+)$', job_id):
         lsf_job_id = int(my_match.group(1))
@@ -207,7 +322,7 @@ def save_job(job_data: Dict[str, Union[str, int]], year: int, week_number: int):
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         db_path = f'sqlite:///{db_path}'
 
-    engine = create_engine(db_path)
+    engine = create_engine(db_path, connect_args={'check_same_thread': False})
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -227,7 +342,7 @@ def generate_uuid_from_components(item_list: List[str]) -> str:
 
 
 def initialize_database(db_path: str):
-    engine = create_engine(db_path)
+    engine = create_engine(db_path, connect_args={'check_same_thread': False})
     Base.metadata.create_all(engine, checkfirst=True)
 
 
@@ -241,7 +356,7 @@ def save_ifp_record(data: dict):
 
     initialize_database(db_path)
 
-    engine = create_engine(db_path)
+    engine = create_engine(db_path, connect_args={'check_same_thread': False})
     Session = sessionmaker(bind=engine)
     session = Session()
 
@@ -263,11 +378,11 @@ def save_ifp_record(data: dict):
 
 
 def setup_task_job():
-    db_path = os.path.join(os.getcwd(), '.ifp/task_job')
+    db_path = os.path.join(os.getcwd(), '.ifp/job_store')
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     db_path = f'sqlite:///{db_path}'
     initialize_database(db_path)
-    engine = create_engine(db_path)
+    engine = create_engine(db_path, connect_args={'check_same_thread': False})
     Session = sessionmaker(bind=engine)
     session = Session()
     return session

@@ -62,7 +62,9 @@ def monitor_task(task_id, path, command, notification, interval, start_interval:
             return_code = result.returncode
 
             if return_code:
-                os.popen(notification)
+                if notification:
+                    os.popen(notification)
+
                 del tasks[task_id]
                 break
 
@@ -76,7 +78,7 @@ def monitor_task(task_id, path, command, notification, interval, start_interval:
 def add_task():
     data = request.json
 
-    if not data or not all(key in data for key in ['id', 'path', 'command', 'interval', 'notification', 'interval']):
+    if not data or not all(key in data for key in ['id', 'path', 'command', 'interval', 'notification', 'start_interval']):
         return jsonify({'error': 'Invalid data. Expected {"id": <job_id>, "path": <path>, "command": <command>, "interval": <interval>, "notification": <notification>}'}), 400
 
     task_id = data['id']

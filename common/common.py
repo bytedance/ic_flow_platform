@@ -1323,7 +1323,7 @@ class ProcessUsageMonitor:
         """
         maximum = self.max_limit
         if current == -1 or maximum == -1:
-            return False, current, maximum
+            return True, current, maximum
         return current < self.max_limit, current, maximum
 
     def __str__(self):

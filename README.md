@@ -1,4 +1,4 @@
-# IC Flow Platform V1.4 (2024.11.30)
+# IC Flow Platform V1.4.3 (2024.12.10)
 
 > <font color=red size=5>V1.4 is not compatible with previous version due to removed vendor/branch and new format default.yaml</font>
 
@@ -6,7 +6,7 @@
 ***
 | Version | Date         | Update content                                                                                                                                                                                                                                                                                                                                                     |
 |:--------|:-------------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| V1.4.3  | (2025.11)    | Optimize task management mechanism with separated GUI and execution logic.<br/>Improve configuration loading speed and page rendering performance<br/>Add user operation logging and task submission records,  Add configuration update notifications and Support multiple Log configurations for Task<br/>Fix several bugs and optimize memory/process management |
+| V1.4.3  | (2025.12.10) | Optimize task management mechanism with separated GUI and execution logic.<br/>Improve configuration loading speed and page rendering performance<br/>Add user operation logging and task submission records,  Add configuration update notifications and Support multiple Log configurations for Task<br/>Fix several bugs and optimize memory/process management |
 | V1.4.2  | (2025.05.25) | Add IN_PROCESS_CHECK to execute check when task running<br/> Add filter function <br/> Support set $MAX_RUNNING_JOBS <br/> Support export IFP data for secondary development                                                                                                                                                                                       |
 | V1.4.1  | (2025.02.28) | Add RUN_MODE to switch command for specific task<br/> Support Menubar and Toolbar API<br/> Add launch parameter -t for title and -r for read_only mode                                                                                                                                                                                                             |
 | V1.4    | (2024.11.30) | Remove vendor and branch columns<br/>More detailed task information interface</br>More clearly method to define task attributes/run order/dependency in default.yaml                                                                                                                                                                                               |
@@ -61,27 +61,33 @@ IFP will enter demo mode when you set ${IFP_DEMO_MODE}=TRUE, such as (bash env):
   - Step 2 : Execute ${IFP_INSTALL_PATH}/bin/ifp to run IFP with GUI mode
   - Step 3 : Enter `Project_name` and `User_group` in `CONFIG-Setting interface` to match admin's default flow setting and API setting
 
-<img src="./data/pictures/readme/IFP_setting.png" width="80%">
+<img src="./data/pictures/readme/IFP_setting.jpg" width="80%">
 
   - Step 4 : Create your tasks in `CONFIG-Task interface` and adjust task detailed settings
 
-<img src="./data/pictures/readme/IFP_set_task.png" width="80%">
+<img src="./data/pictures/readme/IFP_set_task.jpg" width="80%">
 
   - Step 5 : Adjust task actuating logic in `CONFIG-Order interface`, if you select `Enable user order interface`
 
-<img src="./data/pictures/readme/IFP_set_order.png" width="80%">
+<img src="./data/pictures/readme/IFP_set_order.jpg" width="80%">
 
   - Step 6 : Adjust IFP internal variables in `CONFIG-Variable interface`, if you select `Enable user variable interface`
 
-<img src="./data/pictures/readme/IFP_set_variable.png" width="80%">
+<img src="./data/pictures/readme/IFP_set_variable.jpg" width="80%">
 
   - Step 7 : Enable/Disable API functions in `CONFIG-API interface`, if you select `Enable user API interface`
 
-<img src="./data/pictures/readme/IFP_set_API.png" width="80%">
+<img src="./data/pictures/readme/IFP_set_API.jpg" width="80%">
+
+<img src="./data/pictures/readme/IFP_toolbar_API.jpg" width="80%">
 
   - Step 8 : Execute actions and monitor the progress in `MAIN interface`
 
-<img src="./data/pictures/readme/IFP_main_tab.png" width="80%">
+<img src="./data/pictures/readme/IFP_main_tab.jpg" width="80%">
+
+  - Step 9: Navigate to the FlowChart tab in `MAIN interface` or select version and choose `Show Flow Chart`
+
+<img src="./data/pictures/readme/IFP_flowchart_tab.jpg" width="80%">
 
 
 More details please see ["docs/IFP_user_manual.pdf"](./docs/IFP_user_manual.pdf) and ["docs/IFP_admin_manual.pdf"](./docs/IFP_admin_manual.pdf)

@@ -1,4 +1,4 @@
-# IC Flow Platform V1.4.3 (2024.12.10)
+# IC Flow Platform V1.4.3 (2025.12.10)
 
 > <font color=red size=5>V1.4 is not compatible with previous version due to removed vendor/branch and new format default.yaml</font>
 
